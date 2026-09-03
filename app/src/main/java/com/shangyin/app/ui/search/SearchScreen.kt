@@ -95,7 +95,8 @@ fun SearchScreen(nav: NavHostController) {
                 val game = async { runCatching { DoubanClient.search(Category.GAME, q) }.getOrDefault(emptyList()) }
                 val merged = (movieTv.await() + tv.await() + book.await() + music.await() + game.await())
                     .distinctBy { it.category.name + it.doubanId }
-                results = merged.sortedWith(compareBy({ it.year.isBlank() }, { -(it.year.toIntOrNull() ?: 0) }))
+                // 保持豆瓣返回的相关度排序，不做额外排序
+                results = merged
             } catch (e: Exception) {
                 Toast.makeText(context, "搜索出错：${e.message}", Toast.LENGTH_LONG).show()
             } finally {

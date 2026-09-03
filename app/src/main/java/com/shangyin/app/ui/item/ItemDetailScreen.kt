@@ -1,6 +1,7 @@
 package com.shangyin.app.ui.item
 
 import android.widget.Toast
+import android.widget.VideoView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,11 +45,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
@@ -67,6 +72,13 @@ private object DetailCache {
     val videos = java.util.concurrent.ConcurrentHashMap<String, List<DoubanVideo>>()
     val photos = java.util.concurrent.ConcurrentHashMap<String, List<DoubanPhoto>>()
     val interests = java.util.concurrent.ConcurrentHashMap<String, List<DoubanInterest>>()
+
+    /** 清空空结果缓存，解决"查不到再查也没有"的问题 */
+    fun clearEmptyKeys() {
+        listOf(celebrities, videos, photos, interests).forEach { map ->
+            map.entries.filter { it.value.isEmpty() }.forEach { map.remove(it.key) }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,37 +113,40 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         var photos by remember(cacheKey) { mutableStateOf(DetailCache.photos[cacheKey].orEmpty()) }
         var interests by remember(cacheKey) { mutableStateOf(DetailCache.interests[cacheKey].orEmpty()) }
         var photoViewerUrl by remember { mutableStateOf<String?>(null) }
+        var videoUrl by remember { mutableStateOf<String?>(null) }
 
         // 并行加载演职员/预告片/剧照/短评（实时抓取，不落库）
         LaunchedEffect(cacheKey) {
             val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
                 ?: return@LaunchedEffect
+            // 清空空结果缓存，解决"查不到再查也没有"
+            DetailCache.clearEmptyKeys()
             coroutineScope {
                 launch {
                     celebrities = DetailCache.celebrities[cacheKey] ?: run {
                         val v = com.shangyin.app.data.douban.DoubanClient.fetchCelebrities(cat, entity.doubanId)
-                        DetailCache.celebrities[cacheKey] = v
+                        if (v.isNotEmpty()) DetailCache.celebrities[cacheKey] = v
                         v
                     }
                 }
                 launch {
                     videos = DetailCache.videos[cacheKey] ?: run {
                         val v = com.shangyin.app.data.douban.DoubanClient.fetchTrailers(cat, entity.doubanId)
-                        DetailCache.videos[cacheKey] = v
+                        if (v.isNotEmpty()) DetailCache.videos[cacheKey] = v
                         v
                     }
                 }
                 launch {
                     photos = DetailCache.photos[cacheKey] ?: run {
                         val v = com.shangyin.app.data.douban.DoubanClient.fetchPhotos(cat, entity.doubanId)
-                        DetailCache.photos[cacheKey] = v
+                        if (v.isNotEmpty()) DetailCache.photos[cacheKey] = v
                         v
                     }
                 }
                 launch {
                     interests = DetailCache.interests[cacheKey] ?: run {
                         val v = com.shangyin.app.data.douban.DoubanClient.fetchInterests(cat, entity.doubanId)
-                        DetailCache.interests[cacheKey] = v
+                        if (v.isNotEmpty()) DetailCache.interests[cacheKey] = v
                         v
                     }
                 }
@@ -275,7 +290,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(videos, key = { "v${it.id}" }) { v ->
-                            VideoCard(v) { runCatching { uriHandler.openUri(v.videoUrl) } }
+                            VideoCard(v) { videoUrl = v.videoUrl }
                         }
                         items(photos, key = { "p${it.id}" }) { p ->
                             PhotoCard(p) { photoViewerUrl = p.largeUrl ?: p.normalUrl }
@@ -332,6 +347,11 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     )
                 }
             }
+        }
+
+        // 预告片本地播放
+        videoUrl?.let { url ->
+            VideoPlayerDialog(url, onClose = { videoUrl = null })
         }
     }
 }
@@ -530,6 +550,63 @@ private fun ReviewSection(entity: com.shangyin.app.data.db.CollectionItemEntity)
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.outline
             )
+        }
+    }
+}
+
+/** 预告片本地播放 Dialog：用 Android VideoView + MediaPlayer */
+@Composable
+private fun VideoPlayerDialog(videoUrl: String, onClose: () -> Unit) {
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = onClose,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black),
+            contentAlignment = Alignment.Center
+        ) {
+            AndroidView(
+                factory = { ctx ->
+                    VideoView(ctx).apply {
+                        setVideoURI(videoUrl.toUri())
+                        setOnPreparedListener { mp ->
+                            mp.isLooping = false
+                            start()
+                        }
+                        setOnErrorListener { _, what, extra ->
+                            Toast.makeText(ctx, "视频加载失败", Toast.LENGTH_SHORT).show()
+                            onClose()
+                            true
+                        }
+                    }
+                },
+                update = { vv ->
+                    vv.start()
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+            // 关闭按钮
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(16.dp)
+                    .background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.large)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "关闭",
+                    tint = Color.White
+                )
+            }
+            DisposableEffect(videoUrl) {
+                onDispose {
+                    // 停止播放
+                }
+            }
         }
     }
 }

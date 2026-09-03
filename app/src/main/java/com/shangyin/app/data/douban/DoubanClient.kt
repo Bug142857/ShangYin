@@ -64,91 +64,87 @@ object DoubanClient {
 
     // ---------------- 搜索 ----------------
 
-    /** 按类型搜索豆瓣：统一走 Rexxar search/subjects（覆盖影视/游戏/图书/音乐），subject_suggest 兜底 */
+    /** 按类型搜索豆瓣：走分类 subject_search 页面（解析 window.__DATA__ JSON） */
     suspend fun search(category: Category, query: String): List<DoubanResult> =
         withContext(Dispatchers.IO) {
-            val rexxar = runCatching { searchSubjectsRexxar(query).filter { it.category == category } }
-                .getOrDefault(emptyList())
-            val seen = rexxar.map { it.doubanId }.toSet()
-            val fallback = runCatching {
-                val endpoint = when (category) {
-                    Category.MOVIE, Category.TV -> "https://movie.douban.com/j/subject_suggest"
-                    Category.BOOK -> "https://book.douban.com/j/subject_suggest"
-                    Category.MUSIC -> "https://music.douban.com/j/subject_suggest"
-                    Category.GAME -> return@runCatching emptyList() // game/suggest 不存在
-                }
-                searchSubjectSuggest(endpoint, query, category)
-            }.getOrDefault(emptyList()).filter { it.category == category && it.doubanId !in seen }
-            rexxar + fallback
+            runCatching { searchSubjectPage(category, query) }.getOrDefault(emptyList())
         }
 
-    /** 全量搜索：Rexxar search/subjects 端点，按 uri 识别 game/book/music/tv/movie */
-    private fun searchSubjectsRexxar(query: String): List<DoubanResult> {
-        val url = "https://m.douban.com/rexxar/api/v2/search/subjects?q=${URLEncoder.encode(query, "UTF-8")}&count=30"
-        val body = httpGetRexxar(url, referer = "https://m.douban.com/search/")
-        val items = json.parseToJsonElement(body).jsonObject["subjects"]
-            ?.jsonObject?.get("items")?.jsonArray ?: return emptyList()
+    /**
+     * 从电影/图书/音乐 subject_search 页面解析 window.__DATA__ JSON。
+     * 游戏没有 subject_search 页面，暂时走 www.douban.com/j/search_suggest 关键词建议。
+     */
+    private fun searchSubjectPage(category: Category, query: String): List<DoubanResult> {
+        val (url, referer) = when (category) {
+            Category.MOVIE -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
+            Category.TV -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
+            Category.BOOK -> "https://book.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1001" to "https://book.douban.com/"
+            Category.MUSIC -> "https://music.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}" to "https://music.douban.com/"
+            Category.GAME -> return searchGameFallback(query)
+        }
+        val html = httpGetMobile(url, referer)
+        // 提取 window.__DATA__ = { ... };
+        val match = Regex("""window\.__DATA__\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL).find(html)
+            ?: return emptyList()
+        val jsonStr = match.groupValues[1]
+        val o = runCatching { json.parseToJsonElement(jsonStr).jsonObject }.getOrNull() ?: return emptyList()
+        val items = o["items"]?.jsonArray ?: return emptyList()
+        val wantMovie = category == Category.MOVIE
+        val wantTv = category == Category.TV
         return items.mapNotNull { el ->
-            val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
-            val t = runCatching { o["target"]?.jsonObject }.getOrNull() ?: return@mapNotNull null
-            val id = t["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            // 过滤榜单/合集（id 形如 ECL4473JA 非纯数字）
+            val it = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+            val id = (it["id"]?.jsonPrimitive?.intOrNull ?: it["id"]?.jsonPrimitive?.contentOrNull)?.toString()
+                ?: return@mapNotNull null
             if (!id.all { it.isDigit() }) return@mapNotNull null
-            val title = t["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val uri = t["uri"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val title = it["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val urlStr = it["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            // 电影/电视剧 同页，按 labels[0].text 或 url 里是否有 tv 区分
+            val labels = it["labels"]?.jsonArray?.mapNotNull { l ->
+                runCatching { l.jsonObject["text"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+            }.orEmpty()
+            val isTvLabel = labels.any { it.contains("剧集") || it.contains("电视") }
+            val isTvUrl = "/tv/" in urlStr
+            val isTv = isTvLabel || isTvUrl
+            // 过滤：电影页只返回电影，电视剧页只返回电视剧
+            if (wantMovie && isTv) return@mapNotNull null
+            if (wantTv && !isTv) return@mapNotNull null
+            val rating = it["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull
+            val abstract = it["abstract"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val coverUrl = it["cover_url"]?.jsonPrimitive?.contentOrNull
+            val year = Regex("""\((\d{4})\)""").find(title)?.groupValues?.get(1)
+                ?: abstract.take(4).filter { it.isDigit() }
+            // 从 abstract 提取地区/类型/年份作为 subTitle
+            val subTitle = abstract.replace(Regex("""\s+"""), " ").trim()
             val cat = when {
-                "/game/" in uri -> Category.GAME
-                "/book/" in uri -> Category.BOOK
-                "/music/" in uri || "/album/" in uri -> Category.MUSIC
-                "/tv/" in uri -> Category.TV
+                "/book/" in urlStr || category == Category.BOOK -> Category.BOOK
+                "/music/" in urlStr || category == Category.MUSIC -> Category.MUSIC
+                isTv -> Category.TV
                 else -> Category.MOVIE
             }
             DoubanResult(
-                cat, id, title,
-                subTitle = t["card_subtitle"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                year = (t["year"]?.jsonPrimitive?.contentOrNull
-                    ?: t["card_subtitle"]?.jsonPrimitive?.contentOrNull?.take(4)?.filter { it.isDigit() })
-                    .orEmpty(),
-                coverUrl = t["cover_url"]?.jsonPrimitive?.contentOrNull?.substringBefore('?'),
-                url = when (cat) {
-                    Category.BOOK -> "https://book.douban.com/subject/$id/"
-                    Category.MUSIC -> "https://music.douban.com/subject/$id/"
-                    Category.GAME -> "https://www.douban.com/game/$id/"
-                    else -> "https://movie.douban.com/subject/$id/"
+                category = cat,
+                doubanId = id,
+                title = title.replace("($year)", "").trim(),
+                subTitle = subTitle,
+                year = year.orEmpty(),
+                coverUrl = coverUrl,
+                url = urlStr.ifBlank {
+                    when (cat) {
+                        Category.BOOK -> "https://book.douban.com/subject/$id/"
+                        Category.MUSIC -> "https://music.douban.com/subject/$id/"
+                        else -> "https://movie.douban.com/subject/$id/"
+                    }
                 },
-                rating = t["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull
+                rating = rating
             )
         }
     }
 
-    /** subject_suggest 兜底：type 映射 movie/tv/b/m，未知类型归到 fallback */
-    private fun searchSubjectSuggest(endpoint: String, query: String, fallback: Category): List<DoubanResult> {
-        val url = "$endpoint?q=${URLEncoder.encode(query, "UTF-8")}"
-        val body = httpGetMobile(url, referer = endpoint.substringBeforeLast('/'))
-        val arr = json.parseToJsonElement(body).jsonArray
-        return arr.mapNotNull { el ->
-            val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
-            val type = o["type"]?.jsonPrimitive?.contentOrNull ?: ""
-            val cat = when (type) {
-                "movie" -> Category.MOVIE
-                "tv" -> Category.TV
-                "b" -> Category.BOOK
-                "m" -> Category.MUSIC
-                else -> fallback
-            }
-            val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val title = o["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val cover = (o["img"] ?: o["pic"])?.jsonPrimitive?.contentOrNull
-            val sub = (o["sub_title"] ?: o["author_name"])?.jsonPrimitive?.contentOrNull ?: ""
-            val year = o["year"]?.jsonPrimitive?.contentOrNull ?: ""
-            val itemUrl = o["url"]?.jsonPrimitive?.contentOrNull
-                ?: when (cat) {
-                    Category.BOOK -> "https://book.douban.com/subject/$id/"
-                    Category.MUSIC -> "https://music.douban.com/subject/$id/"
-                    else -> "https://movie.douban.com/subject/$id/"
-                }
-            DoubanResult(cat, id, title, sub, year, cover, itemUrl, null)
-        }
+    /** 游戏搜索降级：用 search_suggest 拿关键词，再逐个用 movie subject_search 查（游戏不会出现在 movie 页所以先返回空） */
+    private fun searchGameFallback(query: String): List<DoubanResult> {
+        // www.douban.com/j/search_suggest 只返回关键词，不是结构化条目；
+        // 游戏暂时无法从网页搜索页面获取结构化数据，返回空
+        return emptyList()
     }
 
     // ---------------- 条目详情 ----------------
