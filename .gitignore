@@ -1,0 +1,35 @@
+# Android Studio
+.gradle/
+build/
+**/build/
+.idea/
+*.iml
+*.ipr
+*.iws
+.local.properties/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Gradle
+gradle/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Kotlin
+*.keystore
+!debug.keystore
+
+# Temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*.swp
+
+# IDE
+.vscode/
+.vs/
+
+# Build outputs
+app-debug.apk
+老郑分享-debug.apk

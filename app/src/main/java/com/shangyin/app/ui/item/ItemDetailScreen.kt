@@ -1,0 +1,535 @@
+package com.shangyin.app.ui.item
+
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavHostController
+import coil.compose.AsyncImage
+import com.shangyin.app.data.Repo
+import com.shangyin.app.data.douban.DoubanCelebrity
+import com.shangyin.app.data.douban.DoubanInterest
+import com.shangyin.app.data.douban.DoubanPhoto
+import com.shangyin.app.data.douban.DoubanVideo
+import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.common.DoubanRating
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+
+/** 详情页实时数据缓存：从影人页返回时不重复请求。并发安全。 */
+private object DetailCache {
+    val celebrities = java.util.concurrent.ConcurrentHashMap<String, List<DoubanCelebrity>>()
+    val videos = java.util.concurrent.ConcurrentHashMap<String, List<DoubanVideo>>()
+    val photos = java.util.concurrent.ConcurrentHashMap<String, List<DoubanPhoto>>()
+    val interests = java.util.concurrent.ConcurrentHashMap<String, List<DoubanInterest>>()
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
+    val uriHandler = LocalUriHandler.current
+
+    val item by Repo.observeItem(itemId).collectAsStateWithLifecycle(initialValue = null)
+
+    val it_ = item
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(it_?.title.orEmpty(), maxLines = 1) },
+                navigationIcon = {
+                    IconButton(onClick = { nav.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        if (it_ == null) {
+            Column(Modifier.padding(pad).fillMaxSize()) {}
+            return@Scaffold
+        }
+        val entity = it_!!
+        val cacheKey = "${entity.category}/${entity.doubanId}"
+
+        var celebrities by remember(cacheKey) { mutableStateOf(DetailCache.celebrities[cacheKey].orEmpty()) }
+        var videos by remember(cacheKey) { mutableStateOf(DetailCache.videos[cacheKey].orEmpty()) }
+        var photos by remember(cacheKey) { mutableStateOf(DetailCache.photos[cacheKey].orEmpty()) }
+        var interests by remember(cacheKey) { mutableStateOf(DetailCache.interests[cacheKey].orEmpty()) }
+        var photoViewerUrl by remember { mutableStateOf<String?>(null) }
+
+        // 并行加载演职员/预告片/剧照/短评（实时抓取，不落库）
+        LaunchedEffect(cacheKey) {
+            val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
+                ?: return@LaunchedEffect
+            coroutineScope {
+                launch {
+                    celebrities = DetailCache.celebrities[cacheKey] ?: run {
+                        val v = com.shangyin.app.data.douban.DoubanClient.fetchCelebrities(cat, entity.doubanId)
+                        DetailCache.celebrities[cacheKey] = v
+                        v
+                    }
+                }
+                launch {
+                    videos = DetailCache.videos[cacheKey] ?: run {
+                        val v = com.shangyin.app.data.douban.DoubanClient.fetchTrailers(cat, entity.doubanId)
+                        DetailCache.videos[cacheKey] = v
+                        v
+                    }
+                }
+                launch {
+                    photos = DetailCache.photos[cacheKey] ?: run {
+                        val v = com.shangyin.app.data.douban.DoubanClient.fetchPhotos(cat, entity.doubanId)
+                        DetailCache.photos[cacheKey] = v
+                        v
+                    }
+                }
+                launch {
+                    interests = DetailCache.interests[cacheKey] ?: run {
+                        val v = com.shangyin.app.data.douban.DoubanClient.fetchInterests(cat, entity.doubanId)
+                        DetailCache.interests[cacheKey] = v
+                        v
+                    }
+                }
+            }
+        }
+
+        // 导演演员为空时，后台重新抓取补充落库
+        LaunchedEffect(entity.id) {
+            if (entity.directors.isBlank() && entity.casts.isBlank()) {
+                val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
+                if (cat != null) {
+                    runCatching {
+                        val detail = com.shangyin.app.data.douban.DoubanClient.fetchDetail(cat, entity.doubanId)
+                        if (!detail.isEmpty && (detail.directors?.isNotBlank() == true || detail.casts?.isNotBlank() == true)) {
+                            Repo.updateItem(entity.copy(
+                                directors = detail.directors ?: entity.directors,
+                                casts = detail.casts ?: entity.casts,
+                                genres = detail.genres ?: entity.genres
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+
+        Column(
+            Modifier
+                .padding(pad)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // 头部：封面（点击查看大图） + 基本信息
+            Row {
+                Box(
+                    modifier = Modifier.clickable {
+                        if (!entity.coverUrl.isNullOrBlank()) photoViewerUrl = entity.coverUrl
+                    }
+                ) {
+                    CoverImage(
+                        url = entity.coverUrl,
+                        modifier = Modifier.width(110.dp).height(154.dp)
+                    )
+                }
+                Column(Modifier.padding(start = 16.dp)) {
+                    Text(entity.title, style = MaterialTheme.typography.titleLarge)
+                    if (entity.subTitle.isNotBlank()) {
+                        Text(
+                            entity.subTitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    if (entity.genres.isNotBlank()) {
+                        Text(
+                            entity.genres,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    entity.doubanRating?.let { rating ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            DoubanRating(rating)
+                        }
+                    }
+                    if (!entity.doubanUrl.isNullOrBlank()) {
+                        TextButton(onClick = { uriHandler.openUri(entity.doubanUrl!!) }) {
+                            Text("在豆瓣打开")
+                        }
+                    }
+                }
+            }
+
+            // 评价（点击编辑）
+            ReviewSection(entity)
+
+            // 基本信息（制片国家/上映时间/片长等）
+            entity.info.takeIf { it.isNotBlank() }?.let { info ->
+                Column {
+                    Text("基本信息", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        info,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 简介
+            if (entity.summary.isNotBlank()) {
+                Column {
+                    Text("简介", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        entity.summary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 演职员（带头像 + 饰演，可点击进影人详情）；无数据时回退纯文本
+            if (celebrities.isNotEmpty()) {
+                Column {
+                    Text("演职员", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(10.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        items(celebrities, key = { it.id }) { c ->
+                            CelebrityCard(c) { nav.navigate("celebrity/${c.id}") }
+                        }
+                    }
+                }
+            } else if (entity.directors.isNotBlank() || entity.casts.isNotBlank()) {
+                Column {
+                    Text("导演演员", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(6.dp))
+                    if (entity.directors.isNotBlank()) {
+                        Text(
+                            "导演: ${entity.directors}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (entity.casts.isNotBlank()) {
+                        Text(
+                            "主演: ${entity.casts}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // 视频 / 剧照
+            if (videos.isNotEmpty() || photos.isNotEmpty()) {
+                Column {
+                    Text("视频 / 剧照", style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(10.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(videos, key = { "v${it.id}" }) { v ->
+                            VideoCard(v) { runCatching { uriHandler.openUri(v.videoUrl) } }
+                        }
+                        items(photos, key = { "p${it.id}" }) { p ->
+                            PhotoCard(p) { photoViewerUrl = p.largeUrl ?: p.normalUrl }
+                        }
+                    }
+                }
+            }
+
+            // 网友短评
+            if (interests.isNotEmpty()) {
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("短评", style = MaterialTheme.typography.titleSmall)
+                        if (!entity.doubanUrl.isNullOrBlank()) {
+                            Text(
+                                "查看全部",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.clickable { uriHandler.openUri(entity.doubanUrl!!) }
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    interests.forEach { cmt ->
+                        InterestItem(cmt)
+                        Spacer(Modifier.height(12.dp))
+                    }
+                }
+            }
+        }
+
+        // 剧照大图查看
+        photoViewerUrl?.let { url ->
+            Dialog(
+                onDismissRequest = { photoViewerUrl = null },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .clickable { photoViewerUrl = null },
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = url,
+                        contentDescription = null,
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 演职员卡片：头像 + 名字 + 导演/饰演角色 */
+@Composable
+private fun CelebrityCard(c: DoubanCelebrity, onClick: () -> Unit) {
+    Column(
+        Modifier.width(88.dp).clickable(onClick = onClick)
+    ) {
+        CoverImage(
+            url = c.avatarUrl,
+            modifier = Modifier.width(88.dp).height(124.dp)
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            c.name,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (c.role.isNotBlank()) {
+            Text(
+                c.role,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** 预告片卡片：封面 + 播放按钮 + 类型角标 + 时长 */
+@Composable
+private fun VideoCard(v: DoubanVideo, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .width(200.dp)
+            .height(112.dp)
+            .clickable(onClick = onClick)
+    ) {
+        CoverImage(
+            url = v.coverUrl,
+            modifier = Modifier.matchParentSize(),
+            corner = 8.dp
+        )
+        Icon(
+            Icons.Rounded.PlayArrow,
+            contentDescription = "播放",
+            tint = Color.White,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(40.dp)
+                .background(Color.Black.copy(alpha = 0.45f), MaterialTheme.shapes.large)
+                .padding(4.dp)
+        )
+        Text(
+            v.typeName,
+            style = MaterialTheme.typography.labelSmall,
+            color = Color.White,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(6.dp)
+                .background(Color(0xFFE8912D), MaterialTheme.shapes.small)
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        )
+        if (v.runtime.isNotBlank()) {
+            Text(
+                v.runtime,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), MaterialTheme.shapes.small)
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+/** 剧照缩略卡片 */
+@Composable
+private fun PhotoCard(p: DoubanPhoto, onClick: () -> Unit) {
+    CoverImage(
+        url = p.normalUrl,
+        modifier = Modifier
+            .width(150.dp)
+            .height(112.dp)
+            .clickable(onClick = onClick),
+        corner = 8.dp
+    )
+}
+
+/** 网友短评：头像/昵称/评分/时间地点/内容/有用数 */
+@Composable
+private fun InterestItem(cmt: DoubanInterest) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CoverImage(
+                url = cmt.avatarUrl,
+                modifier = Modifier.size(32.dp),
+                corner = 16.dp
+            )
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        cmt.userName,
+                        style = MaterialTheme.typography.labelLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.width(120.dp)
+                    )
+                    DoubanRating(cmt.rating)
+                }
+                val meta = listOf(cmt.date, cmt.location).filter { it.isNotBlank() }.joinToString("  ")
+                if (meta.isNotBlank()) {
+                    Text(
+                        meta,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            cmt.comment,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Rounded.ThumbUp,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                if (cmt.votes > 0) "${cmt.votes}" else "",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+/** 评价：默认只显示，点击才出输入框 */
+@Composable
+private fun ReviewSection(entity: com.shangyin.app.data.db.CollectionItemEntity) {
+    val scope = rememberCoroutineScope()
+    var editing by rememberSaveable(entity.id) { mutableStateOf(false) }
+    var text by rememberSaveable(entity.id, entity.note) { mutableStateOf(entity.note) }
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("评价", style = MaterialTheme.typography.titleSmall)
+            TextButton(onClick = {
+                if (editing) {
+                    // 保存
+                    scope.launch { Repo.updateItem(entity.copy(note = text)) }
+                    editing = false
+                } else {
+                    editing = true
+                }
+            }) {
+                Text(if (editing) "保存" else if (entity.note.isBlank()) "写评价" else "编辑")
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (editing) {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = { Text("写下此刻的感受…") },
+                minLines = 3,
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (entity.note.isNotBlank()) {
+            Text(
+                entity.note,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                "还没写评价，点右上角「写评价」",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
