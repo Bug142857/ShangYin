@@ -15,6 +15,9 @@ captures/
 gradle/gradle-wrapper.jar
 !gradle/wrapper/gradle-wrapper.jar
 
+# Android local
+local.properties
+
 # Kotlin
 *.keystore
 !debug.keystore
