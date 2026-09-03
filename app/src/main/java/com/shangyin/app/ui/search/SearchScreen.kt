@@ -88,7 +88,6 @@ fun SearchScreen(nav: NavHostController) {
             searched = true
             results = emptyList()
             try {
-                // 统一走 search()，内部用 search/subjects 覆盖所有分类
                 val movieTv = async { runCatching { DoubanClient.search(Category.MOVIE, q) }.getOrDefault(emptyList()) }
                 val tv = async { runCatching { DoubanClient.search(Category.TV, q) }.getOrDefault(emptyList()) }
                 val book = async { runCatching { DoubanClient.search(Category.BOOK, q) }.getOrDefault(emptyList()) }
@@ -99,10 +98,11 @@ fun SearchScreen(nav: NavHostController) {
                 results = merged.sortedWith(compareBy({ it.year.isBlank() }, { -(it.year.toIntOrNull() ?: 0) }))
             } catch (e: Exception) {
                 Toast.makeText(context, "搜索出错：${e.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                SearchCache.results = results
+                SearchCache.searched = true
+                searching = false
             }
-            SearchCache.results = results
-            SearchCache.searched = true
-            searching = false
         }
     }
 
