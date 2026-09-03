@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -36,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,8 +53,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import com.shangyin.app.data.Category
 import com.shangyin.app.data.Repo
+import com.shangyin.app.data.douban.DoubanCelebrity
 import com.shangyin.app.data.douban.DoubanClient
 import com.shangyin.app.data.douban.DoubanResult
 import com.shangyin.app.ui.common.CoverImage
@@ -70,8 +74,11 @@ fun SearchScreen(nav: NavHostController) {
     var query by rememberSaveable { mutableStateOf("") }
     // 用单例缓存搜索结果，避免导航后丢失
     var results by remember { mutableStateOf(SearchCache.results) }
+    var celebrityResults by remember { mutableStateOf(SearchCache.celebrities) }
     var searching by remember { mutableStateOf(false) }
     var searched by rememberSaveable { mutableStateOf(SearchCache.searched) }
+    // 防频繁点击：导航中禁用所有点击
+    var navigating by remember { mutableStateOf(false) }
 
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
     val savedKeys = remember(allItems) { allItems.map { it.category to it.doubanId }.toSet() }
@@ -80,6 +87,12 @@ fun SearchScreen(nav: NavHostController) {
     var pendingAdd by remember { mutableStateOf<DoubanResult?>(null) }
     val lists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
 
+    // 返回时重置 navigating 状态
+    val navBackStackEntry by nav.currentBackStackEntryAsState()
+    LaunchedEffect(navBackStackEntry) {
+        navigating = false
+    }
+
     fun doSearch() {
         val q = query.trim()
         if (q.isEmpty()) return
@@ -87,20 +100,24 @@ fun SearchScreen(nav: NavHostController) {
             searching = true
             searched = true
             results = emptyList()
+            celebrityResults = emptyList()
             try {
                 val movieTv = async { runCatching { DoubanClient.search(Category.MOVIE, q) }.getOrDefault(emptyList()) }
                 val tv = async { runCatching { DoubanClient.search(Category.TV, q) }.getOrDefault(emptyList()) }
                 val book = async { runCatching { DoubanClient.search(Category.BOOK, q) }.getOrDefault(emptyList()) }
                 val music = async { runCatching { DoubanClient.search(Category.MUSIC, q) }.getOrDefault(emptyList()) }
                 val game = async { runCatching { DoubanClient.search(Category.GAME, q) }.getOrDefault(emptyList()) }
+                val celebs = async { runCatching { DoubanClient.searchCelebrities(q) }.getOrDefault(emptyList()) }
                 val merged = (movieTv.await() + tv.await() + book.await() + music.await() + game.await())
                     .distinctBy { it.category.name + it.doubanId }
                 // 保持豆瓣返回的相关度排序，不做额外排序
                 results = merged
+                celebrityResults = celebs.await()
             } catch (e: Exception) {
                 Toast.makeText(context, "搜索出错：${e.message}", Toast.LENGTH_LONG).show()
             } finally {
                 SearchCache.results = results
+                SearchCache.celebrities = celebrityResults
                 SearchCache.searched = true
                 searching = false
             }
@@ -208,20 +225,53 @@ fun SearchScreen(nav: NavHostController) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    // 人物搜索结果（无添加按钮，点击直接进影人详情）
+                    if (celebrityResults.isNotEmpty()) {
+                        item(key = "celeb_header") {
+                            Text(
+                                "相关人物",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                        items(celebrityResults, key = { "celeb_${it.id}" }) { c ->
+                            CelebrityResultRow(c) {
+                                if (!navigating) {
+                                    navigating = true
+                                    nav.navigate("celebrity/${c.id}")
+                                }
+                            }
+                        }
+                        item(key = "celeb_divider") {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "相关作品",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
                     items(results, key = { it.category.name + it.doubanId }) { r ->
                         ResultRow(
                             r = r,
                             saved = (r.category.name to r.doubanId) in savedKeys,
+                            enabled = !navigating,
                             onClick = {
-                                scope.launch {
-                                    runCatching { Repo.saveFromDouban(r) }
-                                        .onSuccess { id ->
-                                            if (id > 0) nav.navigate("item/$id")
-                                            else Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_SHORT).show()
-                                        }
-                                        .onFailure { e ->
-                                            Toast.makeText(context, "加载失败：${e.message}", Toast.LENGTH_LONG).show()
-                                        }
+                                if (!navigating) {
+                                    navigating = true
+                                    scope.launch {
+                                        runCatching { Repo.saveFromDouban(r) }
+                                            .onSuccess { id ->
+                                                if (id > 0) nav.navigate("item/$id")
+                                                else Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_SHORT).show()
+                                            }
+                                            .onFailure { e ->
+                                                Toast.makeText(context, "加载失败：${e.message}", Toast.LENGTH_LONG).show()
+                                            }
+                                        navigating = false
+                                    }
                                 }
                             },
                             onAdd = { pendingAdd = r }
@@ -289,10 +339,11 @@ fun SearchScreen(nav: NavHostController) {
 private fun ResultRow(
     r: DoubanResult,
     saved: Boolean,
+    enabled: Boolean = true,
     onClick: () -> Unit,
     onAdd: () -> Unit
 ) {
-    Card(onClick = onClick) {
+    Card(onClick = onClick, enabled = enabled) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             CoverImage(
                 url = r.coverUrl,
@@ -350,5 +401,46 @@ private fun ResultRow(
 /** 搜索结果缓存，防止导航后丢失 */
 private object SearchCache {
     var results: List<DoubanResult> = emptyList()
+    var celebrities: List<DoubanCelebrity> = emptyList()
     var searched: Boolean = false
+}
+
+/** 人物搜索结果行（无添加按钮，点击进影人详情） */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CelebrityResultRow(
+    c: DoubanCelebrity,
+    onClick: () -> Unit
+) {
+    Card(onClick = onClick) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            CoverImage(
+                url = c.avatarUrl,
+                modifier = Modifier.size(56.dp),
+                corner = 28.dp
+            )
+            Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                Text(
+                    c.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (c.role.isNotBlank()) {
+                    Text(
+                        c.role,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Text(
+                    "人物",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
 }

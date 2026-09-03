@@ -10,6 +10,7 @@ object SettingsStore {
     private const val KEY_NICKNAME = "nickname"
     private const val KEY_THEME = "theme"
     private const val KEY_AVATAR_URI = "avatar_uri"
+    private const val KEY_DOUBAN_COOKIE = "douban_cookie"
 
     const val THEME_FOLLOW = "follow"
     const val THEME_LIGHT = "light"
@@ -41,4 +42,9 @@ object SettingsStore {
     var avatarUri: String
         get() = sp.getString(KEY_AVATAR_URI, "").orEmpty()
         set(v) = sp.edit().putString(KEY_AVATAR_URI, v).apply()
+
+    /** 豆瓣 Cookie（用于搜索游戏/人物等需要登录的接口） */
+    var doubanCookie: String
+        get() = sp.getString(KEY_DOUBAN_COOKIE, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_DOUBAN_COOKIE, v).apply()
 }

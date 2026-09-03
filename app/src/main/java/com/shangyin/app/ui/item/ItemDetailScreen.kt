@@ -46,7 +46,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -84,8 +83,6 @@ private object DetailCache {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
-    val uriHandler = LocalUriHandler.current
-
     val item by Repo.observeItem(itemId).collectAsStateWithLifecycle(initialValue = null)
 
     val it_ = item
@@ -214,11 +211,6 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                             DoubanRating(rating)
                         }
                     }
-                    if (!entity.doubanUrl.isNullOrBlank()) {
-                        TextButton(onClick = { uriHandler.openUri(entity.doubanUrl!!) }) {
-                            Text("在豆瓣打开")
-                        }
-                    }
                 }
             }
 
@@ -251,31 +243,42 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
-            // 演职员（带头像 + 饰演，可点击进影人详情）；无数据时回退纯文本
+            // 演职员/作者（带头像 + 饰演，可点击进影人详情）；无数据时回退纯文本
+            val isBook = entity.category == "图书"
             if (celebrities.isNotEmpty()) {
                 Column {
-                    Text("演职员", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (isBook) "作者/译者" else "演职员",
+                        style = MaterialTheme.typography.titleSmall
+                    )
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(celebrities, key = { it.id }) { c ->
-                            CelebrityCard(c) { nav.navigate("celebrity/${c.id}") }
+                            // 图书作者用伪 ID（含下划线），不可点击进影人详情
+                            val clickable = !c.id.contains("_")
+                            CelebrityCard(c) {
+                                if (clickable) nav.navigate("celebrity/${c.id}")
+                            }
                         }
                     }
                 }
             } else if (entity.directors.isNotBlank() || entity.casts.isNotBlank()) {
                 Column {
-                    Text("导演演员", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (isBook) "作者/译者" else "导演演员",
+                        style = MaterialTheme.typography.titleSmall
+                    )
                     Spacer(Modifier.height(6.dp))
                     if (entity.directors.isNotBlank()) {
                         Text(
-                            "导演: ${entity.directors}",
+                            if (isBook) "作者: ${entity.directors}" else "导演: ${entity.directors}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     if (entity.casts.isNotBlank()) {
                         Text(
-                            "主演: ${entity.casts}",
+                            if (isBook) "译者: ${entity.casts}" else "主演: ${entity.casts}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -302,21 +305,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             // 网友短评
             if (interests.isNotEmpty()) {
                 Column {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("短评", style = MaterialTheme.typography.titleSmall)
-                        if (!entity.doubanUrl.isNullOrBlank()) {
-                            Text(
-                                "查看全部",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.clickable { uriHandler.openUri(entity.doubanUrl!!) }
-                            )
-                        }
-                    }
+                    Text("短评", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(6.dp))
                     interests.forEach { cmt ->
                         InterestItem(cmt)

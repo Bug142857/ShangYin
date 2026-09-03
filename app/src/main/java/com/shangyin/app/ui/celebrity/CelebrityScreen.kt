@@ -38,7 +38,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
@@ -58,7 +57,6 @@ import kotlinx.coroutines.launch
 fun CelebrityScreen(nav: NavHostController, celebrityId: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
     var detail by remember(celebrityId) { mutableStateOf<DoubanCelebrityDetail?>(null) }
     var allWorks by remember(celebrityId) { mutableStateOf<List<CelebrityWork>>(emptyList()) }
     var showAllWorks by remember { mutableStateOf(false) }
@@ -258,11 +256,6 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String) {
                 }
             }
 
-            if (d.url.isNotBlank()) {
-                TextButton(onClick = { uriHandler.openUri(d.url) }) {
-                    Text("在豆瓣打开")
-                }
-            }
         }
     }
 }

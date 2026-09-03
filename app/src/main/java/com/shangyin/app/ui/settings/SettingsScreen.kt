@@ -84,6 +84,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     var showListManager by remember { mutableStateOf(false) }
     var showThemePicker by remember { mutableStateOf(false) }
     var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
+    var showCookieEditor by remember { mutableStateOf(false) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExportJson by remember { mutableStateOf<String?>(null) }
 
@@ -261,6 +262,34 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
+            // 豆瓣 Cookie（用于搜索游戏等需要登录的功能）
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { showCookieEditor = true }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Person, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("豆瓣登录Cookie", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (SettingsStore.doubanCookie.isNotBlank()) "已设置（可搜索游戏）" else "未设置（游戏搜索需登录）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
             // 导出
             Card {
                 Row(
@@ -411,6 +440,41 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             },
             confirmButton = { TextButton(onClick = { showThemePicker = false }) { Text("完成") } }
+        )
+    }
+
+    // 豆瓣 Cookie 编辑
+    if (showCookieEditor) {
+        var tempCookie by remember { mutableStateOf(SettingsStore.doubanCookie) }
+        AlertDialog(
+            onDismissRequest = { showCookieEditor = false },
+            title = { Text("豆瓣登录Cookie") },
+            text = {
+                Column {
+                    Text(
+                        "在浏览器登录豆瓣后，打开开发者工具→Network→任意请求→Headers→Cookie，复制完整值粘贴到这里。设置后可搜索游戏和人物。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = tempCookie,
+                        onValueChange = { tempCookie = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        placeholder = { Text("粘贴 Cookie 值") }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    SettingsStore.doubanCookie = tempCookie.trim()
+                    showCookieEditor = false
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCookieEditor = false }) { Text("取消") }
+            }
         )
     }
 }
