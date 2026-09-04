@@ -2,13 +2,16 @@ package com.shangyin.app.ui.item
 
 import android.widget.Toast
 import android.widget.VideoView
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,6 +20,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -62,6 +71,7 @@ import com.shangyin.app.data.douban.DoubanPhoto
 import com.shangyin.app.data.douban.DoubanVideo
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
+import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.coroutineScope
@@ -87,13 +97,31 @@ private object DetailCache {
 fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
     val item by Repo.observeItem(itemId).collectAsStateWithLifecycle(initialValue = null)
 
+    // "查看全部"覆盖页 + 全屏图片浏览器状态（提到 Scaffold 外，顶栏返回键也要访问）
+    var showAllPhotos by remember(itemId) { mutableStateOf(false) }
+    var showAllCelebrities by remember(itemId) { mutableStateOf(false) }
+    var viewerUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var viewerIndex by remember { mutableStateOf(0) }
+
+    // 系统返回键：先关"全部"覆盖页，再退出详情
+    BackHandler(enabled = showAllPhotos || showAllCelebrities) {
+        showAllPhotos = false
+        showAllCelebrities = false
+    }
+
     val it_ = item
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(it_?.title.orEmpty(), maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = { nav.safePopBackStack() }) {
+                    IconButton(onClick = {
+                        when {
+                            showAllPhotos -> showAllPhotos = false
+                            showAllCelebrities -> showAllCelebrities = false
+                            else -> nav.safePopBackStack()
+                        }
+                    }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 }
@@ -111,7 +139,6 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         var videos by remember(cacheKey) { mutableStateOf(DetailCache.videos[cacheKey].orEmpty()) }
         var photos by remember(cacheKey) { mutableStateOf(DetailCache.photos[cacheKey].orEmpty()) }
         var interests by remember(cacheKey) { mutableStateOf(DetailCache.interests[cacheKey].orEmpty()) }
-        var photoViewerUrl by remember { mutableStateOf<String?>(null) }
         var videoUrl by remember { mutableStateOf<String?>(null) }
 
         // 并行加载演职员/预告片/剧照/短评（实时抓取，不落库）
@@ -180,6 +207,86 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
         }
 
+        // 分类与派生数据
+        val isBook = entity.category == "图书"
+        val isGame = entity.category == "游戏"
+        val photoUrls = photos.mapNotNull { it.largeUrl ?: it.normalUrl }
+        val celebTitle = if (isBook) "作者/译者" else if (isGame) "开发商/平台" else "演职员"
+        val photoTitle = if (isGame) "游戏截图" else "剧照"
+
+        // 打开全屏图片浏览器（urls + 起始页）
+        fun openViewer(urls: List<String>, index: Int) {
+            if (urls.isEmpty()) return
+            viewerUrls = urls
+            viewerIndex = index.coerceIn(0, urls.size - 1)
+        }
+
+        // 跳转影人详情（伪 ID 含下划线，豆瓣无人物页，不可点）
+        fun openCelebrity(c: DoubanCelebrity) {
+            if (c.id.contains("_")) return
+            val fromCat = when (entity.category) {
+                "图书" -> "book"
+                "游戏" -> "game"
+                else -> "film"
+            }
+            val encName = java.net.URLEncoder.encode(c.name, "UTF-8")
+            val encAvatar = java.net.URLEncoder.encode(c.avatarUrl.orEmpty(), "UTF-8")
+            nav.safeNavigate("celebrity/${c.id}/$fromCat/$encName/$encAvatar")
+        }
+
+        // ---------- 全部演职员（网格，自身滚动；严禁外套 verticalScroll） ----------
+        if (showAllCelebrities) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item(span = { GridItemSpan(3) }) {
+                    Text("$celebTitle(${celebrities.size})", style = MaterialTheme.typography.titleMedium)
+                }
+                gridItems(celebrities, key = { "ac${it.id}" }) { c ->
+                    CelebrityGridCard(c) { openCelebrity(c) }
+                }
+            }
+            return@Scaffold
+        }
+
+        // ---------- 全部剧照 / 游戏截图（网格，自身滚动） ----------
+        if (showAllPhotos) {
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                item(span = { GridItemSpan(3) }) {
+                    Text(
+                        "全部$photoTitle(${photoUrls.size})",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                gridItemsIndexed(photoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
+                    CoverImage(
+                        url = url,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(4f / 3f)
+                            .clickable { openViewer(photoUrls, idx) }
+                    )
+                }
+            }
+            return@Scaffold
+        }
+
         Column(
             Modifier
                 .padding(pad)
@@ -192,8 +299,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             Row {
                 Box(
                     modifier = Modifier.clickable {
-                        if (!entity.coverUrl.isNullOrBlank())
-                            photoViewerUrl = com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
+                        com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
+                            ?.let { big -> openViewer(listOf(big), 0) }
                     }
                 ) {
                     CoverImage(
@@ -256,31 +363,24 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
 
             // 演职员/作者/开发商（带头像 + 饰演，可点击进影人详情）；无数据时回退纯文本
-            val isBook = entity.category == "图书"
-            val isGame = entity.category == "游戏"
             if (celebrities.isNotEmpty()) {
                 Column {
-                    Text(
-                        if (isBook) "作者/译者" else if (isGame) "开发商/平台" else "演职员",
-                        style = MaterialTheme.typography.titleSmall
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(celebTitle, style = MaterialTheme.typography.titleSmall)
+                        if (celebrities.size > 6) {
+                            TextButton(onClick = { showAllCelebrities = true }) {
+                                Text("查看全部(${celebrities.size})")
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(celebrities, key = { it.id }) { c ->
-                            // 伪 ID（含下划线，豆瓣无对应人物页）不可点击；真实 ID 可点击进人物详情
-                            val clickable = !c.id.contains("_")
-                            // fromCategory 用英文代号传参（路由兼容性），图书作者的详情页只展示其图书作品
-                            val fromCat = when (entity.category) {
-                                "图书" -> "book"
-                                "游戏" -> "game"
-                                else -> "film"
-                            }
-                            // 把人名和头像URL一并路由传过去——避免detail HTTP失败时拿不到name/avatar导致作品搜错、头像空
-                            val encName = java.net.URLEncoder.encode(c.name, "UTF-8")
-                            val encAvatar = java.net.URLEncoder.encode(c.avatarUrl.orEmpty(), "UTF-8")
-                            CelebrityCard(c) {
-                                if (clickable) nav.safeNavigate("celebrity/${c.id}/$fromCat/$encName/$encAvatar")
-                            }
+                            CelebrityCard(c) { openCelebrity(c) }
                         }
                     }
                 }
@@ -308,17 +408,25 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
-            // 剧照 / 游戏截图
+            // 剧照 / 游戏截图（点击进全屏浏览器，可左右滑动翻页）
             if (photos.isNotEmpty()) {
                 Column {
-                    Text(
-                        if (isGame) "游戏截图" else "剧照",
-                        style = MaterialTheme.typography.titleSmall
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(photoTitle, style = MaterialTheme.typography.titleSmall)
+                        if (photos.size > 6) {
+                            TextButton(onClick = { showAllPhotos = true }) {
+                                Text("查看全部(${photos.size})")
+                            }
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(photos, key = { "p${it.id}" }) { p ->
-                            PhotoCard(p) { photoViewerUrl = p.largeUrl ?: p.normalUrl }
+                        itemsIndexed(photos, key = { _, p -> "p${p.id}" }) { idx, p ->
+                            PhotoCard(p) { openViewer(photoUrls, idx) }
                         }
                     }
                 }
@@ -350,18 +458,13 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
         }
 
-        // 剧照大图查看（支持双指缩放/拖动）
-        photoViewerUrl?.let { url ->
-            Dialog(
-                onDismissRequest = { photoViewerUrl = null },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    dismissOnBackPress = true,
-                    dismissOnClickOutside = false
-                )
-            ) {
-                com.shangyin.app.ui.common.ZoomableImage(url) { photoViewerUrl = null }
-            }
+        // 全屏图片浏览器：剧照/截图可左右大幅度滑动翻页，双指缩放、双击放大、单击关闭
+        if (viewerUrls.isNotEmpty()) {
+            PhotoViewerDialog(
+                urls = viewerUrls,
+                initialIndex = viewerIndex,
+                onDismiss = { viewerUrls = emptyList() }
+            )
         }
 
         // 预告片本地播放
@@ -380,6 +483,39 @@ private fun CelebrityCard(c: DoubanCelebrity, onClick: () -> Unit) {
         CoverImage(
             url = c.avatarUrl,
             modifier = Modifier.width(88.dp).height(124.dp)
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            c.name,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (c.role.isNotBlank()) {
+            Text(
+                c.role,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** 演职员网格卡片（"查看全部"页用）：头像铺满列宽 + 名字 + 角色 */
+@Composable
+private fun CelebrityGridCard(c: DoubanCelebrity, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        CoverImage(
+            url = c.avatarUrl,
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(3f / 4f)
         )
         Spacer(Modifier.height(6.dp))
         Text(

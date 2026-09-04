@@ -1,11 +1,10 @@
 package com.shangyin.app.ui.common
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.calculateCentroid
-import androidx.compose.foundation.gestures.calculateCentroidSize
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,6 +15,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
@@ -30,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,9 +46,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
-import coil.compose.AsyncImagePainter
 import coil.request.ImageRequest
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /** 封面图，加载失败/为空时显示占位 */
@@ -139,19 +145,83 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
 }
 
 /**
- * 全屏图片查看器：统一 awaitEachGesture 手势处理（避免 split pointerInput 冲突）
+ * 全屏图片浏览器（统一入口）：HorizontalPager 左右滑动翻页 + 每页双指缩放/双击放大。
+ * - 未放大：大幅度左右滑动切换上一张/下一张（手势交给 Pager），单击关闭
+ * - 放大后：单指拖动看图（带边界限制），双击/双指可缩放
+ * - 顶部页码指示，右上角 X 关闭
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -> Unit) {
+    if (urls.isEmpty()) return
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        val pagerState = rememberPagerState(
+            initialPage = initialIndex.coerceIn(0, urls.size - 1),
+            initialPageOffsetFraction = 0f,
+            pageCount = { urls.size }
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { pageIdx ->
+                ZoomableImage(urls[pageIdx], onClose = onDismiss)
+            }
+            // 右上角 X 关闭按钮
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+            ) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "关闭",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+            // 顶部页码
+            if (urls.size > 1) {
+                Text(
+                    "${pagerState.currentPage + 1} / ${urls.size}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .padding(top = 18.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 单张可缩放图片（放在 PhotoViewerDialog 的 Pager 里使用）：
  * - 双指捏合：缩放 1.0x ~ 5.0x（跟手，以双指中心为锚）
- * - 放大后：单指可拖动图片（带边界限制，不会拖出黑屏）
- * - 双击：在 1x 和 2.5x 之间切换
- * - 单击：关闭图片查看；右上角还有 X 关闭按钮可点
+ * - 放大后：单指拖动图片（带边界限制，不会拖出黑屏）
+ * - 未放大：不消费水平滑动手势 → 外层 HorizontalPager 翻页
+ * - 双击：在 1x 和 2.5x 之间切换（单击延迟 280ms 关闭，给双击留窗口）
  */
 @Composable
 fun ZoomableImage(url: String?, onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
     var scale by remember(url) { mutableFloatStateOf(1f) }
     var offsetX by remember(url) { mutableFloatStateOf(0f) }
     var offsetY by remember(url) { mutableFloatStateOf(0f) }
-    // 双击检测必须跨手势循环保持
-    var lastTapAt by remember(url) { mutableStateOf(0L) }
+    // 单击延迟关闭任务（双击时取消，修复"首次单击立即关闭导致双击放大永远不触发"）
+    var closeJob by remember(url) { mutableStateOf<Job?>(null) }
 
     Box(
         modifier = Modifier
@@ -198,6 +268,8 @@ fun ZoomableImage(url: String?, onClose: () -> Unit) {
                                 if (newScale > 1.01f) {
                                     offsetX = (offsetX + panDelta.x).coerceIn(-maxX, maxX)
                                     offsetY = (offsetY + panDelta.y).coerceIn(-maxY, maxY)
+                                } else {
+                                    offsetX = 0f; offsetY = 0f
                                 }
                                 event.changes.forEach { it.consume() }
                                 continue
@@ -208,12 +280,15 @@ fun ZoomableImage(url: String?, onClose: () -> Unit) {
                                 totalPanDx += pan.x
                                 totalPanDy += pan.y
                                 if (scale > 1.01f) {
+                                    // 已放大：单指拖动图片（边界限制），消费手势
                                     val maxX = size.width * (scale - 1f) / 2f
                                     val maxY = size.height * (scale - 1f) / 2f
                                     offsetX = (offsetX + pan.x).coerceIn(-maxX, maxX)
                                     offsetY = (offsetY + pan.y).coerceIn(-maxY, maxY)
+                                    event.changes.forEach { it.consume() }
                                 }
-                                event.changes.forEach { it.consume() }
+                                // 未放大：不消费任何移动事件，水平大幅度滑动交给外层 Pager 翻页；
+                                // 若 Pager 赢得手势，本协程会被取消，不会误判成单击关闭。
                                 continue
                             }
 
@@ -223,19 +298,21 @@ fun ZoomableImage(url: String?, onClose: () -> Unit) {
                         val total = System.currentTimeMillis() - downMillis
                         val moved = abs(totalPanDx) > 3f || abs(totalPanDy) > 3f || trackZoom
                         if (!moved && total < 300) {
-                            val now = System.currentTimeMillis()
-                            if (now - lastTapAt in 100L..350L) {
+                            if (closeJob?.isActive == true) {
                                 // 双击：缩放切换
+                                closeJob?.cancel()
+                                closeJob = null
                                 if (scale > 1.01f) {
                                     scale = 1f; offsetX = 0f; offsetY = 0f
                                 } else {
                                     scale = 2.5f
                                 }
-                                lastTapAt = 0L
                             } else {
-                                // 单击：直接关闭（X按钮也能关，双保险）
-                                lastTapAt = now
-                                onClose()
+                                // 单击：延迟关闭，留出双击识别窗口
+                                closeJob = scope.launch {
+                                    delay(280)
+                                    onClose()
+                                }
                             }
                         }
                         if (scale < 1f) {
@@ -244,20 +321,5 @@ fun ZoomableImage(url: String?, onClose: () -> Unit) {
                     }
                 }
         )
-
-        // 右上角关闭按钮（防止单击关闭被双指/拖动误触）
-        IconButton(
-            onClick = onClose,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(12.dp)
-        ) {
-            Icon(
-                Icons.Rounded.Close,
-                contentDescription = "关闭",
-                tint = Color.White,
-                modifier = Modifier.size(28.dp)
-            )
-        }
     }
 }

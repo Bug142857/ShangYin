@@ -1,11 +1,11 @@
 package com.shangyin.app.ui.celebrity
 
 import android.widget.Toast
-import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -18,16 +18,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items as gridItems
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -48,8 +45,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,7 +58,7 @@ import com.shangyin.app.data.douban.DoubanPhoto
 import com.shangyin.app.data.douban.DoubanResult
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
-import com.shangyin.app.ui.common.ZoomableImage
+import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.delay
@@ -227,6 +222,12 @@ fun CelebrityScreen(
         }
     }
 
+    // 系统返回键：先关"全部"覆盖页，再退出影人页
+    BackHandler(enabled = showAllPhotos || showAllWorks) {
+        showAllPhotos = false
+        showAllWorks = false
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -248,40 +249,41 @@ fun CelebrityScreen(
         }
     ) { pad ->
         val d = detail
-        // ---------- 全部照片页面 ----------
+        // ---------- 全部照片页面（LazyVerticalGrid 自身滚动，严禁外套 verticalScroll，否则无限高约束崩溃） ----------
         if (showAllPhotos) {
-            Column(
-                Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(3),
+                modifier = Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    "全部照片(${allPhotoUrls.size})",
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Spacer(Modifier.height(6.dp))
-                if (allPhotoUrls.isEmpty()) {
+                item(span = { GridItemSpan(3) }) {
                     Text(
-                        "暂无相关照片",
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(top = 30.dp)
+                        "全部照片(${allPhotoUrls.size})",
+                        style = MaterialTheme.typography.titleMedium
                     )
+                }
+                if (allPhotoUrls.isEmpty()) {
+                    item(span = { GridItemSpan(3) }) {
+                        Text(
+                            "暂无相关照片",
+                            color = MaterialTheme.colorScheme.outline,
+                            modifier = Modifier.padding(top = 30.dp)
+                        )
+                    }
                 } else {
-                    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        gridItems(allPhotoUrls) { url ->
-                            val idx = allPhotoUrls.indexOf(url)
-                            CoverImage(
-                                url = url,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(1f)
-                                    .clickable { viewerIndex = idx + 1 /* 第0位是头像，相关照片从1开始 */ }
-                            )
-                        }
+                    itemsIndexed(allPhotoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
+                        CoverImage(
+                            url = url,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(1f)
+                                .clickable { viewerIndex = idx + 1 /* 第0位是头像，相关照片从1开始 */ }
+                        )
                     }
                 }
             }
@@ -464,52 +466,14 @@ fun CelebrityScreen(
         }
     }
 
-    // 全屏图片查看器：支持左右滑动翻页（HorizontalPager）、每张支持双指缩放/双击
+    // 全屏图片浏览器：头像+相关照片同一画廊，左右大幅度滑动翻页、双指缩放/双击放大、单击关闭
     val viewer = viewerIndex
     if (viewer != null && galleryUrls.isNotEmpty()) {
-        val startIdx = viewer.coerceIn(0, galleryUrls.size - 1)
-        val pagerState = rememberPagerState(
-            initialPage = startIdx,
-            initialPageOffsetFraction = 0f,
-            pageCount = { galleryUrls.size }
+        PhotoViewerDialog(
+            urls = galleryUrls,
+            initialIndex = viewer,
+            onDismiss = { viewerIndex = null }
         )
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = { viewerIndex = null },
-            properties = androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false,
-                dismissOnBackPress = true,
-                dismissOnClickOutside = false
-            )
-        ) {
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize()
-            ) { pageIdx ->
-                ZoomableImage(galleryUrls[pageIdx]) {
-                    // 单指单击空白时才关闭（内部已处理缩放/拖动）
-                    viewerIndex = null
-                }
-            }
-            // 右上角 X 关闭按钮
-            Box(Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.TopEnd) {
-                IconButton(onClick = { viewerIndex = null }) {
-                    Icon(
-                        Icons.Rounded.Close,
-                        contentDescription = "关闭",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-            // 顶部页码（同时作为指示器）
-            Box(Modifier.fillMaxSize().padding(top = 16.dp), contentAlignment = Alignment.TopCenter) {
-                Text(
-                    "${pagerState.currentPage + 1} / ${galleryUrls.size}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-            }
-        }
     }
 }
 

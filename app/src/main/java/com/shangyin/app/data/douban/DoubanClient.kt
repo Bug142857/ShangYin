@@ -371,7 +371,7 @@ object DoubanClient {
                 runCatching {
                     val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
                     val o = json.parseToJsonElement(
-                        httpGetRexxar("$apiUrl/celebrities?start=0&count=20", referer)
+                        httpGetRexxar("$apiUrl/celebrities?start=0&count=100", referer)
                     ).jsonObject
                     buildList {
                         fun take(key: String, roleLabel: String) {
@@ -535,7 +535,7 @@ object DoubanClient {
     private fun fetchMoviePhotos(doubanId: String): List<DoubanPhoto> = runCatching {
         val o = json.parseToJsonElement(
             httpGetRexxar(
-                "https://m.douban.com/rexxar/api/v2/movie/$doubanId/photos?start=0&count=30",
+                "https://m.douban.com/rexxar/api/v2/movie/$doubanId/photos?start=0&count=100",
                 "https://m.douban.com/movie/subject/$doubanId/"
             )
         ).jsonObject
@@ -751,7 +751,7 @@ object DoubanClient {
                 val cid = resolveCelebrityId(celebrityId)
                 val o = json.parseToJsonElement(
                     httpGetRexxar(
-                        "https://m.douban.com/rexxar/api/v2/celebrity/$cid/photos?start=0&count=30",
+                        "https://m.douban.com/rexxar/api/v2/celebrity/$cid/photos?start=0&count=100",
                         "https://m.douban.com/celebrity/$cid/"
                     )
                 ).jsonObject
