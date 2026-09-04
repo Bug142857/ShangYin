@@ -85,12 +85,34 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 ItemDetailScreen(nav, entry.arguments?.getLong("id") ?: 0L)
             }
             composable(
-                route = "celebrity/{id}/{fromCategory}",
+                route = "celebrity/{id}/{fromCategory}/{name}/{avatar}",
                 arguments = listOf(
                     navArgument("id") { type = NavType.StringType },
                     navArgument("fromCategory") {
                         type = NavType.StringType; defaultValue = ""
+                    },
+                    navArgument("name") {
+                        type = NavType.StringType; defaultValue = ""
+                    },
+                    navArgument("avatar") {
+                        type = NavType.StringType; defaultValue = ""
                     }
+                )
+            ) { entry ->
+                CelebrityScreen(
+                    nav = nav,
+                    celebrityId = entry.arguments?.getString("id").orEmpty(),
+                    fromCategory = entry.arguments?.getString("fromCategory").orEmpty(),
+                    passedName = entry.arguments?.getString("name").orEmpty(),
+                    passedAvatar = entry.arguments?.getString("avatar").orEmpty()
+                )
+            }
+            // 兼容搜索页点人物结果（不传name/avatar）的简单路由
+            composable(
+                route = "celebrity/{id}/{fromCategory}",
+                arguments = listOf(
+                    navArgument("id") { type = NavType.StringType },
+                    navArgument("fromCategory") { type = NavType.StringType; defaultValue = "" }
                 )
             ) { entry ->
                 CelebrityScreen(

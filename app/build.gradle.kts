@@ -14,8 +14,8 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "2.1.0"
+        versionCode = 13
+        versionName = "2.1.2"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
@@ -81,6 +81,8 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.navigation.compose)
+    // Compose Foundation（LazyGrid、HorizontalPager、PagerIndicator）
+    implementation("androidx.compose.foundation:foundation")
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)

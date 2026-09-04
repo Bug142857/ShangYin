@@ -275,8 +275,11 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                                 "游戏" -> "game"
                                 else -> "film"
                             }
+                            // 把人名和头像URL一并路由传过去——避免detail HTTP失败时拿不到name/avatar导致作品搜错、头像空
+                            val encName = java.net.URLEncoder.encode(c.name, "UTF-8")
+                            val encAvatar = java.net.URLEncoder.encode(c.avatarUrl.orEmpty(), "UTF-8")
                             CelebrityCard(c) {
-                                if (clickable) nav.safeNavigate("celebrity/${c.id}/$fromCat")
+                                if (clickable) nav.safeNavigate("celebrity/${c.id}/$fromCat/$encName/$encAvatar")
                             }
                         }
                     }

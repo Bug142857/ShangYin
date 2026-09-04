@@ -1,22 +1,33 @@
 package com.shangyin.app.ui.celebrity
 
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -37,6 +48,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,10 +71,18 @@ import kotlinx.coroutines.launch
 
 /** 影人详情页（从条目详情的演职员列表点入）
  *  fromCategory：来源类别代号 book/game/film 或空 —— 决定作品列表的数据源与过滤
+ *  passedName / passedAvatar：上游（图书/游戏作者卡片）已经搜索命中的真实名字和头像，
+ *      作为 detail HTTP 失败时的兜底；图书/游戏作品搜索直接优先用 passedName，避免搜错。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: String = "") {
+fun CelebrityScreen(
+    nav: NavHostController,
+    celebrityId: String,
+    fromCategory: String = "",
+    passedName: String = "",
+    passedAvatar: String = ""
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var detail by remember(celebrityId) { mutableStateOf<DoubanCelebrityDetail?>(null) }
@@ -70,10 +91,26 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
     var sortMenuOpen by remember { mutableStateOf(false) }
     var sortBy by remember { mutableStateOf("rating") }
     var photos by remember(celebrityId) { mutableStateOf<List<DoubanPhoto>>(emptyList()) }
-    // 图片查看器：头像/相关照片点开放大
-    var viewerUrl by remember { mutableStateOf<String?>(null) }
-    // 作品加载中状态（图书作者的作品来自搜索，稍慢）
+    // 图片查看器
+    var viewerIndex by remember { mutableStateOf<Int?>(null) }
     var worksLoading by remember(celebrityId) { mutableStateOf(true) }
+    var showAllPhotos by remember { mutableStateOf(false) }
+
+    // URL decode 传参
+    val decodedName = remember(passedName) {
+        runCatching { java.net.URLDecoder.decode(passedName, "UTF-8") }.getOrDefault(passedName)
+    }.ifBlank { null }
+    val decodedAvatar = remember(passedAvatar) {
+        runCatching { java.net.URLDecoder.decode(passedAvatar, "UTF-8") }.getOrDefault(passedAvatar)
+    }.ifBlank { null }
+
+    // 显示用：优先上游传的姓名，再用 detail.name（接口失败时兜底 "影人"）
+    val displayName: String = decodedName
+        ?: detail?.name?.takeIf { it.isNotBlank() && it != "影人" }
+        ?: "影人"
+    // 头像：优先上游传的
+    val displayAvatar: String? = decodedAvatar
+        ?: detail?.avatarUrl?.takeIf { !it.isNullOrBlank() }
 
     // 显示用中文类别 & 数据源代号
     val catLabel = when (fromCategory) {
@@ -89,42 +126,45 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
         else -> fromCategory
     }
 
+    // 详情（独立HTTP，失败则保持 null，界面用 passedName/passedAvatar 兜底）
     LaunchedEffect(celebrityId) {
-        detail = DoubanClient.fetchCelebrityDetail(celebrityId)
+        detail = runCatching { DoubanClient.fetchCelebrityDetail(celebrityId) }.getOrNull()
     }
 
-    // 相关照片（独立加载，失败静默）
+    // 相关照片
     LaunchedEffect(celebrityId) {
         photos = DoubanClient.fetchCelebrityPhotos(celebrityId)
     }
 
-    // 作品列表：按来源类别选择数据源
-    // - 图书作者：影人works接口不含书 → 用图书搜索按作者名检索（等detail加载完毕后取名字搜索）
-    // - 游戏作者：豆瓣无按人查游戏作品接口 → 先用游戏搜索页按人名/公司名搜标题包含的条目兜底
-    // - 其它（影视/搜索页进入）：celebrity works 全量 + 类别过滤
-    LaunchedEffect(celebrityId, sortBy, catSource) {
+    // 作品列表（数据源按来源类别分支）：
+    // - 图书作者：优先用 passedName（从作者卡片直接传的）搜图书著作，
+    //            再 fallback 到 detail.name，绝对禁止使用兜底占位 "影人" 作为关键词
+    // - 游戏作者：同上，用游戏搜索页按开发商名字搜
+    // - 其它：celebrity works API + 过滤
+    LaunchedEffect(celebrityId, sortBy, catSource, decodedName) {
         worksLoading = true
-        var d: DoubanCelebrityDetail? = detail
-        if (catSource == "book" || catSource == "game") {
-            // 图书/游戏 必须知道 detail.name 才能搜索其著作。
-            // 等待 detail 加载（最多等 8s，因为 LaunchedEffect 独立跑 HTTP）。
+        // 等 detail.name 非占位的有效值（最多 6 秒），或者 decodedName 已经有就不用等
+        val searchName: String = run {
+            var n = decodedName?.takeIf { it.isNotBlank() }.orEmpty()
+            if (n.isNotBlank()) return@run n
             var attempts = 0
-            while ((d == null || d.name.isBlank()) && attempts < 80) {
-                delay(100)
-                d = detail
-                attempts++
+            while (attempts < 60) {
+                val dn = detail?.name?.takeIf { it.isNotBlank() && it != "影人" }
+                if (!dn.isNullOrBlank()) {
+                    n = dn; break
+                }
+                delay(100); attempts++
             }
+            n
         }
-        val name = d?.name.orEmpty()
         allWorks = when {
             catSource == "book" -> {
-                val books = DoubanClient.fetchAuthorBooks(name)
+                val books = DoubanClient.fetchAuthorBooks(searchName)
                 if (sortBy == "rating") books.sortedWith(compareByDescending { it.rating ?: 0f })
                 else books.sortedWith(compareByDescending { it.year.toIntOrNull() ?: 0 })
             }
             catSource == "game" -> {
-                // 游戏作品兜底：用游戏搜索页（cat=3114）按开发者名字检索
-                val games = DoubanClient.fetchDeveloperGames(name)
+                val games = DoubanClient.fetchDeveloperGames(searchName)
                 if (sortBy == "rating") games.sortedWith(compareByDescending { it.rating ?: 0f })
                 else games.sortedWith(compareByDescending { it.year.toIntOrNull() ?: 0 })
             }
@@ -149,6 +189,13 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
         catSource == "game" -> emptyList()
         else -> detail?.works.orEmpty().filter { it.type !in listOf("book", "game", "music", "album") }
     }
+
+    // 相关照片的全部URL列表（大图像顺序）
+    val allPhotoUrls: List<String> = photos.mapNotNull { it.largeUrl ?: it.normalUrl }
+    // 顶部头像 + 相关照片 的合成索引（viewerIndex = 0 是头像，1+ 是相关照片）
+    val galleryUrls: List<String> = listOfNotNull(
+        DoubanClient.largeImageUrl(displayAvatar) ?: displayAvatar
+    ) + allPhotoUrls
 
     // 内部跳转：把影人作品导入应用后导航到详情
     fun openWorkInternal(work: CelebrityWork) {
@@ -184,11 +231,15 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
         topBar = {
             TopAppBar(
                 title = {
-                    Text(detail?.name.orEmpty(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (showAllWorks) showAllWorks = false else nav.safePopBackStack()
+                        when {
+                            showAllPhotos -> showAllPhotos = false
+                            showAllWorks -> showAllWorks = false
+                            else -> nav.safePopBackStack()
+                        }
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
@@ -197,18 +248,47 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
         }
     ) { pad ->
         val d = detail
-        if (d == null) {
+        // ---------- 全部照片页面 ----------
+        if (showAllPhotos) {
             Column(
-                Modifier.padding(pad).fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
+                Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                CircularProgressIndicator()
+                Text(
+                    "全部照片(${allPhotoUrls.size})",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(Modifier.height(6.dp))
+                if (allPhotoUrls.isEmpty()) {
+                    Text(
+                        "暂无相关照片",
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(top = 30.dp)
+                    )
+                } else {
+                    androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        gridItems(allPhotoUrls) { url ->
+                            val idx = allPhotoUrls.indexOf(url)
+                            CoverImage(
+                                url = url,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(1f)
+                                    .clickable { viewerIndex = idx + 1 /* 第0位是头像，相关照片从1开始 */ }
+                            )
+                        }
+                    }
+                }
             }
             return@Scaffold
         }
 
-        // 全部作品列表页
+        // ---------- 全部作品列表页 ----------
         if (showAllWorks) {
             Column(
                 Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
@@ -264,28 +344,25 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            // 头部：头像 + 名字 + 职业/代表作（头像可点击放大）
+            // 头部：头像（可点击放大） + 名字 + 职业/代表作
             Row {
                 CoverImage(
-                    url = d.avatarUrl,
+                    url = displayAvatar,
                     modifier = Modifier
                         .width(110.dp)
                         .height(150.dp)
-                        .clickable(enabled = !d.avatarUrl.isNullOrBlank()) {
-                            viewerUrl = DoubanClient.largeImageUrl(d.avatarUrl)
-                                ?: d.avatarUrl
-                        }
+                        .clickable(enabled = !displayAvatar.isNullOrBlank()) { viewerIndex = 0 }
                 )
                 Column(Modifier.padding(start = 16.dp)) {
-                    Text(d.name, style = MaterialTheme.typography.titleLarge)
-                    if (d.latinName.isNotBlank()) {
+                    Text(displayName, style = MaterialTheme.typography.titleLarge)
+                    if (d?.latinName?.isNotBlank() == true) {
                         Text(
                             d.latinName,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (d.shortInfo.isNotBlank()) {
+                    if (d?.shortInfo?.isNotBlank() == true) {
                         Spacer(Modifier.height(6.dp))
                         Text(
                             d.shortInfo,
@@ -296,8 +373,8 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
                 }
             }
 
-            // 详细信息
-            if (d.infoPairs.isNotEmpty()) {
+            // 详细信息（仅 detail 成功时显示）
+            if (d?.infoPairs?.isNotEmpty() == true) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     d.infoPairs.forEach { (label, value) ->
                         Row {
@@ -341,23 +418,43 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
                         }
                     }
                 }
+            } else if (worksLoading) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        "正在加载${catLabel}相关作品…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
             }
 
-            // 相关照片（横滑，点击放大查看，支持双指缩放）
+            // 相关照片（横滑 + 查看全部；头像单张+照片全部可在查看器左右滑动）
             if (photos.isNotEmpty()) {
                 Column {
-                    Text("相关照片", style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("相关照片", style = MaterialTheme.typography.titleSmall)
+                        TextButton(onClick = { showAllPhotos = true }) {
+                            Text("查看全部(${photos.size})")
+                        }
+                    }
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(photos, key = { "cp${it.id}" }) { p ->
+                            val order = galleryUrls.indexOfFirst { u ->
+                                u == p.largeUrl || u == p.normalUrl
+                            }.let { if (it < 0) 1 else it }
                             CoverImage(
                                 url = p.normalUrl ?: p.largeUrl,
                                 modifier = Modifier
                                     .width(130.dp)
                                     .height(98.dp)
-                                    .clickable {
-                                        viewerUrl = p.largeUrl ?: p.normalUrl
-                                    }
+                                    .clickable { viewerIndex = order }
                             )
                         }
                     }
@@ -367,15 +464,51 @@ fun CelebrityScreen(nav: NavHostController, celebrityId: String, fromCategory: S
         }
     }
 
-    // 全屏图片查看器（头像/相关照片共用）
-    viewerUrl?.let { url ->
+    // 全屏图片查看器：支持左右滑动翻页（HorizontalPager）、每张支持双指缩放/双击
+    val viewer = viewerIndex
+    if (viewer != null && galleryUrls.isNotEmpty()) {
+        val startIdx = viewer.coerceIn(0, galleryUrls.size - 1)
+        val pagerState = rememberPagerState(
+            initialPage = startIdx,
+            initialPageOffsetFraction = 0f,
+            pageCount = { galleryUrls.size }
+        )
         androidx.compose.ui.window.Dialog(
-            onDismissRequest = { viewerUrl = null },
+            onDismissRequest = { viewerIndex = null },
             properties = androidx.compose.ui.window.DialogProperties(
-                usePlatformDefaultWidth = false
+                usePlatformDefaultWidth = false,
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false
             )
         ) {
-            ZoomableImage(url) { viewerUrl = null }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxSize()
+            ) { pageIdx ->
+                ZoomableImage(galleryUrls[pageIdx]) {
+                    // 单指单击空白时才关闭（内部已处理缩放/拖动）
+                    viewerIndex = null
+                }
+            }
+            // 右上角 X 关闭按钮
+            Box(Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.TopEnd) {
+                IconButton(onClick = { viewerIndex = null }) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "关闭",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+            // 顶部页码（同时作为指示器）
+            Box(Modifier.fillMaxSize().padding(top = 16.dp), contentAlignment = Alignment.TopCenter) {
+                Text(
+                    "${pagerState.currentPage + 1} / ${galleryUrls.size}",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
         }
     }
 }
