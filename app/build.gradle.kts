@@ -14,14 +14,44 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 11
+        versionName = "2.1.0"
+    }
+
+    // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
+    // release 和 debug 共享同一 keystore，避免覆盖安装时签名冲突
+    signingConfigs {
+        create("release") {
+            val store = rootProject.file("app/lzs_release.jks")
+            if (store.exists()) {
+                storeFile = store
+                storePassword = "laozheng2026"
+                keyAlias = "lzs"
+                keyPassword = "laozheng2026"
+            } else {
+                // 签名文件不存在：fallback到 Android 默认 debug.keystore（仍能安装，只是 debug sign）
+                println("[WARN] lzs_release.jks 未找到，使用默认签名生成 release 包")
+            }
+        }
     }
 
     buildTypes {
         release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            // Release 正式版关闭 debuggable（默认就是 false）
+            isDebuggable = false
+        }
+        debug {
+            isDebuggable = true
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // debug 也使用与 release 一致的签名，避免两种 build type 覆盖安装冲突
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {

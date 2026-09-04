@@ -58,6 +58,8 @@ import com.shangyin.app.data.db.CollectionItemEntity
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.safeNavigate
+import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
 /** 清单内容布局 */
@@ -83,7 +85,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             TopAppBar(
                 title = { Text(list?.name.orEmpty(), maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
+                    IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -138,7 +140,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     gridItems(items, key = { it.id }) { item ->
                         GridItemCard(
                             item = item,
-                            onClick = { nav.navigate("item/${item.id}") },
+                            onClick = { nav.safeNavigate("item/${item.id}") },
                             onLongPress = { deleteTarget = item }
                         )
                     }
@@ -151,7 +153,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     items(items, key = { it.id }) { item ->
                         ItemRowInList(
                             item = item,
-                            onClick = { nav.navigate("item/${item.id}") },
+                            onClick = { nav.safeNavigate("item/${item.id}") },
                             onLongPress = { deleteTarget = item }
                         )
                     }
@@ -200,7 +202,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     scope.launch {
                         Repo.deleteList(list!!)
                         showDelete = false
-                        nav.popBackStack()
+                        nav.safePopBackStack()
                     }
                 }) { Text("删除") }
             },

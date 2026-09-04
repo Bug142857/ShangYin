@@ -44,6 +44,7 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.safeNavigate
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -77,7 +78,7 @@ fun ListsScreen(nav: NavHostController) {
                 modifier = Modifier.padding(pad).fillMaxSize()
             ) {
                 items(lists, key = { it.list.id }) { meta ->
-                    Card(onClick = { nav.navigate("list/${meta.list.id}") }) {
+                    Card(onClick = { nav.safeNavigate("list/${meta.list.id}") }) {
                         Row(
                             Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically

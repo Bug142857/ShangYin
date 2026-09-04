@@ -19,8 +19,6 @@ import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.theme.ShangYinTheme
 
 class MainActivity : ComponentActivity() {
-    // 防快速连点返回导致空白屏
-    private var lastBackTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,9 +51,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onBackPressed() {
-        val now = System.currentTimeMillis()
-        if (now - lastBackTime < 300) return  // 防抖 300ms
-        lastBackTime = now
+        // 导航过渡期间忽略系统返回连点，避免白屏
+        if (!com.shangyin.app.ui.NavGuard.allow()) return
         super.onBackPressed()
     }
 }

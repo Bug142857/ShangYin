@@ -27,6 +27,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,7 +47,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,7 +61,8 @@ import com.shangyin.app.data.douban.DoubanClient
 import com.shangyin.app.data.douban.DoubanResult
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
-import kotlinx.coroutines.async
+import com.shangyin.app.ui.safeNavigate
+import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -69,7 +70,6 @@ import kotlinx.coroutines.launch
 fun SearchScreen(nav: NavHostController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val clipboard = LocalClipboardManager.current
 
     var query by rememberSaveable { mutableStateOf("") }
     // 用单例缓存搜索结果，避免导航后丢失
@@ -77,6 +77,9 @@ fun SearchScreen(nav: NavHostController) {
     var celebrityResults by remember { mutableStateOf(SearchCache.celebrities) }
     var searching by remember { mutableStateOf(false) }
     var searched by rememberSaveable { mutableStateOf(SearchCache.searched) }
+    // 分类筛选：必须先选分类才能搜索（影视/图书/音乐/游戏/人物），防止结果互相干扰
+    // 默认选中「影视」（最常用），用户可切换
+    var selectedCat by rememberSaveable { mutableStateOf("影视") }
     // 防频繁点击：导航中禁用所有点击
     var navigating by remember { mutableStateOf(false) }
 
@@ -96,23 +99,30 @@ fun SearchScreen(nav: NavHostController) {
     fun doSearch() {
         val q = query.trim()
         if (q.isEmpty()) return
+        if (selectedCat.isEmpty()) {
+            Toast.makeText(context, "请先选择要搜索的分类", Toast.LENGTH_SHORT).show()
+            return
+        }
         scope.launch {
             searching = true
             searched = true
             results = emptyList()
             celebrityResults = emptyList()
             try {
-                val movieTv = async { runCatching { DoubanClient.search(Category.MOVIE, q) }.getOrDefault(emptyList()) }
-                val tv = async { runCatching { DoubanClient.search(Category.TV, q) }.getOrDefault(emptyList()) }
-                val book = async { runCatching { DoubanClient.search(Category.BOOK, q) }.getOrDefault(emptyList()) }
-                val music = async { runCatching { DoubanClient.search(Category.MUSIC, q) }.getOrDefault(emptyList()) }
-                val game = async { runCatching { DoubanClient.search(Category.GAME, q) }.getOrDefault(emptyList()) }
-                val celebs = async { runCatching { DoubanClient.searchCelebrities(q) }.getOrDefault(emptyList()) }
-                val merged = (movieTv.await() + tv.await() + book.await() + music.await() + game.await())
-                    .distinctBy { it.category.name + it.doubanId }
-                // 保持豆瓣返回的相关度排序，不做额外排序
-                results = merged
-                celebrityResults = celebs.await()
+                if (selectedCat == "人物") {
+                    celebrityResults = runCatching { DoubanClient.searchCelebrities(q) }.getOrDefault(emptyList())
+                } else {
+                    val list = if (selectedCat == "影视") {
+                        // 影视 = 电影 + 电视剧
+                        val movie = runCatching { DoubanClient.search(Category.MOVIE, q) }.getOrDefault(emptyList())
+                        val tv = runCatching { DoubanClient.search(Category.TV, q) }.getOrDefault(emptyList())
+                        movie + tv
+                    } else {
+                        val cat = Category.values().firstOrNull { it.label == selectedCat }
+                        if (cat != null) runCatching { DoubanClient.search(cat, q) }.getOrDefault(emptyList()) else emptyList()
+                    }
+                    results = list.distinctBy { it.category.name + it.doubanId }
+                }
             } catch (e: Exception) {
                 Toast.makeText(context, "搜索出错：${e.message}", Toast.LENGTH_LONG).show()
             } finally {
@@ -141,45 +151,33 @@ fun SearchScreen(nav: NavHostController) {
         }
     }
 
-    fun importLink() {
-        val text = clipboard.getText()?.toString()?.trim().orEmpty()
-        val parsed = DoubanClient.parseDoubanUrl(text)
-        if (parsed == null) {
-            Toast.makeText(context, "剪贴板里没有可识别的链接", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val (cat, id) = parsed
-        scope.launch {
-            val itemId = runCatching {
-                Repo.saveFromDouban(DoubanResult(cat, id, title = "豆瓣导入", url = text))
-            }.getOrNull()
-            if (itemId != null && itemId > 0) {
-                Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
-                nav.navigate("item/$itemId")
-            } else {
-                Toast.makeText(context, "导入失败，请检查网络后重试", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text("搜索") },
                 navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
+                    IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    TextButton(onClick = { importLink() }) {
-                        Text("链接导入")
                     }
                 }
             )
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
+            // 分类筛选（必选）
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            ) {
+                listOf("影视", "图书", "音乐", "游戏", "人物").forEach { label ->
+                    FilterChip(
+                        selected = selectedCat == label,
+                        onClick = { selectedCat = if (selectedCat == label) "" else label },
+                        label = { Text(label) },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 16.dp)
@@ -187,7 +185,7 @@ fun SearchScreen(nav: NavHostController) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text("") },
+                    placeholder = { Text(if (selectedCat.isEmpty()) "先选分类，再输入关键词" else "在${selectedCat}中搜索…") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { doSearch() }),
@@ -205,7 +203,7 @@ fun SearchScreen(nav: NavHostController) {
                 ) {
                     CircularProgressIndicator()
                 }
-            } else if (results.isEmpty()) {
+            } else if (results.isEmpty() && celebrityResults.isEmpty()) {
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -239,18 +237,20 @@ fun SearchScreen(nav: NavHostController) {
                             CelebrityResultRow(c) {
                                 if (!navigating) {
                                     navigating = true
-                                    nav.navigate("celebrity/${c.id}")
+                                    nav.safeNavigate("celebrity/${c.id}/")
                                 }
                             }
                         }
-                        item(key = "celeb_divider") {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                "相关作品",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
-                            )
+                        if (results.isNotEmpty()) {
+                            item(key = "celeb_divider") {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "相关作品",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                            }
                         }
                     }
                     items(results, key = { it.category.name + it.doubanId }) { r ->
@@ -261,15 +261,11 @@ fun SearchScreen(nav: NavHostController) {
                             onClick = {
                                 if (!navigating) {
                                     navigating = true
+                                    // 先快速落库立即跳转（不等详情网络请求），详情页打开后自动补全
                                     scope.launch {
-                                        runCatching { Repo.saveFromDouban(r) }
-                                            .onSuccess { id ->
-                                                if (id > 0) nav.navigate("item/$id")
-                                                else Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_SHORT).show()
-                                            }
-                                            .onFailure { e ->
-                                                Toast.makeText(context, "加载失败：${e.message}", Toast.LENGTH_LONG).show()
-                                            }
+                                        val id = runCatching { Repo.saveFromDoubanFast(r) }.getOrDefault(-1L)
+                                        if (id > 0) nav.safeNavigate("item/$id")
+                                        else Toast.makeText(context, "保存失败，请重试", Toast.LENGTH_SHORT).show()
                                         navigating = false
                                     }
                                 }
@@ -290,7 +286,7 @@ fun SearchScreen(nav: NavHostController) {
                 title = { Text("还没有分类") },
                 text = { Text("请先到设置里创建一个分类，才能把《${result.title}》添加进去。") },
                 confirmButton = {
-                    TextButton(onClick = { pendingAdd = null; nav.navigate("settings") }) {
+                    TextButton(onClick = { pendingAdd = null; nav.safeNavigate("settings") }) {
                         Text("去创建分类")
                     }
                 },

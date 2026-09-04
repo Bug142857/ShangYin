@@ -31,6 +31,31 @@ object Repo {
 
     fun observeItem(id: Long): Flow<CollectionItemEntity?> = itemDao.observeById(id)
 
+    /** 快速收藏：只落库搜索结果自带信息，不阻塞等详情网络请求（详情页打开后自动补全） */
+    suspend fun saveFromDoubanFast(r: DoubanResult): Long {
+        itemDao.findByDouban(r.category.label, r.doubanId)?.let { return it.id }
+        val id = itemDao.insert(
+            CollectionItemEntity(
+                category = r.category.label,
+                doubanId = r.doubanId,
+                title = r.title,
+                subTitle = r.subTitle,
+                year = r.year,
+                doubanRating = r.rating,
+                coverUrl = r.coverUrl,
+                summary = r.intro,
+                info = "",
+                directors = "",
+                casts = "",
+                genres = "",
+                doubanUrl = r.url ?: detailDefaultUrl(r),
+                status = ""
+            )
+        )
+        return if (id != -1L) id
+        else itemDao.findByDouban(r.category.label, r.doubanId)?.id ?: -1L
+    }
+
     /** 从豆瓣搜索结果收藏（自动抓取详情补全封面/评分/简介/导演/演员），返回条目 id */
     suspend fun saveFromDouban(r: DoubanResult): Long {
         itemDao.findByDouban(r.category.label, r.doubanId)?.let { existing ->

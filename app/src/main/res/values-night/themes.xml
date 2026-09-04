@@ -1,0 +1,9 @@
+<resources>
+    <!-- 深色模式：窗口背景用深色，避免导航返回时闪白屏 -->
+    <style name="Theme.ShangYin" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#121212</item>
+    </style>
+</resources>

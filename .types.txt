@@ -1,0 +1,3 @@
+﻿work.type distribution:
+tv=5
+movie=15

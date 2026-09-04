@@ -62,6 +62,8 @@ import com.shangyin.app.data.douban.DoubanPhoto
 import com.shangyin.app.data.douban.DoubanVideo
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
+import com.shangyin.app.ui.safeNavigate
+import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -91,7 +93,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             TopAppBar(
                 title = { Text(it_?.title.orEmpty(), maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = { nav.popBackStack() }) {
+                    IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 }
@@ -121,7 +123,9 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             coroutineScope {
                 launch {
                     celebrities = DetailCache.celebrities[cacheKey] ?: run {
-                        val v = com.shangyin.app.data.douban.DoubanClient.fetchCelebrities(cat, entity.doubanId)
+                        // 本地作者/开发商名兜底：详情接口失败时仍能搜索并显示带头像的可点击卡片
+                        val fallback = entity.directors.split("/").map { it.trim() }.filter { it.isNotBlank() }
+                        val v = com.shangyin.app.data.douban.DoubanClient.fetchCelebrities(cat, entity.doubanId, fallback)
                         if (v.isNotEmpty()) DetailCache.celebrities[cacheKey] = v
                         v
                     }
@@ -150,18 +154,25 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
         }
 
-        // 导演演员为空时，后台重新抓取补充落库
+        // 关键字段缺失时（快速保存/老数据），后台抓详情补全落库
         LaunchedEffect(entity.id) {
-            if (entity.directors.isBlank() && entity.casts.isBlank()) {
+            if (entity.summary.isBlank() || entity.info.isBlank() ||
+                (entity.directors.isBlank() && entity.casts.isBlank())
+            ) {
                 val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
                 if (cat != null) {
                     runCatching {
                         val detail = com.shangyin.app.data.douban.DoubanClient.fetchDetail(cat, entity.doubanId)
-                        if (!detail.isEmpty && (detail.directors?.isNotBlank() == true || detail.casts?.isNotBlank() == true)) {
+                        if (!detail.isEmpty) {
                             Repo.updateItem(entity.copy(
-                                directors = detail.directors ?: entity.directors,
-                                casts = detail.casts ?: entity.casts,
-                                genres = detail.genres ?: entity.genres
+                                title = detail.title ?: entity.title,
+                                doubanRating = detail.rating ?: entity.doubanRating,
+                                coverUrl = entity.coverUrl ?: detail.coverUrl,
+                                summary = entity.summary.ifBlank { detail.summary.orEmpty() },
+                                info = entity.info.ifBlank { detail.info.orEmpty() },
+                                directors = entity.directors.ifBlank { detail.directors.orEmpty() },
+                                casts = entity.casts.ifBlank { detail.casts.orEmpty() },
+                                genres = entity.genres.ifBlank { detail.genres.orEmpty() }
                             ))
                         }
                     }
@@ -181,7 +192,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             Row {
                 Box(
                     modifier = Modifier.clickable {
-                        if (!entity.coverUrl.isNullOrBlank()) photoViewerUrl = entity.coverUrl
+                        if (!entity.coverUrl.isNullOrBlank())
+                            photoViewerUrl = com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
                     }
                 ) {
                     CoverImage(
@@ -243,21 +255,28 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
-            // 演职员/作者（带头像 + 饰演，可点击进影人详情）；无数据时回退纯文本
+            // 演职员/作者/开发商（带头像 + 饰演，可点击进影人详情）；无数据时回退纯文本
             val isBook = entity.category == "图书"
+            val isGame = entity.category == "游戏"
             if (celebrities.isNotEmpty()) {
                 Column {
                     Text(
-                        if (isBook) "作者/译者" else "演职员",
+                        if (isBook) "作者/译者" else if (isGame) "开发商/平台" else "演职员",
                         style = MaterialTheme.typography.titleSmall
                     )
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         items(celebrities, key = { it.id }) { c ->
-                            // 图书作者用伪 ID（含下划线），不可点击进影人详情
+                            // 伪 ID（含下划线，豆瓣无对应人物页）不可点击；真实 ID 可点击进人物详情
                             val clickable = !c.id.contains("_")
+                            // fromCategory 用英文代号传参（路由兼容性），图书作者的详情页只展示其图书作品
+                            val fromCat = when (entity.category) {
+                                "图书" -> "book"
+                                "游戏" -> "game"
+                                else -> "film"
+                            }
                             CelebrityCard(c) {
-                                if (clickable) nav.navigate("celebrity/${c.id}")
+                                if (clickable) nav.safeNavigate("celebrity/${c.id}/$fromCat")
                             }
                         }
                     }
@@ -265,20 +284,20 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             } else if (entity.directors.isNotBlank() || entity.casts.isNotBlank()) {
                 Column {
                     Text(
-                        if (isBook) "作者/译者" else "导演演员",
+                        if (isBook) "作者/译者" else if (isGame) "开发商/平台" else "导演演员",
                         style = MaterialTheme.typography.titleSmall
                     )
                     Spacer(Modifier.height(6.dp))
                     if (entity.directors.isNotBlank()) {
                         Text(
-                            if (isBook) "作者: ${entity.directors}" else "导演: ${entity.directors}",
+                            if (isBook) "作者: ${entity.directors}" else if (isGame) "开发商: ${entity.directors}" else "导演: ${entity.directors}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     if (entity.casts.isNotBlank()) {
                         Text(
-                            if (isBook) "译者: ${entity.casts}" else "主演: ${entity.casts}",
+                            if (isBook) "译者: ${entity.casts}" else if (isGame) "平台: ${entity.casts}" else "主演: ${entity.casts}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -286,17 +305,30 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
-            // 视频 / 剧照
-            if (videos.isNotEmpty() || photos.isNotEmpty()) {
+            // 剧照 / 游戏截图
+            if (photos.isNotEmpty()) {
                 Column {
-                    Text("视频 / 剧照", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (isGame) "游戏截图" else "剧照",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(photos, key = { "p${it.id}" }) { p ->
+                            PhotoCard(p) { photoViewerUrl = p.largeUrl ?: p.normalUrl }
+                        }
+                    }
+                }
+            }
+
+            // 预告片（游戏无）
+            if (videos.isNotEmpty()) {
+                Column {
+                    Text("预告片", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(videos, key = { "v${it.id}" }) { v ->
                             VideoCard(v) { videoUrl = v.videoUrl }
-                        }
-                        items(photos, key = { "p${it.id}" }) { p ->
-                            PhotoCard(p) { photoViewerUrl = p.largeUrl ?: p.normalUrl }
                         }
                     }
                 }
@@ -315,26 +347,17 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
         }
 
-        // 剧照大图查看
+        // 剧照大图查看（支持双指缩放/拖动）
         photoViewerUrl?.let { url ->
             Dialog(
                 onDismissRequest = { photoViewerUrl = null },
-                properties = DialogProperties(usePlatformDefaultWidth = false)
+                properties = DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    dismissOnBackPress = true,
+                    dismissOnClickOutside = false
+                )
             ) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black)
-                        .clickable { photoViewerUrl = null },
-                    contentAlignment = Alignment.Center
-                ) {
-                    AsyncImage(
-                        model = url,
-                        contentDescription = null,
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                com.shangyin.app.ui.common.ZoomableImage(url) { photoViewerUrl = null }
             }
         }
 

@@ -11,7 +11,8 @@ data class DoubanResult(
     val year: String = "",
     val coverUrl: String? = null,
     val url: String? = null,
-    val rating: Float? = null
+    val rating: Float? = null,
+    val intro: String = ""   // 搜索页附带的简介（游戏等详情接口缺失时兜底）
 )
 
 /** 演职员（条目详情页横滑列表项） */

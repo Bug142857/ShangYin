@@ -53,6 +53,7 @@ import com.shangyin.app.R
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.safeNavigate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -66,10 +67,10 @@ fun HomeScreen(nav: NavHostController) {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name), fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = { nav.navigate("search") }) {
+                    IconButton(onClick = { nav.safeNavigate("search") }) {
                         Icon(Icons.Rounded.Search, contentDescription = "去搜索")
                     }
-                    IconButton(onClick = { nav.navigate("settings") }) {
+                    IconButton(onClick = { nav.safeNavigate("settings") }) {
                         Icon(Icons.Rounded.Menu, contentDescription = "设置")
                     }
                 }
@@ -87,7 +88,7 @@ fun HomeScreen(nav: NavHostController) {
                 modifier = Modifier.padding(pad).fillMaxSize()
             ) {
                 items(lists, key = { it.list.id }) { meta ->
-                    CategoryTile(meta) { nav.navigate("list/${meta.list.id}") }
+                    CategoryTile(meta) { nav.safeNavigate("list/${meta.list.id}") }
                 }
             }
         }
@@ -107,12 +108,12 @@ private fun EmptyHomeContent(nav: NavHostController, modifier: Modifier = Modifi
             modifier = Modifier.padding(top = 20.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            OutlinedButton(onClick = { nav.navigate("settings") }) {
+            OutlinedButton(onClick = { nav.safeNavigate("settings") }) {
                 Icon(Icons.Rounded.List, contentDescription = null, modifier = Modifier.height(18.dp))
                 Spacer(Modifier.height(6.dp))
                 Text("管理分类")
             }
-            Button(onClick = { nav.navigate("search") }) {
+            Button(onClick = { nav.safeNavigate("search") }) {
                 Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.height(18.dp))
                 Spacer(Modifier.height(6.dp))
                 Text("搜索收藏")

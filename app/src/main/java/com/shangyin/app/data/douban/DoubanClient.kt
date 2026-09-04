@@ -2,6 +2,9 @@ package com.shangyin.app.data.douban
 
 import com.shangyin.app.data.Category
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -30,6 +33,31 @@ object DoubanClient {
     private const val MOBILE_UA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 " +
             "(KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
+
+    /**
+     * 将豆瓣图片 URL 升级为大图/原图，解决封面放大后模糊的问题。
+     * 豆瓣图片路径含尺寸段：/view/<类型>/<尺寸>/public/<id>.jpg
+     * 尺寸等级（小→大）：albumicon/thumb/s/m < square/l/sqxs < raw(原图)
+     */
+    fun largeImageUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return url
+        var u = url
+        // 去掉可能的尺寸/格式查询参数
+        u = u.substringBefore('?')
+        return u
+            .replace("/view/subject/s/", "/view/subject/l/")
+            .replace("/view/subject/m/", "/view/subject/l/")
+            .replace("/s_ratio_poster/", "/l_ratio_poster/")
+            .replace("/m_ratio_poster/", "/l_ratio_poster/")
+            .replace("/s_ratio_celebrity/", "/l_ratio_celebrity/")
+            .replace("/view/celebrity/s/", "/view/celebrity/l/")
+            .replace("/view/celebrity/m/", "/view/celebrity/l/")
+            .replace("/view/personage/s/", "/view/personage/l/")
+            .replace("/view/personage/m/", "/view/personage/l/")
+            .replace("/albumicon/", "/sqxs/")
+            .replace("/thumb/", "/sqxs/")
+            .replace("/icon/", "/sqxs/")
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -86,7 +114,7 @@ object DoubanClient {
             Category.TV -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
             Category.BOOK -> "https://book.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1001" to "https://book.douban.com/"
             Category.MUSIC -> "https://music.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}" to "https://music.douban.com/"
-            Category.GAME -> return searchGameFallback(query)
+            Category.GAME -> return searchGameWeb(query)
         }
         val html = httpGetMobile(url, referer)
         // 提取 window.__DATA__ = { ... };
@@ -146,60 +174,77 @@ object DoubanClient {
         }
     }
 
-    /** 游戏搜索降级：有 Cookie 时用 search/subjects，无则返回空 */
-    private fun searchGameFallback(query: String): List<DoubanResult> {
-        val cookie = runCatching { SettingsStore.doubanCookie }.getOrDefault("")
-        if (cookie.isBlank()) return emptyList()
-        // 有登录 Cookie，尝试 search/subjects 端点
-        return runCatching {
-            val url = "https://m.douban.com/rexxar/api/v2/search/subjects?q=${URLEncoder.encode(query, "UTF-8")}&count=20"
-            val body = httpGetRexxar(url, "https://m.douban.com/search/")
-            val o = json.parseToJsonElement(body).jsonObject
-            o["subjects"]?.jsonObject?.get("items")?.jsonArray?.mapNotNull { el ->
-                val item = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
-                val t = runCatching { item["target"]?.jsonObject }.getOrNull() ?: return@mapNotNull null
-                val id = t["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                if (!id.all { it.isDigit() }) return@mapNotNull null
-                val uri = t["uri"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                if ("/game/" !in uri) return@mapNotNull null
-                DoubanResult(
-                    category = Category.GAME,
-                    doubanId = id,
-                    title = t["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
-                    subTitle = t["card_subtitle"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    coverUrl = t["cover_url"]?.jsonPrimitive?.contentOrNull?.substringBefore('?'),
-                    url = "https://www.douban.com/game/$id/",
-                    rating = t["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull
-                )
-            }.orEmpty()
-        }.getOrDefault(emptyList())
+    /** 游戏搜索：解析 www.douban.com/search?cat=3114 网页结果（无需登录） */
+    private fun searchGameWeb(query: String): List<DoubanResult> {
+        val url = "https://www.douban.com/search?cat=3114&q=${URLEncoder.encode(query, "UTF-8")}"
+        val html = httpGetMobile(url, "https://www.douban.com/")
+        val doc = Jsoup.parse(html, url)
+        return doc.select("div.result").mapNotNull { result ->
+            val link = result.selectFirst("a[title]") ?: return@mapNotNull null
+            val href = link.attr("abs:href")
+            // link2 跳转链接内部用 &amp; 分隔参数，要先还原
+            val normalizedHref = href.replace("&amp;", "&")
+            val decoded = runCatching {
+                java.net.URLDecoder.decode(normalizedHref, "UTF-8")
+            }.getOrDefault(normalizedHref)
+            val onclick = runCatching { link.attr("onclick") }.getOrDefault("")
+            val combined = "$decoded $onclick"
+            val id = Regex("""game/(\d+)""").find(decoded)?.groupValues?.get(1)
+                ?: Regex("""sid[:\s]+(\d+)""").find(combined)?.groupValues?.get(1)
+                ?: return@mapNotNull null
+            val title = link.attr("title").trim().ifBlank { link.text().trim() }
+            if (title.isBlank()) return@mapNotNull null
+            val rating = result.selectFirst("span.rating_nums")?.text()?.trim()?.toFloatOrNull()
+            val info = result.selectFirst("span.subject-cast")?.text()?.trim().orEmpty()
+            val intro = result.selectFirst("p")?.text()?.trim().orEmpty()
+            val cover = result.selectFirst("img[src]")?.attr("abs:src")
+            DoubanResult(
+                category = Category.GAME,
+                doubanId = id,
+                title = title,
+                subTitle = info,
+                year = Regex("""(\d{4})""").findAll(info).lastOrNull()?.groupValues?.get(1).orEmpty(),
+                coverUrl = cover,
+                url = "https://www.douban.com/game/$id/",
+                rating = rating,
+                intro = intro
+            )
+        }
     }
 
     // ---------------- 人物搜索 ----------------
 
-    /** 搜索影人：用豆瓣网页搜索解析 celebrity 链接 */
+    /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接 */
     suspend fun searchCelebrities(query: String): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val url = "https://www.douban.com/search?q=${URLEncoder.encode(query, "UTF-8")}&cat=1005"
+                val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
                 val html = httpGetMobile(url, "https://www.douban.com/")
                 val doc = Jsoup.parse(html, url)
                 doc.select("div.result").mapNotNull { result ->
-                    val link = result.selectFirst("a[href]") ?: return@mapNotNull null
-                    val href = link.attr("abs:href")
-                    val match = Regex("celebrity/(\\d+)").find(href) ?: return@mapNotNull null
-                    val id = match.groupValues[1]
+                    val link = result.selectFirst("h3 a[href]") ?: return@mapNotNull null
+                    val rawHref = link.attr("abs:href")
+                    // 1) 先把整段 HTML (含 onclick) URL 解码，豆瓣的 link2 跳转链接内部还做了 HTML entity &amp;
+                    val combined = rawHref + " " + (runCatching {
+                        java.net.URLDecoder.decode(link.attr("onclick"), "UTF-8")
+                    }.getOrDefault("")) + " " + java.net.URLDecoder.decode(
+                        rawHref.replace("&amp;", "&"), "UTF-8"
+                    )
+                    val id = Regex("""(?:personage|celebrity)/(\d+)""").find(combined)?.groupValues?.get(1)
+                        ?: Regex("""sid[:\s]+(\d+)""").find(combined)?.groupValues?.get(1)
+                        ?: return@mapNotNull null
                     val name = link.text().trim()
                     if (name.isBlank()) return@mapNotNull null
-                    // 尝试从头像 img 标签提取
-                    val avatar = result.selectFirst("img[src]")?.attr("abs:src")
-                    // 提取副标题作为 role 信息
-                    val subTitle = result.selectFirst("div.title")?.text()?.trim().orEmpty()
+                    val avatar = result.selectFirst("div.pic img[src]")?.attr("abs:src")
+                    // 副标题："作者 编剧 / 肠子 搏击俱乐部" 等
+                    val sub = result.select("div.content > p").map { it.text().trim() }
+                        .filter { it.isNotBlank() }
+                        .joinToString(" / ")
                     DoubanCelebrity(
                         id = id,
                         name = name,
                         latinName = "",
-                        role = subTitle,
+                        role = sub,
                         avatarUrl = avatar
                     )
                 }.distinctBy { it.id }
@@ -261,13 +306,27 @@ object DoubanClient {
 
         val directors = names("directors") ?: names("author") // 图书作者/音乐人回退到 author
         val casts = names("actors") ?: names("translators") // 图书译者回退
+        // 游戏：developers / publishers 是字符串，platforms 是对象数组
+        val gameDeveloper = (o["developers"]?.jsonPrimitive?.contentOrNull
+            ?: names("developers"))
+            ?.takeIf { it.isNotBlank() }
+        val gamePlatforms = o["platforms"]?.jsonArray
+            ?.mapNotNull { runCatching { it.jsonObject["name"]?.jsonPrimitive?.contentOrNull }.getOrNull() }
+            ?.joinToString("/")?.takeIf { it.isNotBlank() }
+
         val genres = o["genres"]?.jsonArray
             ?.mapNotNull { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
             ?.joinToString("/")?.takeIf { it.isNotBlank() }
 
         val videos = parseVideos(o)
 
-        return DoubanDetail(title, rating, cover, intro, info, directors, casts, genres, videos)
+        return DoubanDetail(
+            title, rating, cover, intro, info,
+            directors = directors ?: gameDeveloper,
+            casts = casts ?: gamePlatforms,
+            genres = genres,
+            videos = videos
+        )
     }
 
     /** 详情 JSON 的 trailers 数组 → 预告片列表（含 mp4 直链/封面/时长） */
@@ -297,8 +356,15 @@ object DoubanClient {
 
     // ---------------- 演职员 / 剧照 / 短评 ----------------
 
-    /** 演职员/作者（影视条目有 celebrities 端点，图书从详情 API 的 author 数组构造） */
-    suspend fun fetchCelebrities(category: Category, doubanId: String): List<DoubanCelebrity> =
+    /**
+     * 演职员/作者（影视条目有 celebrities 端点，图书/游戏从详情 API 构造再搜索富化）。
+     * fallbackNames：本地已保存的作者/开发商名（rexxar 详情拉取失败时兜底，保证卡片仍能显示头像）。
+     */
+    suspend fun fetchCelebrities(
+        category: Category,
+        doubanId: String,
+        fallbackNames: List<String> = emptyList()
+    ): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
             // 影视条目：用 celebrities 端点
             if (category == Category.MOVIE || category == Category.TV) {
@@ -330,49 +396,176 @@ object DoubanClient {
                     }
                 }.getOrDefault(emptyList())
             } else if (category == Category.BOOK) {
-                // 图书：从详情 API 的 author 和 translator 数组构造
-                runCatching {
-                    val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
-                    val o = json.parseToJsonElement(httpGetRexxar(apiUrl, referer)).jsonObject
-                    buildList {
-                        // author 是字符串数组
-                        o["author"]?.jsonArray?.forEachIndexed { idx, el ->
-                            val name = runCatching { el.jsonPrimitive.contentOrNull }.getOrNull() ?: return@forEachIndexed
-                            if (name.isBlank()) return@forEachIndexed
-                            // 图书作者没有 celebrity ID，用 doubanId+idx 作为伪 ID
-                            add(DoubanCelebrity("${doubanId}_a$idx", name, role = "作者"))
+                // 图书：两步走 — 先用详情 API 的 author/translator 数组返回基本卡片（保证一定显示），
+                // 再后台并发搜索真实影人替换为可点击+有头像的版本；详情接口失败时用本地保存的名字兜底。
+                try {
+                    // 优先从 rexxar 详情拿 author/translator 数组；失败时用本地保存的名字兜底
+                    val parsed: Pair<List<String>, List<String>>? = runCatching {
+                        val (apiUrl, referer) = rexxarUrl(category, doubanId)
+                            ?: return@runCatching null
+                        val o = json.parseToJsonElement(httpGetRexxar(apiUrl, referer)).jsonObject
+                        val authors = o["author"]?.jsonArray
+                            ?.mapNotNull { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+                            ?.map { cleanPersonName(it) }
+                            ?.filter { it.isNotBlank() }
+                            .orEmpty()
+                        val trans = o["translators"]?.jsonArray
+                            ?.mapNotNull { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
+                            ?.map { cleanPersonName(it) }
+                            ?.filter { it.isNotBlank() }
+                            .orEmpty()
+                        if (authors.isNotEmpty() || trans.isNotEmpty()) authors to trans else null
+                    }.getOrNull()
+                    val authorNames = parsed?.first ?: fallbackNames.filter { it.isNotBlank() }
+                    val transNames = parsed?.second ?: emptyList()
+                    // Step 1: 先生成基础卡片（保证有内容展示，就算后续匹配都失败也能显示）
+                    val baseList = buildList {
+                        authorNames.forEachIndexed { idx, n ->
+                            add(DoubanCelebrity(id = "${doubanId}_a$idx", name = n, role = "作者"))
                         }
-                        o["translators"]?.jsonArray?.forEachIndexed { idx, el ->
-                            val name = runCatching { el.jsonPrimitive.contentOrNull }.getOrNull() ?: return@forEachIndexed
-                            if (name.isBlank()) return@forEachIndexed
-                            add(DoubanCelebrity("${doubanId}_t$idx", name, role = "译者"))
+                        transNames.forEachIndexed { idx, n ->
+                            add(DoubanCelebrity(id = "${doubanId}_t$idx", name = n, role = "译者"))
                         }
                     }
-                }.getOrDefault(emptyList())
+                    if (baseList.isEmpty()) return@withContext emptyList()
+                    // Step 2: 搜索每个真实影人，搜索成功替换头像和ID，失败保留基础卡片
+                    coroutineScope {
+                        baseList.map { base ->
+                            async { runCatching { enrichBookPersonWithSearch(base) }.getOrDefault(base) }
+                        }.awaitAll()
+                    }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            } else if (category == Category.GAME) {
+                // 游戏：详情 JSON 的 developers 数组 → 基础卡片 → personage 搜索富化（同图书作者逻辑）。
+                // 豆瓣对游戏公司（如卡普空）也有 personage 人物页（带头像），可点击进详情。
+                try {
+                    val devNames: List<String> = runCatching {
+                        val (apiUrl, referer) = rexxarUrl(category, doubanId)
+                            ?: return@runCatching emptyList()
+                        val o = json.parseToJsonElement(httpGetRexxar(apiUrl, referer)).jsonObject
+                        // developers 兼容对象数组 [{"name":"x"}] 和字符串数组 ["x"]
+                        o["developers"]?.jsonArray
+                            ?.mapNotNull { el ->
+                                runCatching { el.jsonObject["name"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                                    ?: runCatching { el.jsonPrimitive.contentOrNull }.getOrNull()
+                            }
+                            ?.map { cleanPersonName(it) }
+                            ?.filter { it.isNotBlank() }
+                            ?.distinct()
+                            .orEmpty()
+                    }.getOrDefault(emptyList()).ifEmpty {
+                        fallbackNames.filter { it.isNotBlank() }
+                    }
+                    if (devNames.isEmpty()) return@withContext emptyList()
+                    val baseList = devNames.mapIndexed { idx, n ->
+                        DoubanCelebrity(id = "${doubanId}_d$idx", name = n, role = "开发商")
+                    }
+                    coroutineScope {
+                        baseList.map { base ->
+                            async { runCatching { enrichBookPersonWithSearch(base) }.getOrDefault(base) }
+                        }.awaitAll()
+                    }
+                } catch (_: Exception) {
+                    emptyList()
+                }
             } else {
                 emptyList()
             }
         }
 
-    /** 剧照（仅影视条目），失败返回空列表 */
+    private val countryChars = "中英美法德日俄韩意西印加澳荷瑞挪丹芬巴阿波捷匈土伊以爱蘭兰港台以加"
+
+    /** 清理作者名前缀，如 "（美）恰克·帕拉尼克" → "恰克·帕拉尼克"；仅去除带括号/空格的国籍前缀，避免误伤名字首字 */
+    private fun cleanPersonName(name: String): String {
+        var s = name.trim()
+        // 带括号/方括号的国籍前缀：（美） [日] (法) 等
+        s = Regex("""^[【\[\(（]\s*[$countryChars]{1,3}\s*[】\]\)）]""").replace(s, "")
+        // 无括号但形如 "美 作者名" / "美·作者名"
+        s = Regex("""^[$countryChars](?=[\s·.])""").replace(s, "")
+        // 去掉结尾的 著/编/译 等
+        s = s.removeSuffix("著").removeSuffix(" 著").trim()
+        return s.trim()
+    }
+
+    /** 归一化人名：统一间隔符、去空格，便于模糊匹配 */
+    private fun normPersonName(s: String): String =
+        s.replace(Regex("[·・・•.．・\\s\\[\\]【】（）()【】]"), "")
+            .replace("　", "")
+            .lowercase()
+
+    /** 尝试搜索影人页面，替换基础卡片的 id/头像/角色（搜索失败原样返回） */
+    private suspend fun enrichBookPersonWithSearch(base: DoubanCelebrity): DoubanCelebrity {
+        if (base.name.isBlank()) return base
+        val results = try {
+            searchCelebrities(base.name)
+        } catch (_: Exception) {
+            return base
+        }
+        val target = normPersonName(base.name)
+        val matched = results.firstOrNull { normPersonName(it.name) == target }
+            ?: results.firstOrNull {
+                val n = normPersonName(it.name)
+                n.isNotBlank() && (n.contains(target) || target.contains(n))
+            }
+        return if (matched != null) {
+            DoubanCelebrity(
+                id = matched.id,
+                name = matched.name.ifBlank { base.name },
+                latinName = matched.latinName,
+                role = "${base.role} · ${matched.role}".trim(' ', '·'),
+                avatarUrl = largeImageUrl(matched.avatarUrl) ?: matched.avatarUrl
+            )
+        } else {
+            base
+        }
+    }
+
+    /** 剧照（影视条目走 Rexxar photos；游戏条目解析网页端截图页），失败返回空列表 */
     suspend fun fetchPhotos(category: Category, doubanId: String): List<DoubanPhoto> =
         withContext(Dispatchers.IO) {
-            if (category != Category.MOVIE && category != Category.TV) return@withContext emptyList()
-            runCatching {
-                val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
-                val o = json.parseToJsonElement(
-                    httpGetRexxar("$apiUrl/photos?start=0&count=30", referer)
-                ).jsonObject
-                o["photos"]?.jsonArray?.mapNotNull { el ->
-                    val p = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
-                    val id = p["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                    val img = p["image"]?.jsonObject
-                    val large = img?.obj("large")?.get("url")?.jsonPrimitive?.contentOrNull
-                    val normal = img?.obj("normal")?.get("url")?.jsonPrimitive?.contentOrNull
-                    DoubanPhoto(id, large ?: normal, normal ?: large)
-                }.orEmpty()
-            }.getOrDefault(emptyList())
+            when (category) {
+                Category.MOVIE, Category.TV -> fetchMoviePhotos(doubanId)
+                Category.GAME -> fetchGamePhotos(doubanId)
+                else -> emptyList()
+            }
         }
+
+    private fun fetchMoviePhotos(doubanId: String): List<DoubanPhoto> = runCatching {
+        val o = json.parseToJsonElement(
+            httpGetRexxar(
+                "https://m.douban.com/rexxar/api/v2/movie/$doubanId/photos?start=0&count=30",
+                "https://m.douban.com/movie/subject/$doubanId/"
+            )
+        ).jsonObject
+        o["photos"]?.jsonArray?.mapNotNull { el ->
+            val p = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+            val id = p["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val img = p["image"]?.jsonObject
+            val large = img?.obj("large")?.get("url")?.jsonPrimitive?.contentOrNull
+            val normal = img?.obj("normal")?.get("url")?.jsonPrimitive?.contentOrNull
+            DoubanPhoto(id, large ?: normal, normal ?: large)
+        }.orEmpty()
+    }.getOrDefault(emptyList())
+
+    /** 游戏截图：解析 www.douban.com/game/{id}/photos 页（缩略 albumicon → 展示 sqxs / 大图 raw） */
+    private fun fetchGamePhotos(doubanId: String): List<DoubanPhoto> = runCatching {
+        val url = "https://www.douban.com/game/$doubanId/photos"
+        val html = httpGetMobile(url, "https://www.douban.com/game/$doubanId/")
+        val ids = Regex("""view/photo/(?:albumicon|thumb)/public/(p\d+)\.(?:jpg|png|webp)""")
+            .findAll(html)
+            .map { it.groupValues[1] }
+            .distinct()
+            .toList()
+        ids.map { pid ->
+            DoubanPhoto(
+                id = pid,
+                largeUrl = "https://img9.doubanio.com/view/photo/raw/public/$pid.jpg",
+                normalUrl = "https://img1.doubanio.com/view/photo/sqxs/public/$pid.jpg"
+            )
+        }
+    }.getOrDefault(emptyList())
 
     /** 网友短评（热门在前，取有文字的） */
     suspend fun fetchInterests(category: Category, doubanId: String): List<DoubanInterest> =
@@ -402,11 +595,37 @@ object DoubanClient {
 
     // ---------------- 影人详情 ----------------
 
-    /** 影人详情：rexxar/api/v2/celebrity/{id} + works */
+    /** personage ID → 旧版 celebrity ID 的映射缓存（搜索结果为 personage ID） */
+    private val celebrityIdCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * 影人 ID 归一化：personage ID 自动解析为 celebrity ID。
+     * 解析端点 rexxar/api/v2/personage/{id} 返回 celebrity_id 字段。
+     */
+    private suspend fun resolveCelebrityId(id: String): String = withContext(Dispatchers.IO) {
+        celebrityIdCache[id] ?: run {
+            val mapped = runCatching {
+                val o = json.parseToJsonElement(
+                    httpGetRexxar(
+                        "https://m.douban.com/rexxar/api/v2/personage/$id",
+                        "https://m.douban.com/personage/$id/"
+                    )
+                ).jsonObject
+                o["celebrity_id"]?.jsonPrimitive?.contentOrNull
+            }.getOrNull()
+            if (mapped.isNullOrBlank()) id else {
+                celebrityIdCache[id] = mapped
+                mapped
+            }
+        }
+    }
+
+    /** 影人详情：rexxar/api/v2/celebrity/{id} + works（personage ID 自动映射） */
     suspend fun fetchCelebrityDetail(celebrityId: String): DoubanCelebrityDetail =
         withContext(Dispatchers.IO) {
-            val baseUrl = "https://m.douban.com/rexxar/api/v2/celebrity/$celebrityId"
-            val referer = "https://m.douban.com/celebrity/$celebrityId/"
+            val cid = resolveCelebrityId(celebrityId)
+            val baseUrl = "https://m.douban.com/rexxar/api/v2/celebrity/$cid"
+            val referer = "https://m.douban.com/celebrity/$cid/"
             val base = runCatching {
                 val o = json.parseToJsonElement(httpGetRexxar(baseUrl, referer)).jsonObject
                 val extra = o["extra"]?.jsonObject
@@ -426,12 +645,12 @@ object DoubanClient {
                     shortInfo = extra?.get("short_info")?.jsonPrimitive?.contentOrNull.orEmpty(),
                     infoPairs = infoPairs,
                     url = o["url"]?.jsonPrimitive?.contentOrNull
-                        ?: "https://movie.douban.com/celebrity/$celebrityId/"
+                        ?: "https://movie.douban.com/celebrity/$cid/"
                 )
             }.getOrElse {
                 DoubanCelebrityDetail(
                     name = "影人",
-                    url = "https://movie.douban.com/celebrity/$celebrityId/"
+                    url = "https://movie.douban.com/celebrity/$cid/"
                 )
             }
             // 追加相关作品（默认按评分排序取前 10 条）
@@ -446,7 +665,7 @@ object DoubanClient {
         start: Int = 0,
         count: Int = 20
     ): List<CelebrityWork> = withContext(Dispatchers.IO) {
-        doFetchCelebrityWorks(celebrityId, sortBy, start, count)
+        doFetchCelebrityWorks(resolveCelebrityId(celebrityId), sortBy, start, count)
     }
 
     private fun doFetchCelebrityWorks(
@@ -466,17 +685,90 @@ object DoubanClient {
                 ?.joinToString(", ").orEmpty()
             val w = runCatching { it["work"]?.jsonObject }.getOrNull() ?: return@mapNotNull null
             val id = w["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val type = w["type"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            // 影人作品里的电影/电视剧条目 id 直接对应，图书等跳到详情统一处理
             CelebrityWork(
                 id = id,
                 title = w["title"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 year = w["year"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                type = w["type"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                type = type,
                 roles = roles,
                 rating = w["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull,
                 coverUrl = w["cover_url"]?.jsonPrimitive?.contentOrNull
             )
         }.orEmpty()
     }.getOrDefault(emptyList())
+
+    /**
+     * 图书作者的图书作品：豆瓣影人 works 接口只含影视（不含书），
+     * 改用图书搜索按作者名检索（实测"恰克·帕拉尼克"能返回其全部著作）。
+     */
+    suspend fun fetchAuthorBooks(authorName: String): List<CelebrityWork> =
+        withContext(Dispatchers.IO) {
+            if (authorName.isBlank()) return@withContext emptyList()
+            runCatching {
+                searchSubjectPage(Category.BOOK, authorName).map { r ->
+                    CelebrityWork(
+                        id = r.doubanId,
+                        title = r.title,
+                        year = r.year,
+                        type = "book",
+                        roles = "作者",
+                        rating = r.rating,
+                        coverUrl = r.coverUrl
+                    )
+                }
+            }.getOrDefault(emptyList())
+        }
+
+    /**
+     * 游戏开发者（人名/公司名）的游戏作品：豆瓣没有"按作者查游戏"的独立接口，
+     * 走 www.douban.com/search?cat=3114 关键词搜索做兜底，结果为标题匹配的相关游戏。
+     * 部分公司名作开发者（如卡普空、任天堂、小岛秀夫）能返回其开发的系列作品。
+     */
+    suspend fun fetchDeveloperGames(devName: String): List<CelebrityWork> =
+        withContext(Dispatchers.IO) {
+            if (devName.isBlank()) return@withContext emptyList()
+            runCatching {
+                searchGameWeb(devName).map { r ->
+                    CelebrityWork(
+                        id = r.doubanId,
+                        title = r.title,
+                        year = r.year,
+                        type = "game",
+                        roles = "开发商",
+                        rating = r.rating,
+                        coverUrl = r.coverUrl
+                    )
+                }
+            }.getOrDefault(emptyList())
+        }
+
+    /** 影人相关照片：rexxar celebrity/{id}/photos（personage ID 自动映射，仅返回有图的结果） */
+    suspend fun fetchCelebrityPhotos(celebrityId: String): List<DoubanPhoto> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val cid = resolveCelebrityId(celebrityId)
+                val o = json.parseToJsonElement(
+                    httpGetRexxar(
+                        "https://m.douban.com/rexxar/api/v2/celebrity/$cid/photos?start=0&count=30",
+                        "https://m.douban.com/celebrity/$cid/"
+                    )
+                ).jsonObject
+                o["photos"]?.jsonArray?.mapNotNull { el ->
+                    val p = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                    val img = p["image"]?.jsonObject ?: return@mapNotNull null
+                    val large = img.obj("large")?.get("url")?.jsonPrimitive?.contentOrNull
+                    val normal = img.obj("normal")?.get("url")?.jsonPrimitive?.contentOrNull
+                    val url = large ?: normal ?: return@mapNotNull null
+                    DoubanPhoto(
+                        id = p["id"]?.jsonPrimitive?.contentOrNull ?: url,
+                        largeUrl = large,
+                        normalUrl = normal ?: large
+                    )
+                }.orEmpty()
+            }.getOrDefault(emptyList())
+        }
 
     // ---------------- 旧版页面解析兜底 ----------------
 
