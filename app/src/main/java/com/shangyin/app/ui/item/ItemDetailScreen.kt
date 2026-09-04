@@ -234,67 +234,67 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             nav.safeNavigate("celebrity/${c.id}/$fromCat/$encName/$encAvatar")
         }
 
-        // ---------- 全部演职员（网格，自身滚动；严禁外套 verticalScroll） ----------
-        if (showAllCelebrities) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier
-                    .padding(pad)
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                item(span = { GridItemSpan(3) }) {
-                    Text("$celebTitle(${celebrities.size})", style = MaterialTheme.typography.titleMedium)
-                }
-                gridItems(celebrities, key = { "ac${it.id}" }) { c ->
-                    CelebrityGridCard(c) { openCelebrity(c) }
-                }
-            }
-            return@Scaffold
-        }
-
-        // ---------- 全部剧照 / 游戏截图（网格，自身滚动） ----------
-        if (showAllPhotos) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                modifier = Modifier
-                    .padding(pad)
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                item(span = { GridItemSpan(3) }) {
-                    Text(
-                        "全部$photoTitle(${photoUrls.size})",
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                }
-                gridItemsIndexed(photoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
-                    CoverImage(
-                        url = url,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(4f / 3f)
-                            .clickable { openViewer(photoUrls, idx) }
-                    )
+        // 用 when 分支切换覆盖页与主内容（避免 return@Scaffold 导致重组不生效）
+        when {
+            // ---------- 全部演职员（网格，自身滚动） ----------
+            showAllCelebrities -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier
+                        .padding(pad)
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    item(span = { GridItemSpan(3) }) {
+                        Text("$celebTitle(${celebrities.size})", style = MaterialTheme.typography.titleMedium)
+                    }
+                    gridItems(celebrities, key = { "ac${it.id}" }) { c ->
+                        CelebrityGridCard(c) { openCelebrity(c) }
+                    }
                 }
             }
-            return@Scaffold
-        }
-
-        Column(
-            Modifier
-                .padding(pad)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+            // ---------- 全部剧照 / 游戏截图（网格，自身滚动） ----------
+            showAllPhotos -> {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier
+                        .padding(pad)
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    item(span = { GridItemSpan(3) }) {
+                        Text(
+                            "全部$photoTitle(${photoUrls.size})",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                    gridItemsIndexed(photoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
+                        CoverImage(
+                            url = url,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(4f / 3f)
+                                .clickable { openViewer(photoUrls, idx) }
+                        )
+                    }
+                }
+            }
+            // ---------- 主内容 ----------
+            else -> {
+                Column(
+                    Modifier
+                        .padding(pad)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
             // 头部：封面（点击查看大图） + 基本信息
             Row {
                 Box(
@@ -456,7 +456,9 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     }
                 }
             }
-        }
+                }
+            } // end else
+            } // end when
 
         // 全屏图片浏览器：剧照/截图可左右大幅度滑动翻页，双指缩放、双击放大、单击关闭
         if (viewerUrls.isNotEmpty()) {

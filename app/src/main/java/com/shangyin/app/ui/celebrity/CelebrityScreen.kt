@@ -249,8 +249,10 @@ fun CelebrityScreen(
         }
     ) { pad ->
         val d = detail
-        // ---------- 全部照片页面（LazyVerticalGrid 自身滚动，严禁外套 verticalScroll，否则无限高约束崩溃） ----------
-        if (showAllPhotos) {
+        // 用 when 分支切换覆盖页与主内容（避免 return@Scaffold 导致重组不生效）
+        when {
+        // ---------- 全部照片页面 ----------
+        showAllPhotos -> {
             LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 modifier = Modifier
@@ -287,11 +289,9 @@ fun CelebrityScreen(
                     }
                 }
             }
-            return@Scaffold
         }
-
         // ---------- 全部作品列表页 ----------
-        if (showAllWorks) {
+        showAllWorks -> {
             Column(
                 Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)
             ) {
@@ -335,17 +335,17 @@ fun CelebrityScreen(
                     )
                 }
             }
-            return@Scaffold
         }
-
-        Column(
-            Modifier
-                .padding(pad)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
+        // ---------- 主内容 ----------
+        else -> {
+            Column(
+                Modifier
+                    .padding(pad)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
             // 头部：头像（可点击放大） + 名字 + 职业/代表作
             Row {
                 CoverImage(
@@ -462,9 +462,10 @@ fun CelebrityScreen(
                     }
                 }
             }
-
-        }
-    }
+        } // end else (主内容)
+        } // end when
+    } // end Scaffold content lambda
+    } // end Scaffold
 
     // 全屏图片浏览器：头像+相关照片同一画廊，左右大幅度滑动翻页、双指缩放/双击放大、单击关闭
     val viewer = viewerIndex
