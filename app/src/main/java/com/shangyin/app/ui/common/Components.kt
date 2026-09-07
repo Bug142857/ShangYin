@@ -61,7 +61,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-/** 封面图，加载失败/为空时显示占位；长按弹确认对话框下载到相册 */
+/** 封面图，加载失败/为空时显示占位；长按弹确认框下载到相册；点击透传 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverImage(
@@ -75,24 +75,7 @@ fun CoverImage(
     /** 自定义长按回调，默认弹下载确认框 */
     onLongPress: ((String) -> Unit)? = null
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var showDownloadDialog by remember { mutableStateOf(false) }
-    var downloadUrl by remember { mutableStateOf<String?>(null) }
-
-    val needRuntimePermission = android.os.Build.VERSION.SDK_INT in 26..28
-    val permissionLauncher = if (needRuntimePermission) {
-        androidx.activity.compose.rememberLauncherForActivityResult(
-            contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-        ) { granted ->
-            val u = downloadUrl
-            if (granted && u != null) {
-                scope.launch { performDownload(context, u) }
-            } else {
-                Toast.makeText(context, "存储权限被拒绝，无法保存图片", Toast.LENGTH_LONG).show()
-            }
-        }
-    } else null
+    val saveRequester = rememberImageSaveRequester()
 
     // 统一手势处理：combinedClickable 同时处理点击和长按
     val finalModifier = if (downloadable && !url.isNullOrBlank()) {
@@ -102,15 +85,7 @@ fun CoverImage(
             .combinedClickable(
                 onClick = { onClick?.invoke() },
                 onLongClick = {
-                    val imgUrl = url
-                    if (!imgUrl.isNullOrBlank()) {
-                        if (onLongPress != null) {
-                            onLongPress(imgUrl)
-                        } else {
-                            downloadUrl = imgUrl
-                            showDownloadDialog = true
-                        }
-                    }
+                    if (onLongPress != null) onLongPress(url) else saveRequester(url)
                 }
             )
     } else if (onClick != null) {
@@ -146,40 +121,60 @@ fun CoverImage(
             modifier = finalModifier
         )
     }
+}
 
-    // 下载确认对话框
-    if (showDownloadDialog && downloadUrl != null) {
+/**
+ * 图片保存请求器：返回一个 (url) -> Unit 函数，调用后弹"保存图片"确认框，
+ * 确认才下载（API 26-28 先申请存储权限）。CoverImage 和大图浏览器共用，行为一致。
+ */
+@Composable
+fun rememberImageSaveRequester(): (String) -> Unit {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var downloadUrl by remember { mutableStateOf<String?>(null) }
+
+    val needRuntimePermission = android.os.Build.VERSION.SDK_INT in 26..28
+    val permissionLauncher = if (needRuntimePermission) {
+        androidx.activity.compose.rememberLauncherForActivityResult(
+            contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            val u = downloadUrl
+            if (granted && u != null) {
+                scope.launch { performDownload(context, u) }
+            } else if (!granted) {
+                Toast.makeText(context, "存储权限被拒绝，无法保存图片", Toast.LENGTH_LONG).show()
+            }
+        }
+    } else null
+
+    fun start(url: String) {
+        if (needRuntimePermission) {
+            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (granted) scope.launch { performDownload(context, url) }
+            else permissionLauncher?.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        } else {
+            scope.launch { performDownload(context, url) }
+        }
+    }
+
+    // 保存确认对话框
+    downloadUrl?.let { pendingUrl ->
         AlertDialog(
-            onDismissRequest = { showDownloadDialog = false; downloadUrl = null },
+            onDismissRequest = { downloadUrl = null },
             title = { Text("保存图片") },
             text = { Text("是否将这张图片保存到相册？") },
             confirmButton = {
-                TextButton(onClick = {
-                    val u = downloadUrl
-                    showDownloadDialog = false
-                    if (u != null) {
-                        if (needRuntimePermission) {
-                            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-                                context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
-                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                            if (granted) {
-                                scope.launch { performDownload(context, u) }
-                            } else {
-                                permissionLauncher?.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                            }
-                        } else {
-                            scope.launch { performDownload(context, u) }
-                        }
-                    }
-                }) { Text("保存") }
+                TextButton(onClick = { downloadUrl = null; start(pendingUrl) }) { Text("保存") }
             },
             dismissButton = {
-                TextButton(onClick = { showDownloadDialog = false; downloadUrl = null }) {
-                    Text("取消")
-                }
+                TextButton(onClick = { downloadUrl = null }) { Text("取消") }
             }
         )
     }
+
+    return { url -> downloadUrl = url }
 }
 
 /** 执行下载 + toast 反馈 */
@@ -271,11 +266,16 @@ fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -
                 .fillMaxSize()
                 .background(Color.Black)
         ) {
+            val saveRequester = rememberImageSaveRequester()
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize()
             ) { pageIdx ->
-                ZoomableImage(urls[pageIdx], onClose = onDismiss)
+                ZoomableImage(
+                    urls[pageIdx],
+                    onClose = onDismiss,
+                    onLongPress = { imgUrl -> saveRequester(imgUrl) }
+                )
             }
             // 右上角 X 关闭按钮
             IconButton(
@@ -314,7 +314,7 @@ fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -
  * - 双击：在 1x 和 2.5x 之间切换（单击延迟 280ms 关闭，给双击留窗口）
  */
 @Composable
-fun ZoomableImage(url: String?, onClose: () -> Unit) {
+fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> Unit)? = null) {
     val scope = rememberCoroutineScope()
     var scale by remember(url) { mutableFloatStateOf(1f) }
     var offsetX by remember(url) { mutableFloatStateOf(0f) }
@@ -396,6 +396,10 @@ fun ZoomableImage(url: String?, onClose: () -> Unit) {
 
                         val total = System.currentTimeMillis() - downMillis
                         val moved = abs(totalPanDx) > 3f || abs(totalPanDy) > 3f || trackZoom
+                        // 长按：按住不动超过 450ms 后松手 → 触发保存回调
+                        if (!moved && total >= 450 && onLongPress != null && url != null) {
+                            onLongPress(url)
+                        }
                         if (!moved && total < 300) {
                             if (closeJob?.isActive == true) {
                                 // 双击：缩放切换

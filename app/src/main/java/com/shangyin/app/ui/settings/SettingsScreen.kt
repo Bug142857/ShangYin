@@ -613,6 +613,10 @@ private fun ListManagerDialog(
     val scope = rememberCoroutineScope()
     val lists by Repo.observeListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
 
+    // 父子层级：根清单 + 各自的子清单
+    val rootLists = lists.filter { it.list.parentId == null }
+    val subByParent = lists.filter { it.list.parentId != null }.groupBy { it.list.parentId }
+
     var showCreate by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<ItemListEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<com.shangyin.app.data.db.ListWithMeta?>(null) }
@@ -630,28 +634,37 @@ private fun ListManagerDialog(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        lists.forEach { meta ->
-                            Card(shape = RoundedCornerShape(8.dp)) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(meta.list.name, modifier = Modifier.weight(1f))
-                                    Text(
-                                        "${meta.itemCount}件",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    IconButton(onClick = { renameTarget = meta.list }) {
-                                        Icon(Icons.Rounded.Edit, contentDescription = null)
-                                    }
-                                    IconButton(onClick = { deleteTarget = meta }) {
-                                        Icon(Icons.Rounded.Delete, contentDescription = null)
-                                    }
-                                }
+                        rootLists.forEach { meta ->
+                            // 父级（根）清单
+                            ListManagerRow(
+                                name = meta.list.name,
+                                count = meta.itemCount,
+                                onRename = { renameTarget = meta.list },
+                                onDelete = { deleteTarget = meta }
+                            )
+                            // 子清单：缩进 + └ 前缀，一眼看出层级
+                            subByParent[meta.list.id].orEmpty().forEach { sub ->
+                                ListManagerRow(
+                                    name = "└ ${sub.list.name}",
+                                    count = sub.itemCount,
+                                    indented = true,
+                                    onRename = { renameTarget = sub.list },
+                                    onDelete = { deleteTarget = sub }
+                                )
                             }
                         }
+                        // 孤立子清单（父级已删等异常情况）也显示出来
+                        val knownParents = rootLists.map { it.list.id }.toSet()
+                        lists.filter { it.list.parentId != null && it.list.parentId !in knownParents }
+                            .forEach { sub ->
+                                ListManagerRow(
+                                    name = "└ ${sub.list.name}",
+                                    count = sub.itemCount,
+                                    indented = true,
+                                    onRename = { renameTarget = sub.list },
+                                    onDelete = { deleteTarget = sub }
+                                )
+                            }
                     }
                 }
             }
@@ -691,22 +704,32 @@ private fun ListManagerDialog(
     }
 
     deleteTarget?.let { meta ->
+        val childCount = lists.count { it.list.parentId == meta.list.id }
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("删除分类") },
             text = {
                 Text(
-                    "确定删除分类「${meta.list.name}」吗？\n" +
-                        "⚠️ 该分类下的 ${meta.itemCount} 件条目也会被一并删除！"
+                    buildString {
+                        append("确定删除分类「${meta.list.name}」吗？\n")
+                        if (childCount > 0) append("⚠️ 其下 $childCount 个子清单也会一并删除！\n")
+                        append("⚠️ 该分类下的 ${meta.itemCount} 件条目也会被一并删除！")
+                    }
                 )
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            val items = Repo.getAllItemsIn(meta.list.id)
-                            items.forEach { Repo.deleteItem(it) }
-                            Repo.deleteList(meta.list)
+                            // 级联：先删子清单（含子清单里的条目），再删自身
+                            val toDelete = ArrayDeque<com.shangyin.app.data.db.ListWithMeta>()
+                            toDelete.addLast(meta)
+                            while (toDelete.isNotEmpty()) {
+                                val cur = toDelete.removeFirst()
+                                lists.filter { it.list.parentId == cur.list.id }.forEach { toDelete.addLast(it) }
+                                Repo.getAllItemsIn(cur.list.id).forEach { Repo.deleteItem(it) }
+                                Repo.deleteList(cur.list)
+                            }
                             deleteTarget = null
                         }
                     }
@@ -714,5 +737,44 @@ private fun ListManagerDialog(
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
         )
+    }
+}
+
+/** 分类管理里的一行：父清单正常显示，子清单缩进并弱化样式 */
+@Composable
+private fun ListManagerRow(
+    name: String,
+    count: Int,
+    indented: Boolean = false,
+    onRename: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(shape = RoundedCornerShape(8.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (indented) Modifier.padding(start = 28.dp) else Modifier)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                name,
+                modifier = Modifier.weight(1f),
+                style = if (indented) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
+                color = if (indented) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                "${count}件",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+            Spacer(Modifier.width(8.dp))
+            IconButton(onClick = onRename) {
+                Icon(Icons.Rounded.Edit, contentDescription = "重命名")
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Rounded.Delete, contentDescription = "删除")
+            }
+        }
     }
 }

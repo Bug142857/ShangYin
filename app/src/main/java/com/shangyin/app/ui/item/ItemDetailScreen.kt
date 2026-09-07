@@ -147,33 +147,41 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 ?: return@LaunchedEffect
             // 清空空结果缓存，解决"查不到再查也没有"
             DetailCache.clearEmptyKeys()
+            // 每个请求独立兜底：任一失败不取消其他请求（否则游戏截图/预告片失败会连带短评不显示）
             coroutineScope {
                 launch {
                     celebrities = DetailCache.celebrities[cacheKey] ?: run {
-                        // 本地作者/开发商名兜底：详情接口失败时仍能搜索并显示带头像的可点击卡片
                         val fallback = entity.directors.split("/").map { it.trim() }.filter { it.isNotBlank() }
-                        val v = com.shangyin.app.data.douban.DoubanClient.fetchCelebrities(cat, entity.doubanId, fallback)
+                        val v = runCatching {
+                            com.shangyin.app.data.douban.DoubanClient.fetchCelebrities(cat, entity.doubanId, fallback)
+                        }.getOrDefault(emptyList())
                         if (v.isNotEmpty()) DetailCache.celebrities[cacheKey] = v
                         v
                     }
                 }
                 launch {
                     videos = DetailCache.videos[cacheKey] ?: run {
-                        val v = com.shangyin.app.data.douban.DoubanClient.fetchTrailers(cat, entity.doubanId)
+                        val v = runCatching {
+                            com.shangyin.app.data.douban.DoubanClient.fetchTrailers(cat, entity.doubanId)
+                        }.getOrDefault(emptyList())
                         if (v.isNotEmpty()) DetailCache.videos[cacheKey] = v
                         v
                     }
                 }
                 launch {
                     photos = DetailCache.photos[cacheKey] ?: run {
-                        val v = com.shangyin.app.data.douban.DoubanClient.fetchPhotos(cat, entity.doubanId)
+                        val v = runCatching {
+                            com.shangyin.app.data.douban.DoubanClient.fetchPhotos(cat, entity.doubanId)
+                        }.getOrDefault(emptyList())
                         if (v.isNotEmpty()) DetailCache.photos[cacheKey] = v
                         v
                     }
                 }
                 launch {
                     interests = DetailCache.interests[cacheKey] ?: run {
-                        val v = com.shangyin.app.data.douban.DoubanClient.fetchInterests(cat, entity.doubanId)
+                        val v = runCatching {
+                            com.shangyin.app.data.douban.DoubanClient.fetchInterests(cat, entity.doubanId)
+                        }.getOrDefault(emptyList())
                         if (v.isNotEmpty()) DetailCache.interests[cacheKey] = v
                         v
                     }
@@ -181,22 +189,34 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
         }
 
-        // 关键字段缺失时（快速保存/老数据），后台抓详情补全落库
+        // 关键字段缺失或信息过旧时（老数据只有年份没有月日），后台抓详情补全落库
         LaunchedEffect(entity.id) {
-            if (entity.summary.isBlank() || entity.info.isBlank() ||
-                (entity.directors.isBlank() && entity.casts.isBlank())
-            ) {
-                val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
-                if (cat != null) {
+            val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
+            if (cat != null) {
+                val monthDayRe = Regex("""\d{4}[-/年.]\d{1,2}""")
+                // 影视/游戏看 info 行，图书看头部 subTitle（图书不显示基本信息块）
+                val dateLine = if (cat == com.shangyin.app.data.Category.BOOK) entity.subTitle else entity.info
+                val needRefresh = entity.summary.isBlank() || entity.info.isBlank() ||
+                    (entity.directors.isBlank() && entity.casts.isBlank()) ||
+                    (dateLine.isNotBlank() && !monthDayRe.containsMatchIn(dateLine))
+                if (needRefresh) {
                     runCatching {
                         val detail = com.shangyin.app.data.douban.DoubanClient.fetchDetail(cat, entity.doubanId)
                         if (!detail.isEmpty) {
+                            val freshInfo = detail.info?.takeIf { it.isNotBlank() }
                             Repo.updateItem(entity.copy(
                                 title = detail.title ?: entity.title,
                                 doubanRating = detail.rating ?: entity.doubanRating,
                                 coverUrl = entity.coverUrl ?: detail.coverUrl,
                                 summary = entity.summary.ifBlank { detail.summary.orEmpty() },
-                                info = entity.info.ifBlank { detail.info.orEmpty() },
+                                // 影视/游戏：info 行直接替换为含完整日期的新内容；
+                                // 图书：头部 subTitle 替换（基本信息块不显示）
+                                info = if (cat == com.shangyin.app.data.Category.BOOK)
+                                    entity.info.ifBlank { freshInfo.orEmpty() }
+                                else freshInfo ?: entity.info,
+                                subTitle = if (cat == com.shangyin.app.data.Category.BOOK)
+                                    freshInfo ?: entity.subTitle
+                                else entity.subTitle,
                                 directors = entity.directors.ifBlank { detail.directors.orEmpty() },
                                 casts = entity.casts.ifBlank { detail.casts.orEmpty() },
                                 genres = entity.genres.ifBlank { detail.genres.orEmpty() }
@@ -335,8 +355,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             // 评价（点击编辑）
             ReviewSection(entity)
 
-            // 基本信息（制片国家/上映时间/片长等）
-            entity.info.takeIf { it.isNotBlank() }?.let { info ->
+            // 基本信息（制片国家/上映时间/片长等）；图书头部已显示作者等信息，不再重复
+            entity.info.takeIf { it.isNotBlank() && !isBook }?.let { info ->
                 Column {
                     Text("基本信息", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(6.dp))
@@ -383,14 +403,14 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                         }
                     }
                 }
-            } else if ((isGame && entity.casts.isNotBlank()) || (!isGame && (entity.directors.isNotBlank() || entity.casts.isNotBlank()))) {
+            } else if (!isGame && (entity.directors.isNotBlank() || entity.casts.isNotBlank())) {
                 Column {
                     Text(
-                        if (isBook) "作者/译者" else if (isGame) "平台" else "导演演员",
+                        if (isBook) "作者/译者" else "导演演员",
                         style = MaterialTheme.typography.titleSmall
                     )
                     Spacer(Modifier.height(6.dp))
-                    if (!isGame && entity.directors.isNotBlank()) {
+                    if (entity.directors.isNotBlank()) {
                         Text(
                             if (isBook) "作者: ${entity.directors}" else "导演: ${entity.directors}",
                             style = MaterialTheme.typography.bodyMedium,
@@ -399,7 +419,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     }
                     if (entity.casts.isNotBlank()) {
                         Text(
-                            if (isBook) "译者: ${entity.casts}" else if (isGame) "平台: ${entity.casts}" else "主演: ${entity.casts}",
+                            if (isBook) "译者: ${entity.casts}" else "主演: ${entity.casts}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -75,7 +75,7 @@ interface ListDao {
     suspend fun getByIdOnce(id: Long): ItemListEntity?
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.createdAt, COUNT(li.itemId) AS itemCount " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, COUNT(li.itemId) AS itemCount " +
             "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
             "WHERE l.parentId IS NULL " +
             "GROUP BY l.id ORDER BY l.createdAt DESC"
@@ -83,7 +83,7 @@ interface ListDao {
     fun observeRootListsWithMeta(): Flow<List<ListWithMeta>>
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.createdAt, COUNT(li.itemId) AS itemCount " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, COUNT(li.itemId) AS itemCount " +
             "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
             "WHERE l.parentId = :parentId " +
             "GROUP BY l.id ORDER BY l.createdAt ASC"
@@ -92,7 +92,7 @@ interface ListDao {
 
     /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.createdAt, COUNT(li.itemId) AS itemCount " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, COUNT(li.itemId) AS itemCount " +
             "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
             "GROUP BY l.id ORDER BY l.createdAt DESC"
     )

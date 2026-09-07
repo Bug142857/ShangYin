@@ -292,37 +292,10 @@ object DoubanClient {
         val intro = o["intro"]?.jsonPrimitive?.contentOrNull
         val baseInfo = o["card_subtitle"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
-        // 解析上映/出版/发行日期（影视图书用 pubdate，游戏用 release_date/date）
-        val pubdate: String? = o["pubdate"]?.let { p ->
-            runCatching { p.jsonArray }.getOrNull()
-                ?.mapNotNull { el -> el.jsonPrimitive?.contentOrNull }
-                ?.joinToString("/")
-                ?.takeIf { it.isNotBlank() }
-                ?: runCatching { p.jsonPrimitive?.contentOrNull }.getOrNull()
-        } ?: o["release_date"]?.jsonPrimitive?.contentOrNull
-          ?: o["date"]?.jsonPrimitive?.contentOrNull
-          ?: o["publish_date"]?.jsonPrimitive?.contentOrNull
-
-        // 去重检查：提取年月数字模式对比，避免格式不同导致重复
-        val pubYearMonth = pubdate?.let {
-            val m = Regex("""(\d{4})[-/年](\d{1,2})""").find(it)
-            if (m != null) "${m.groupValues[1]}${m.groupValues[2]}" else it.take(4)
-        }
-        val baseYearMonth = baseInfo?.let {
-            val m = Regex("""(\d{4})[-/年](\d{1,2})""").find(it)
-            if (m != null) "${m.groupValues[1]}${m.groupValues[2]}" else null
-        }
-        val isDateDuplicate = pubYearMonth != null && baseYearMonth != null && pubYearMonth == baseYearMonth
-
-        // 如果 info 里没包含日期，追加到 info
-        val info = if (pubdate != null && !isDateDuplicate && (baseInfo == null || !baseInfo.contains(pubdate))) {
-            val label = when (category) {
-                Category.GAME -> "发行日期: $pubdate"
-                Category.BOOK -> "出版日期: $pubdate"
-                else -> "上映日期: $pubdate"
-            }
-            listOfNotNull(baseInfo, label).joinToString(" / ")
-        } else baseInfo
+        // 统一提取最完整的日期（pubdate / release_date 可能是数组或字符串）
+        val pubdate: String? = extractFullDate(o)
+        // 把日期替换进 card_subtitle：去掉年份/日期片段，完整日期放在最前，不加任何标签
+        val info = mergeDateIntoInfo(baseInfo, pubdate)
 
         // [{"name":"xxx"}] 或 ["xxx"] 数组 → "xxx/yyy"
         fun names(key: String, limit: Int = 8): String? =
@@ -358,6 +331,55 @@ object DoubanClient {
             genres = genres,
             videos = videos
         )
+    }
+
+    /**
+     * 从详情 JSON 提取最完整的日期字符串。
+     * 电影 pubdate 是数组（["2003-11-21(韩国)"]），游戏 release_date 是字符串（"2019-11-08"），
+     * 电影 release_date 也可能是数组。优先取不带"电影节"标注的正式上映日期。
+     */
+    private fun extractFullDate(o: JsonObject): String? {
+        val candidates = mutableListOf<String>()
+        fun collect(key: String) {
+            val el = o[key] ?: return
+            runCatching {
+                el.jsonArray.mapNotNull { it.jsonPrimitive?.contentOrNull?.takeIf { s -> s.isNotBlank() } }
+            }.getOrNull()?.let { candidates.addAll(it) }
+                ?: runCatching { el.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } }
+                    .getOrNull()?.let { candidates.add(it) }
+        }
+        // release_date 对游戏是主字段；pubdate 对影视/图书是主字段
+        collect("release_date")
+        collect("pubdate")
+        collect("date")
+        collect("publish_date")
+        if (candidates.isEmpty()) return null
+        // 优先正式上映（不带"电影节"标注），其次取第一条；保留最前面的年月日
+        return candidates.firstOrNull { !it.contains("电影节") } ?: candidates.first()
+    }
+
+    /**
+     * 把完整日期并入 card_subtitle：
+     * 去掉其中的纯年份段/日期段，完整日期放在最前，各段用 " / " 连接，不加任何标签文字。
+     * 例："2016 / 韩国 / 剧情..." + "2016-05-14(戛纳电影节)" → "2016-05-14(戛纳电影节) / 韩国 / 剧情..."
+     */
+    private fun mergeDateIntoInfo(baseInfo: String?, fullDate: String?): String? {
+        if (baseInfo.isNullOrBlank()) return fullDate
+        if (fullDate.isNullOrBlank()) return baseInfo
+        val datePart = fullDate.substringBefore("(").substringBefore("（").trim()
+        val segments = baseInfo.split("/").map { it.trim() }.filter { it.isNotBlank() }.toMutableList()
+        // 移除：纯年份段（如 2016）、完整日期段、已含目标日期的段
+        val yearOnly = Regex("""^\d{4}$""")
+        val fullDateRe = Regex("""^\d{4}[-/年.]\d{1,2}(?:[-/月.]\d{1,2})?日?(?:[（(].*)?$""")
+        val removed = segments.removeAll { seg ->
+            yearOnly.matches(seg) || fullDateRe.matches(seg) ||
+                (datePart.length >= 7 && seg.contains(datePart.take(7)))
+        }
+        // 没有可替换的年份段且原文已包含该日期 → 不重复添加；前缀用去掉"(电影节/地区)"后缀的干净日期
+        val alreadyHas = baseInfo.contains(datePart.take(7))
+        val finalSegs = if (removed || !alreadyHas) listOf(datePart) + segments else segments
+        // 去重
+        return finalSegs.distinct().joinToString(" / ")
     }
 
     /** 详情 JSON 的 trailers 数组 → 预告片列表（含 mp4 直链/封面/时长） */
@@ -600,31 +622,39 @@ object DoubanClient {
         }
     }.getOrDefault(emptyList())
 
-    /** 网友短评（热门在前，取有文字的） */
+    /** 网友短评（热门在前，取有文字的）；多端点兜底，游戏/影视都能拿到 */
     suspend fun fetchInterests(category: Category, doubanId: String): List<DoubanInterest> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
-                // 影视图书用 status=done（看过），游戏不传 status 取全部（有些游戏 collect/do 都不行）
-                val statusParam = if (category == Category.GAME) "" else "&status=done"
-                val o = json.parseToJsonElement(
-                    httpGetRexxar("$apiUrl/interests?start=0&count=12$statusParam", referer)
-                ).jsonObject
-                o["interests"]?.jsonArray?.mapNotNull { el ->
-                    val i = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
-                    val comment = i["comment"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                    if (comment.isBlank()) return@mapNotNull null
-                    val u = i["user"]?.jsonObject
-                    DoubanInterest(
-                        userName = u?.get("name")?.jsonPrimitive?.contentOrNull ?: "匿名用户",
-                        avatarUrl = u?.get("avatar")?.jsonPrimitive?.contentOrNull,
-                        rating = i["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull,
-                        comment = comment,
-                        date = i["create_time"]?.jsonPrimitive?.contentOrNull?.take(10).orEmpty(),
-                        location = u?.obj("loc")?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty(),
-                        votes = i["vote_count"]?.jsonPrimitive?.intOrNull ?: 0
-                    )
-                }.orEmpty()
+                // 依次尝试：不带 status（全量）→ done（看过）→ collect（玩过），任一拿到评论即返回
+                val urls = listOf(
+                    "$apiUrl/interests?start=0&count=12",
+                    "$apiUrl/interests?start=0&count=12&status=done",
+                    "$apiUrl/interests?start=0&count=12&status=collect"
+                )
+                for (url in urls) {
+                    val parsed = runCatching {
+                        val o = json.parseToJsonElement(httpGetRexxar(url, referer)).jsonObject
+                        o["interests"]?.jsonArray?.mapNotNull { el ->
+                            val i = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
+                            val comment = i["comment"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                            if (comment.isBlank()) return@mapNotNull null
+                            val u = i["user"]?.jsonObject
+                            DoubanInterest(
+                                userName = u?.get("name")?.jsonPrimitive?.contentOrNull ?: "匿名用户",
+                                avatarUrl = u?.get("avatar")?.jsonPrimitive?.contentOrNull,
+                                rating = i["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull,
+                                comment = comment,
+                                date = i["create_time"]?.jsonPrimitive?.contentOrNull?.take(10).orEmpty(),
+                                location = u?.obj("loc")?.get("name")?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                votes = i["vote_count"]?.jsonPrimitive?.intOrNull ?: 0
+                            )
+                        }.orEmpty()
+                    }.getOrDefault(emptyList())
+                    if (parsed.isNotEmpty()) return@runCatching parsed
+                }
+                emptyList()
             }.getOrDefault(emptyList())
         }
 

@@ -237,7 +237,10 @@ fun SearchScreen(nav: NavHostController) {
                             CelebrityResultRow(c) {
                                 if (!navigating) {
                                     navigating = true
-                                    nav.safeNavigate("celebrity/${c.id}/")
+                                    // 路由必须四段齐全：celebrity/{id}/{fromCategory}/{name}/{avatar}
+                                    val encName = java.net.URLEncoder.encode(c.name, "UTF-8")
+                                    val encAvatar = java.net.URLEncoder.encode(c.avatarUrl.orEmpty(), "UTF-8")
+                                    nav.safeNavigate("celebrity/${c.id}/film/$encName/$encAvatar")
                                 }
                             }
                         }

@@ -59,17 +59,26 @@ object Repo {
     /** 从豆瓣搜索结果收藏（自动抓取详情补全封面/评分/简介/导演/演员），返回条目 id */
     suspend fun saveFromDouban(r: DoubanResult): Long {
         itemDao.findByDouban(r.category.label, r.doubanId)?.let { existing ->
-            // 已有记录但导演演员为空 → 重新抓取补充
-            if (existing.directors.isBlank() && existing.casts.isBlank()) {
+            // 已有记录但导演演员为空，或日期行只有年份 → 重新抓取补充/升级
+            val monthDayRe = Regex("""\d{4}[-/年.]\d{1,2}""")
+            val dateLine = if (r.category == Category.BOOK) existing.subTitle else existing.info
+            val stale = dateLine.isNotBlank() && !monthDayRe.containsMatchIn(dateLine)
+            if ((existing.directors.isBlank() && existing.casts.isBlank()) || stale) {
                 runCatching {
                     val detail = DoubanClient.fetchDetail(r.category, r.doubanId)
                     if (!detail.isEmpty) {
+                        val freshInfo = detail.info?.takeIf { it.isNotBlank() }
                         itemDao.update(existing.copy(
                             title = detail.title ?: existing.title,
                             doubanRating = detail.rating ?: existing.doubanRating,
                             coverUrl = detail.coverUrl ?: existing.coverUrl,
                             summary = detail.summary ?: existing.summary,
-                            info = detail.info ?: existing.info,
+                            info = if (r.category == Category.BOOK)
+                                existing.info.ifBlank { freshInfo.orEmpty() }
+                            else freshInfo ?: existing.info,
+                            subTitle = if (r.category == Category.BOOK)
+                                freshInfo ?: existing.subTitle
+                            else existing.subTitle,
                             directors = detail.directors ?: existing.directors,
                             casts = detail.casts ?: existing.casts,
                             genres = detail.genres ?: existing.genres,
@@ -81,11 +90,13 @@ object Repo {
             return existing.id
         }
         val detail = DoubanClient.fetchDetail(r.category, r.doubanId)
+        val freshInfo = detail.info?.takeIf { it.isNotBlank() }
         val entity = CollectionItemEntity(
             category = r.category.label,
             doubanId = r.doubanId,
             title = detail.title ?: r.title,
-            subTitle = r.subTitle,
+            // 图书不显示基本信息块：完整信息（含出版日期）放头部 subTitle
+            subTitle = if (r.category == Category.BOOK) freshInfo ?: r.subTitle else r.subTitle,
             year = r.year,
             doubanRating = detail.rating ?: r.rating,
             coverUrl = detail.coverUrl ?: r.coverUrl,

@@ -67,7 +67,9 @@ fun ListsScreen(nav: NavHostController) {
             }
         }
     ) { pad ->
-        if (lists.isEmpty()) {
+        // 我的清单只显示根清单；子清单在父清单详情里以平级卡片进入
+        val rootLists = lists.filter { it.list.parentId == null }
+        if (rootLists.isEmpty()) {
             Column(Modifier.padding(pad)) {
                 EmptyView("还没有自定义清单\n点右下角 + 新建，把收藏整理成想分享的样子")
             }
@@ -77,7 +79,8 @@ fun ListsScreen(nav: NavHostController) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(pad).fillMaxSize()
             ) {
-                items(lists, key = { it.list.id }) { meta ->
+                items(rootLists, key = { it.list.id }) { meta ->
+                    val subCount = lists.count { it.list.parentId == meta.list.id }
                     Card(onClick = { nav.safeNavigate("list/${meta.list.id}") }) {
                         Row(
                             Modifier.padding(12.dp),
@@ -94,7 +97,10 @@ fun ListsScreen(nav: NavHostController) {
                                 Text(meta.list.name, style = MaterialTheme.typography.titleMedium)
                                 Spacer(Modifier.height(2.dp))
                                 Text(
-                                    "${meta.itemCount} 件收藏",
+                                    buildString {
+                                        append("${meta.itemCount} 件收藏")
+                                        if (subCount > 0) append(" · $subCount 个子清单")
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )

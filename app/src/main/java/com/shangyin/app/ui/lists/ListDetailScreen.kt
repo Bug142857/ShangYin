@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -55,6 +56,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -142,45 +144,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             )
         }
     ) { pad ->
-        // 清单有子清单时，顶部显示子清单横条 + 下方条目；无子清单时原有布局
-        if (childLists.isNotEmpty()) {
-            Column(Modifier.padding(pad).fillMaxSize()) {
-                // 子清单横条（卡片带封面拼贴，和父级清单一致）
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(childLists, key = { it.list.id }) { meta ->
-                        ChildListTile(meta) { nav.safeNavigate("list/${meta.list.id}") }
-                    }
-                }
-                // 条目列表（直接放下面，不用线隔开）
-                Box(Modifier.fillMaxSize()) {
-                    when (layoutMode) {
-                        ListLayoutMode.GRID -> LazyVerticalGrid(
-                            columns = GridCells.Fixed(3),
-                            contentPadding = PaddingValues(16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            gridItems(items, key = { it.id }) { item ->
-                                GridItemCard(item, onClick = { nav.safeNavigate("item/${item.id}") }, onLongPress = { deleteTarget = item })
-                            }
-                        }
-                        ListLayoutMode.LIST -> androidx.compose.foundation.lazy.LazyColumn(
-                            contentPadding = PaddingValues(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            items(items, key = { it.id }) { item ->
-                                ItemRowInList(item, onClick = { nav.safeNavigate("item/${item.id}") }, onLongPress = { deleteTarget = item })
-                            }
-                        }
-                    }
-                }
-            }
-        } else if (items.isEmpty()) {
+        // 子清单与条目平级混排：子清单排最前
+        if (items.isEmpty() && childLists.isEmpty()) {
             Column(Modifier.padding(pad)) {
                 EmptyView("清单还是空的\n点右上角菜单 → 添加条目")
             }
@@ -193,6 +158,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
+                    gridItems(childLists, key = { "child_${it.list.id}" }) { meta ->
+                        ChildListGridCard(meta) { nav.safeNavigate("list/${meta.list.id}") }
+                    }
                     gridItems(items, key = { it.id }) { item ->
                         GridItemCard(
                             item = item,
@@ -206,6 +174,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
+                    items(childLists, key = { "child_${it.list.id}" }) { meta ->
+                        ChildListRowCard(meta) { nav.safeNavigate("list/${meta.list.id}") }
+                    }
                     items(items, key = { it.id }) { item ->
                         ItemRowInList(
                             item = item,
@@ -301,55 +272,113 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     }
 }
 
-/** 子清单卡片：封面拼贴 + 名称 + 条目数，和父级清单布局一致 */
+/** 子清单网格卡片：和条目同尺寸（2:3 封面），角标区分 */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ChildListTile(meta: ListWithMeta, onClick: () -> Unit) {
+private fun ChildListGridCard(meta: ListWithMeta, onClick: () -> Unit) {
     var covers by remember(meta.list.id) { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(meta.list.id) {
         covers = withContext(Dispatchers.IO) { Repo.getListCovers(meta.list.id, 4) }
     }
     val firstChar = meta.list.name.firstOrNull()?.toString() ?: "清"
 
-    androidx.compose.material3.Card(
-        onClick = onClick,
-        modifier = Modifier.width(110.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onClick)
     ) {
-        Column {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            if (covers.isNotEmpty()) {
+                ChildCoverCollage(covers.take(4))
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        firstChar,
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
+            }
+            // 左上角"清单"角标，和普通条目区分
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                    .align(Alignment.TopStart)
+                    .padding(4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0x99000000))
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                Icon(
+                    Icons.Rounded.List,
+                    contentDescription = "子清单",
+                    tint = Color.White,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            meta.list.name,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            "${meta.itemCount} 件",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline
+        )
+    }
+}
+
+/** 子清单列表卡片：和条目行同尺寸 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ChildListRowCard(meta: ListWithMeta, onClick: () -> Unit) {
+    var covers by remember(meta.list.id) { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(meta.list.id) {
+        covers = withContext(Dispatchers.IO) { Repo.getListCovers(meta.list.id, 4) }
+    }
+    val firstChar = meta.list.name.firstOrNull()?.toString() ?: "清"
+
+    Card(onClick = onClick) {
+        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .width(44.dp)
+                    .height(62.dp)
+                    .clip(RoundedCornerShape(6.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 if (covers.isNotEmpty()) {
-                    // 封面拼贴（1~4张）
                     ChildCoverCollage(covers.take(4))
                 } else {
-                    // 默认封面：清单名首字
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
                             firstChar,
-                            style = MaterialTheme.typography.headlineLarge,
+                            style = MaterialTheme.typography.titleLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                     }
                 }
             }
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text(
                     meta.list.name,
-                    style = MaterialTheme.typography.labelLarge,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    "${meta.itemCount} 件",
+                    "子清单 · ${meta.itemCount} 件",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
