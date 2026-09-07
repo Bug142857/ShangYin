@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,28 +58,58 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-/** 封面图，加载失败/为空时显示占位；支持长按下载到相册 */
+/** 封面图，加载失败/为空时显示占位；长按下载到相册 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverImage(
     url: String?,
     modifier: Modifier = Modifier,
     corner: Dp = 8.dp,
+    /** 是否允许长按下载（默认 true，所有图片都可长按下载） */
+    downloadable: Boolean = true,
     /** 长按回调，默认下载到相册；传 null 则禁用长按 */
     onLongPress: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val longPressHandler = {
-        val imgUrl = url
-        if (!imgUrl.isNullOrBlank()) {
-            if (onLongPress != null) {
-                onLongPress(imgUrl)
+
+    // API 29+ (Android 10) 用 MediaStore 不需要权限；API 26-28 需要 WRITE_EXTERNAL_STORAGE 运行时授权
+    val needRuntimePermission = android.os.Build.VERSION.SDK_INT in 26..28
+    var pendingDownloadUrl by remember { mutableStateOf<String?>(null) }
+
+    val permissionLauncher = if (needRuntimePermission) {
+        androidx.activity.compose.rememberLauncherForActivityResult(
+            contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            val u = pendingDownloadUrl ?: return@rememberLauncherForActivityResult
+            pendingDownloadUrl = null
+            if (granted) {
+                scope.launch { performDownload(context, u) }
             } else {
-                scope.launch {
-                    runCatching { com.shangyin.app.ImageDownloader.download(context, imgUrl) }
-                        .onSuccess { name -> Toast.makeText(context, "已保存到相册：$name", Toast.LENGTH_SHORT).show() }
-                        .onFailure { e -> Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show() }
+                Toast.makeText(context, "存储权限被拒绝，无法保存图片", Toast.LENGTH_LONG).show()
+            }
+        }
+    } else null
+
+    val longPressHandler: (() -> Unit)? = if (!downloadable) null else {
+        {
+            val imgUrl = url
+            if (!imgUrl.isNullOrBlank()) {
+                if (onLongPress != null) {
+                    onLongPress(imgUrl)
+                } else if (needRuntimePermission) {
+                    val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                        context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    if (granted) {
+                        scope.launch { performDownload(context, imgUrl) }
+                    } else {
+                        pendingDownloadUrl = imgUrl
+                        permissionLauncher?.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    }
+                } else {
+                    // API 29+ 直接下
+                    scope.launch { performDownload(context, imgUrl) }
                 }
             }
         }
@@ -98,6 +129,9 @@ fun CoverImage(
             )
         }
     } else {
+        val baseModifier = modifier
+            .clip(RoundedCornerShape(corner))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(url)
@@ -105,18 +139,37 @@ fun CoverImage(
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            modifier = modifier
-                .clip(RoundedCornerShape(corner))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = {},
-                    onLongClick = longPressHandler
-                )
+            // 自定义长按手势：pointerInput 不消费事件，完全不干扰父级 clickable
+            modifier = if (longPressHandler != null) {
+                baseModifier.longPressOnly { longPressHandler() }
+            } else baseModifier
         )
     }
 }
+
+/** 执行下载 + toast 反馈的小工具 */
+private suspend fun performDownload(context: android.content.Context, url: String) {
+    runCatching { com.shangyin.app.ImageDownloader.download(context, url) }
+        .onSuccess { name -> Toast.makeText(context, "已保存到相册：$name", Toast.LENGTH_SHORT).show() }
+        .onFailure { e -> Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show() }
+}
+
+/** 只检测长按、完全不拦截短按的手势 modifier（长按触发回调，短按交给父级 clickable） */
+@OptIn(ExperimentalFoundationApi::class)
+private fun Modifier.longPressOnly(onLongPress: () -> Unit): Modifier =
+    this.pointerInput(onLongPress) {
+        val longPressTimeout = viewConfiguration.longPressTimeoutMillis
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = true) // 等待按下，但不消费事件
+            try {
+                // 等超时 = 长按，或等抬起/取消 = 短按
+                withTimeout(longPressTimeout) { waitForUpOrCancellation() }
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                // 超时了 = 用户在长按，触发回调（但仍然不消费事件）
+                onLongPress()
+            }
+        }
+    }
 
 /** 豆瓣评分 */
 @Composable

@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [CollectionItemEntity::class, ItemListEntity::class, ListItemEntity::class],
@@ -15,9 +17,17 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun listDao(): ListDao
 
     companion object {
+        /** 3 → 4：添加 parentId 列（嵌套清单），保留所有用户数据 */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE lists ADD COLUMN parentId INTEGER")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "shangyin.db")
-                .fallbackToDestructiveMigration()
+                .addMigrations(MIGRATION_3_4)
+                .fallbackToDestructiveMigration() // 兜底：未知版本变化时清空
                 .build()
     }
 }
