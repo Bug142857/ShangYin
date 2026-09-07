@@ -384,16 +384,16 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                         }
                     }
                 }
-            } else if (entity.directors.isNotBlank() || entity.casts.isNotBlank()) {
+            } else if ((isGame && entity.casts.isNotBlank()) || (!isGame && (entity.directors.isNotBlank() || entity.casts.isNotBlank()))) {
                 Column {
                     Text(
-                        if (isBook) "作者/译者" else if (isGame) "开发商/平台" else "导演演员",
+                        if (isBook) "作者/译者" else if (isGame) "平台" else "导演演员",
                         style = MaterialTheme.typography.titleSmall
                     )
                     Spacer(Modifier.height(6.dp))
-                    if (entity.directors.isNotBlank()) {
+                    if (!isGame && entity.directors.isNotBlank()) {
                         Text(
-                            if (isBook) "作者: ${entity.directors}" else if (isGame) "开发商: ${entity.directors}" else "导演: ${entity.directors}",
+                            if (isBook) "作者: ${entity.directors}" else "导演: ${entity.directors}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

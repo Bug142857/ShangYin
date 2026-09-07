@@ -9,6 +9,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -154,21 +155,12 @@ private suspend fun performDownload(context: android.content.Context, url: Strin
         .onFailure { e -> Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show() }
 }
 
-/** 只检测长按、完全不拦截短按的手势 modifier（长按触发回调，短按交给父级 clickable） */
-@OptIn(ExperimentalFoundationApi::class)
+/** 只检测长按的手势 modifier（用 detectTapGestures，onTap=null 不消费短按） */
 private fun Modifier.longPressOnly(onLongPress: () -> Unit): Modifier =
-    this.pointerInput(onLongPress) {
-        val longPressTimeout = viewConfiguration.longPressTimeoutMillis
-        awaitEachGesture {
-            awaitFirstDown(requireUnconsumed = true) // 等待按下，但不消费事件
-            try {
-                // 等超时 = 长按，或等抬起/取消 = 短按
-                withTimeout(longPressTimeout) { waitForUpOrCancellation() }
-            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
-                // 超时了 = 用户在长按，触发回调（但仍然不消费事件）
-                onLongPress()
-            }
-        }
+    this.pointerInput(Unit) {
+        detectTapGestures(
+            onLongPress = { onLongPress() }
+        )
     }
 
 /** 豆瓣评分 */

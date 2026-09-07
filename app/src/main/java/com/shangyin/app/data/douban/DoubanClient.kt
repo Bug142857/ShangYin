@@ -290,7 +290,26 @@ object DoubanClient {
         val rating = o["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull
         val cover = o["cover_url"]?.jsonPrimitive?.contentOrNull
         val intro = o["intro"]?.jsonPrimitive?.contentOrNull
-        val info = o["card_subtitle"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        val baseInfo = o["card_subtitle"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+
+        // 解析上映/出版/发行日期（影视图书用 pubdate，游戏用 release_date）
+        val pubdate: String? = o["pubdate"]?.let { p ->
+            runCatching { p.jsonArray }.getOrNull()
+                ?.mapNotNull { el -> el.jsonPrimitive?.contentOrNull }
+                ?.joinToString("/")
+                ?.takeIf { it.isNotBlank() }
+                ?: runCatching { p.jsonPrimitive?.contentOrNull }.getOrNull()
+        } ?: o["release_date"]?.jsonPrimitive?.contentOrNull
+
+        // 如果 info 里没包含日期，追加到 info
+        val info = if (pubdate != null && (baseInfo == null || !baseInfo.contains(pubdate))) {
+            val label = when (category) {
+                Category.GAME -> "发行日期: $pubdate"
+                Category.BOOK -> "出版日期: $pubdate"
+                else -> "上映日期: $pubdate"
+            }
+            listOfNotNull(baseInfo, label).joinToString(" / ")
+        } else baseInfo
 
         // [{"name":"xxx"}] 或 ["xxx"] 数组 → "xxx/yyy"
         fun names(key: String, limit: Int = 8): String? =
@@ -365,6 +384,8 @@ object DoubanClient {
         fallbackNames: List<String> = emptyList()
     ): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
+            // 游戏不再抓取开发商（用户要求移除）
+            if (category == Category.GAME) return@withContext emptyList()
             // 影视条目：用 celebrities 端点
             if (category == Category.MOVIE || category == Category.TV) {
                 runCatching {
@@ -571,8 +592,13 @@ object DoubanClient {
         withContext(Dispatchers.IO) {
             runCatching {
                 val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
+                // 游戏用 collect（玩过），影视图书用 done（看过）；不传 status 兜底
+                val statusParam = when (category) {
+                    Category.GAME -> "collect"
+                    else -> "done"
+                }
                 val o = json.parseToJsonElement(
-                    httpGetRexxar("$apiUrl/interests?start=0&count=12&status=done", referer)
+                    httpGetRexxar("$apiUrl/interests?start=0&count=12&status=$statusParam", referer)
                 ).jsonObject
                 o["interests"]?.jsonArray?.mapNotNull { el ->
                     val i = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null

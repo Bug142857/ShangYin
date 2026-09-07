@@ -1,6 +1,7 @@
 package com.shangyin.app.ui.lists
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
@@ -43,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +54,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -58,12 +63,15 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.CollectionItemEntity
+import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** 清单内容布局 */
 private enum class ListLayoutMode { GRID, LIST }
@@ -137,24 +145,13 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         // 清单有子清单时，顶部显示子清单横条 + 下方条目；无子清单时原有布局
         if (childLists.isNotEmpty()) {
             Column(Modifier.padding(pad).fillMaxSize()) {
-                // 子清单横条
+                // 子清单横条（卡片带封面拼贴，和父级清单一致）
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     items(childLists, key = { it.list.id }) { meta ->
-                        androidx.compose.material3.Card(
-                            onClick = { nav.safeNavigate("list/${meta.list.id}") }
-                        ) {
-                            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                                Text(meta.list.name, style = MaterialTheme.typography.labelLarge)
-                                Text(
-                                    "${meta.itemCount}件",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                            }
-                        }
+                        ChildListTile(meta) { nav.safeNavigate("list/${meta.list.id}") }
                     }
                 }
                 androidx.compose.material3.HorizontalDivider()
@@ -305,6 +302,93 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     }
 }
 
+/** 子清单卡片：封面拼贴 + 名称 + 条目数，和父级清单布局一致 */
+@Composable
+private fun ChildListTile(meta: ListWithMeta, onClick: () -> Unit) {
+    var covers by remember(meta.list.id) { mutableStateOf<List<String>>(emptyList()) }
+    LaunchedEffect(meta.list.id) {
+        covers = withContext(Dispatchers.IO) { Repo.getListCovers(meta.list.id, 4) }
+    }
+    val firstChar = meta.list.name.firstOrNull()?.toString() ?: "清"
+
+    androidx.compose.material3.Card(
+        onClick = onClick,
+        modifier = Modifier.width(110.dp)
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                if (covers.isNotEmpty()) {
+                    // 封面拼贴（1~4张）
+                    ChildCoverCollage(covers.take(4))
+                } else {
+                    // 默认封面：清单名首字
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            firstChar,
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                Text(
+                    meta.list.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${meta.itemCount} 件",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+    }
+}
+
+/** 子清单封面拼贴（1~4张封面） */
+@Composable
+private fun ChildCoverCollage(covers: List<String>) {
+    when (covers.size) {
+        1 -> coil.compose.AsyncImage(
+            model = covers[0], contentDescription = null, contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize()
+        )
+        2 -> Row(Modifier.fillMaxSize()) {
+            coil.compose.AsyncImage(model = covers[0], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+            coil.compose.AsyncImage(model = covers[1], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+        }
+        3 -> Column(Modifier.fillMaxSize()) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                coil.compose.AsyncImage(model = covers[0], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+                coil.compose.AsyncImage(model = covers[1], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+            }
+            coil.compose.AsyncImage(model = covers[2], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxWidth())
+        }
+        else -> Column(Modifier.fillMaxSize()) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                coil.compose.AsyncImage(model = covers[0], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+                coil.compose.AsyncImage(model = covers[1], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+            }
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                coil.compose.AsyncImage(model = covers[2], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+                coil.compose.AsyncImage(model = covers[3], contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.weight(1f).fillMaxSize())
+            }
+        }
+    }
+}
+
 /** 平铺（海报网格）卡片 */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -391,11 +475,12 @@ private fun AddItemToAlertDialog(
     var query by remember { mutableStateOf("") }
     var showClearOrphan by remember { mutableStateOf(false) }
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val candidates = remember(allItems, query) {
+    val candidates = remember(allItems, query, existingIds) {
         val list = if (query.isBlank()) allItems else allItems.filter {
             it.title.contains(query, ignoreCase = true) || it.subTitle.contains(query, ignoreCase = true)
         }
-        list.take(50)
+        // 过滤已添加的条目，只显示未加入清单的
+        list.filter { it.id !in existingIds }.take(50)
     }
 
     AlertDialog(
@@ -433,7 +518,6 @@ private fun AddItemToAlertDialog(
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     items(candidates, key = { it.id }) { item ->
-                        val added = item.id in existingIds
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -449,18 +533,10 @@ private fun AddItemToAlertDialog(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                             )
-                            if (added) {
-                                Icon(
-                                    Icons.Rounded.CheckCircle,
-                                    contentDescription = "已在清单",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            } else {
-                                TextButton(onClick = {
-                                    scope.launch { Repo.addItemToList(listId, item.id) }
-                                }) {
-                                    Text("加入")
-                                }
+                            TextButton(onClick = {
+                                scope.launch { Repo.addItemToList(listId, item.id) }
+                            }) {
+                                Text("加入")
                             }
                         }
                     }
