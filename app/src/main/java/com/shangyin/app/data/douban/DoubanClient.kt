@@ -259,9 +259,22 @@ object DoubanClient {
     /** 抓取条目详情：优先 Rexxar API（含导演/演员/类型/预告片完整JSON），失败回退移动版页面 */
     suspend fun fetchDetail(category: Category, doubanId: String): DoubanDetail =
         withContext(Dispatchers.IO) {
-            val rexxar = runCatching { fetchRexxar(category, doubanId) }.getOrNull()
-            if (rexxar != null && !rexxar.isEmpty) return@withContext rexxar
-            runCatching { fetchMobile(category, doubanId) }.getOrDefault(DoubanDetail())
+            val rexxarResult = runCatching { fetchRexxar(category, doubanId) }
+            if (rexxarResult.isFailure) {
+                android.util.Log.e("Douban", "fetchRexxar failed for ${category.name}/$doubanId: ${rexxarResult.exceptionOrNull()?.message}")
+            }
+            val rexxar = rexxarResult.getOrNull()
+            if (rexxar != null && !rexxar.isEmpty) {
+                android.util.Log.d("Douban", "fetchRexxar ok: info='${rexxar.info?.take(80)}'")
+                return@withContext rexxar
+            }
+            val mobileResult = runCatching { fetchMobile(category, doubanId) }
+            if (mobileResult.isFailure) {
+                android.util.Log.e("Douban", "fetchMobile failed for ${category.name}/$doubanId: ${mobileResult.exceptionOrNull()?.message}")
+            }
+            val mobile = mobileResult.getOrDefault(DoubanDetail())
+            android.util.Log.d("Douban", "fetchMobile result: title=${mobile.title}, info='${mobile.info?.take(80)}'")
+            mobile
         }
 
     /** Rexxar API 端点与对应 Referer */
@@ -855,7 +868,17 @@ object DoubanClient {
         val desc = doc.selectFirst("meta[itemprop=description]")?.attr("content")?.trim()
             ?.takeIf { it.isNotBlank() }
         val summary = desc?.substringAfter("简介：")?.trim()?.takeIf { it.isNotBlank() } ?: desc
-        val info = doc.selectFirst("div.sub-meta")?.text()?.trim()?.takeIf { it.isNotBlank() }
+        val baseInfo = doc.selectFirst("div.sub-meta")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("#link-report")?.selectFirst("span[property=summary]")?.text()?.trim()
+            ?: doc.body()?.text()?.substring(0, 500)?.trim()
+
+        // 从网页提取发行/出版日期：优先 datePublished meta，其次正则
+        val metaDate = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")
+            ?: doc.selectFirst("meta[property=article:published_time]")?.attr("content")
+        val dateRe = Regex("""(\d{4}[-/年.]\d{1,2}[-/月.]\d{1,2})""")
+        val regexDate = baseInfo?.let { dateRe.find(it)?.groupValues?.getOrNull(1)?.trim() }
+        val pubdate = metaDate ?: regexDate
+        val info = mergeDateIntoInfo(baseInfo, pubdate)
 
         // 从简介文本提取演员：匹配 "角色名（演员中文名 英文名 饰）" 模式
         val casts = extractCastsFromSummary(summary.orEmpty())
@@ -878,7 +901,7 @@ object DoubanClient {
     private fun mobileUrl(category: Category, doubanId: String): String? = when (category) {
         Category.MOVIE, Category.TV -> "https://m.douban.com/movie/subject/$doubanId/"
         Category.BOOK -> "https://m.douban.com/book/subject/$doubanId/"
-        Category.GAME -> null
+        Category.GAME -> "https://www.douban.com/game/$doubanId/"
     }
 
     private fun JsonElement?.obj(key: String): JsonObject? =

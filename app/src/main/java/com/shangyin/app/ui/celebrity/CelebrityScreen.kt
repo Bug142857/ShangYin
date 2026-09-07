@@ -457,6 +457,7 @@ fun CelebrityScreen(
                             CoverImage(
                                 url = p.normalUrl ?: p.largeUrl,
                                 onClick = { viewerIndex = order },
+                                downloadable = true,
                                 modifier = Modifier
                                     .width(130.dp)
                                     .height(98.dp)
@@ -539,7 +540,7 @@ private fun CelebrityWorkRow(work: CelebrityWork, onClick: () -> Unit) {
     ) {
         CoverImage(
             url = work.coverUrl,
-            onClick = onClick,
+            downloadable = true,
             modifier = Modifier.width(64.dp).height(90.dp)
         )
         Spacer(Modifier.width(12.dp))

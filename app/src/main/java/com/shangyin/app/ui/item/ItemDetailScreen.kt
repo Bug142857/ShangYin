@@ -327,6 +327,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                             com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
                                 ?.let { big -> openViewer(listOf(big), 0) }
                         },
+                        downloadable = true,
                         modifier = Modifier.width(110.dp).height(154.dp)
                     )
                 }
@@ -617,6 +618,7 @@ private fun PhotoCard(p: DoubanPhoto, onClick: () -> Unit) {
     CoverImage(
         url = p.normalUrl,
         onClick = onClick,
+        downloadable = true,
         modifier = Modifier
             .width(150.dp)
             .height(112.dp),

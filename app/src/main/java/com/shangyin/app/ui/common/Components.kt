@@ -45,6 +45,8 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -61,40 +63,85 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-/** 封面图，加载失败/为空时显示占位；长按弹确认框下载到相册；点击透传 */
+/** 长按 + 点击 组合手势：
+ *  - 按下后立即启动 450ms 协程触发长按
+ *  - 移动超 touchSlop → 取消长按
+ *  - 手指抬起时如果长按协程还活着 → 判定为 tap */
+@Composable
+private fun Modifier.longPressAndTapModifier(
+    key: String?,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit
+): Modifier {
+    val scope = rememberCoroutineScope()
+    return this.composed {
+        pointerInput(key) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var lpJob: Job? = scope.launch { delay(450); onLongPress() }
+                do {
+                    val ev = awaitPointerEvent()
+                    if (lpJob != null && ev.changes.any { c: PointerInputChange ->
+                            abs(c.positionChange().x) > viewConfiguration.touchSlop ||
+                            abs(c.positionChange().y) > viewConfiguration.touchSlop
+                        }) { lpJob?.cancel(); lpJob = null }
+                } while (ev.changes.any { it.pressed })
+                if (lpJob?.isActive == true) { lpJob?.cancel(); onTap() }
+            }
+        }
+    }
+}
+
+/** 仅长按手势（不会吞 tap，长按触发后才 consume） */
+@Composable
+private fun Modifier.longPressOnlyModifier(
+    key: String?,
+    onLongPress: () -> Unit
+): Modifier {
+    val scope = rememberCoroutineScope()
+    return this.composed {
+        pointerInput(key) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var lpJob: Job? = scope.launch { delay(450); onLongPress() }
+                do {
+                    val ev = awaitPointerEvent()
+                    if (lpJob != null && ev.changes.any { c: PointerInputChange ->
+                            abs(c.positionChange().x) > viewConfiguration.touchSlop ||
+                            abs(c.positionChange().y) > viewConfiguration.touchSlop
+                        }) { lpJob?.cancel(); lpJob = null }
+                } while (ev.changes.any { it.pressed })
+                lpJob?.cancel()
+            }
+        }
+    }
+}
+
+/** 封面图：点击 + 长按保存；**默认 downloadable=false**（避免与外层 Modifier.clickable 手势冲突）。
+ *  有 onClick 或独立卡片的场景显式传 downloadable=true 即可启用长按保存。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverImage(
     url: String?,
     modifier: Modifier = Modifier,
     corner: Dp = 8.dp,
-    /** 是否允许长按下载（默认 true） */
-    downloadable: Boolean = true,
-    /** 点击回调（导航/查看大图）；null 则不消费单击（事件穿透给外层） */
+    /** 是否允许长按下载（默认 false，避免与外层 Box.clickable 手势冲突） */
+    downloadable: Boolean = false,
+    /** 点击回调（导航/查看大图）；null 则不处理点击，事件穿透给外层 */
     onClick: (() -> Unit)? = null
 ) {
     val saveRequester = rememberImageSaveRequester()
 
-    // 手势分派：
-    // - 有点击回调 → 内部处理点击（+长按保存）
-    // - 无点击回调 → 只监听长按弹保存，单击事件不消费 → 穿透给外层 clickable（修复头像/照片外层点击失效）
     val finalModifier = when {
-        // 有点击 + 长按 → detectTapGestures（Compose 推荐方式，在 LazyGrid/LazyRow 里不会与滚动仲裁冲突）
+        // 有 downloadable 长按保存需求 → 自定义 pointerInput 协程调度
         downloadable && !url.isNullOrBlank() && onClick != null -> modifier
             .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .pointerInput(url) {
-                detectTapGestures(
-                    onTap = { onClick?.invoke() },
-                    onLongPress = { saveRequester(url) }
-                )
-            }
+            .longPressAndTapModifier(url, { onClick() }, { saveRequester(url!!) })
         downloadable && !url.isNullOrBlank() -> modifier
             .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .pointerInput(url) {
-                detectTapGestures(onLongPress = { saveRequester(url) })
-            }
+            .longPressOnlyModifier(url) { saveRequester(url!!) }
         onClick != null -> modifier
             .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
