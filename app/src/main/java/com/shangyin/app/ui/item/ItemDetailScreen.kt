@@ -145,7 +145,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         LaunchedEffect(cacheKey) {
             val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
                 ?: return@LaunchedEffect
-            // 清空空结果缓存，解决"查不到再查也没有"
+            // 清空空结果缓存，解决"查不到再查也没有"；如果还是空就重新 fetch
             DetailCache.clearEmptyKeys()
             // 每个请求独立兜底：任一失败不取消其他请求（否则游戏截图/预告片失败会连带短评不显示）
             coroutineScope {
@@ -209,14 +209,17 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                                 doubanRating = detail.rating ?: entity.doubanRating,
                                 coverUrl = entity.coverUrl ?: detail.coverUrl,
                                 summary = entity.summary.ifBlank { detail.summary.orEmpty() },
-                                // 影视/游戏：info 行直接替换为含完整日期的新内容；
+                // 影视/游戏：info 行直接替换为含完整日期的新内容；
                                 // 图书：头部 subTitle 替换（基本信息块不显示）
                                 info = if (cat == com.shangyin.app.data.Category.BOOK)
                                     entity.info.ifBlank { freshInfo.orEmpty() }
                                 else freshInfo ?: entity.info,
-                                subTitle = if (cat == com.shangyin.app.data.Category.BOOK)
-                                    freshInfo ?: entity.subTitle
-                                else entity.subTitle,
+                                // 图书/游戏：头部副标题也含完整日期；影视保持不变（重复）
+                                subTitle = when (cat) {
+                                    com.shangyin.app.data.Category.BOOK -> freshInfo ?: entity.subTitle
+                                    com.shangyin.app.data.Category.GAME -> freshInfo ?: entity.subTitle
+                                    else -> entity.subTitle
+                                },
                                 directors = entity.directors.ifBlank { detail.directors.orEmpty() },
                                 casts = entity.casts.ifBlank { detail.casts.orEmpty() },
                                 genres = entity.genres.ifBlank { detail.genres.orEmpty() }
@@ -503,6 +506,7 @@ private fun CelebrityCard(c: DoubanCelebrity, onClick: () -> Unit) {
     ) {
         CoverImage(
             url = c.avatarUrl,
+            onClick = onClick,
             modifier = Modifier.width(88.dp).height(124.dp)
         )
         Spacer(Modifier.height(6.dp))

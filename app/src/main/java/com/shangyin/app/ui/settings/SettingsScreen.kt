@@ -55,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -613,9 +614,17 @@ private fun ListManagerDialog(
     val scope = rememberCoroutineScope()
     val lists by Repo.observeListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // 父子层级：根清单 + 各自的子清单
-    val rootLists = lists.filter { it.list.parentId == null }
-    val subByParent = lists.filter { it.list.parentId != null }.groupBy { it.list.parentId }
+    // 父子层级 → 深度优先扁平化（支持任意级子清单，逐级缩进）
+    val childrenMap = lists.groupBy { it.list.parentId }
+    val flatTree: List<Pair<com.shangyin.app.data.db.ListWithMeta, Int>> = buildList {
+        fun push(parentId: Long?, depth: Int) {
+            childrenMap[parentId].orEmpty().forEach { m ->
+                add(m to depth)
+                if (depth < 5) push(m.list.id, depth + 1) // 深度上限防环
+            }
+        }
+        push(null, 0)
+    }
 
     var showCreate by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<ItemListEntity?>(null) }
@@ -634,37 +643,15 @@ private fun ListManagerDialog(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        rootLists.forEach { meta ->
-                            // 父级（根）清单
+                        flatTree.forEach { (meta, depth) ->
                             ListManagerRow(
                                 name = meta.list.name,
                                 count = meta.itemCount,
+                                depth = depth,
                                 onRename = { renameTarget = meta.list },
                                 onDelete = { deleteTarget = meta }
                             )
-                            // 子清单：缩进 + └ 前缀，一眼看出层级
-                            subByParent[meta.list.id].orEmpty().forEach { sub ->
-                                ListManagerRow(
-                                    name = "└ ${sub.list.name}",
-                                    count = sub.itemCount,
-                                    indented = true,
-                                    onRename = { renameTarget = sub.list },
-                                    onDelete = { deleteTarget = sub }
-                                )
-                            }
                         }
-                        // 孤立子清单（父级已删等异常情况）也显示出来
-                        val knownParents = rootLists.map { it.list.id }.toSet()
-                        lists.filter { it.list.parentId != null && it.list.parentId !in knownParents }
-                            .forEach { sub ->
-                                ListManagerRow(
-                                    name = "└ ${sub.list.name}",
-                                    count = sub.itemCount,
-                                    indented = true,
-                                    onRename = { renameTarget = sub.list },
-                                    onDelete = { deleteTarget = sub }
-                                )
-                            }
                     }
                 }
             }
@@ -740,12 +727,12 @@ private fun ListManagerDialog(
     }
 }
 
-/** 分类管理里的一行：父清单正常显示，子清单缩进并弱化样式 */
+/** 分类管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨 */
 @Composable
 private fun ListManagerRow(
     name: String,
     count: Int,
-    indented: Boolean = false,
+    depth: Int = 0,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -753,15 +740,17 @@ private fun ListManagerRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .then(if (indented) Modifier.padding(start = 28.dp) else Modifier)
+                .then(if (depth > 0) Modifier.padding(start = (28 * depth).dp) else Modifier)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                name,
+                if (depth > 0) "└ $name" else name,
                 modifier = Modifier.weight(1f),
-                style = if (indented) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodyLarge,
-                color = if (indented) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                style = if (depth == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
+                fontWeight = if (depth == 0) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (depth == 0) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 1f - depth * 0.12f)
             )
             Text(
                 "${count}件",

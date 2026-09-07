@@ -456,10 +456,10 @@ fun CelebrityScreen(
                             }.let { if (it < 0) 1 else it }
                             CoverImage(
                                 url = p.normalUrl ?: p.largeUrl,
+                                onClick = { viewerIndex = order },
                                 modifier = Modifier
                                     .width(130.dp)
                                     .height(98.dp)
-                                    .clickable { viewerIndex = order }
                             )
                         }
                     }
@@ -539,6 +539,7 @@ private fun CelebrityWorkRow(work: CelebrityWork, onClick: () -> Unit) {
     ) {
         CoverImage(
             url = work.coverUrl,
+            onClick = onClick,
             modifier = Modifier.width(64.dp).height(90.dp)
         )
         Spacer(Modifier.width(12.dp))

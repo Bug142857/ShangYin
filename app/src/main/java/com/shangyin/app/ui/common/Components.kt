@@ -70,31 +70,36 @@ fun CoverImage(
     corner: Dp = 8.dp,
     /** 是否允许长按下载（默认 true） */
     downloadable: Boolean = true,
-    /** 点击回调（导航/查看大图）；null 则不处理点击 */
-    onClick: (() -> Unit)? = null,
-    /** 自定义长按回调，默认弹下载确认框 */
-    onLongPress: ((String) -> Unit)? = null
+    /** 点击回调（导航/查看大图）；null 则不消费单击（事件穿透给外层） */
+    onClick: (() -> Unit)? = null
 ) {
     val saveRequester = rememberImageSaveRequester()
 
-    // 统一手势处理：combinedClickable 同时处理点击和长按
-    val finalModifier = if (downloadable && !url.isNullOrBlank()) {
-        modifier
+    // 手势分派：
+    // - 有点击回调 → 内部处理点击（+长按保存）
+    // - 无点击回调 → 只监听长按弹保存，单击事件不消费 → 穿透给外层 clickable（修复头像/照片外层点击失效）
+    val finalModifier = when {
+        // 有点击 + 长按 → detectTapGestures（Compose 推荐方式，在 LazyGrid/LazyRow 里不会与滚动仲裁冲突）
+        downloadable && !url.isNullOrBlank() && onClick != null -> modifier
             .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
-            .combinedClickable(
-                onClick = { onClick?.invoke() },
-                onLongClick = {
-                    if (onLongPress != null) onLongPress(url) else saveRequester(url)
-                }
-            )
-    } else if (onClick != null) {
-        modifier
+            .pointerInput(url) {
+                detectTapGestures(
+                    onTap = { onClick?.invoke() },
+                    onLongPress = { saveRequester(url) }
+                )
+            }
+        downloadable && !url.isNullOrBlank() -> modifier
+            .clip(RoundedCornerShape(corner))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .pointerInput(url) {
+                detectTapGestures(onLongPress = { saveRequester(url) })
+            }
+        onClick != null -> modifier
             .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .clickable(onClick = onClick)
-    } else {
-        modifier
+        else -> modifier
             .clip(RoundedCornerShape(corner))
             .background(MaterialTheme.colorScheme.surfaceVariant)
     }
@@ -349,12 +354,36 @@ fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> U
                         var trackZoom = false
                         var totalPanDx = 0f
                         var totalPanDy = 0f
+                        // 长按已触发标记（触发后吞掉事件，防 Pager 翻页/误判单击）
+                        var longPressHandled = false
+                        // 长按移动容差：系统 touchSlop，轻微抖动不算移动
+                        val slopPx = viewConfiguration.touchSlop
+                        // 按下时启动的长按触发协程（450ms 后触发保存，移动/抬起时取消）
+                        var longPressJob: Job? = null
+                        if (onLongPress != null && url != null) {
+                            longPressJob = scope.launch {
+                                delay(450)
+                                if (!longPressHandled) {
+                                    longPressHandled = true
+                                    onLongPress(url)
+                                }
+                            }
+                        }
 
                         do {
                             val event = awaitPointerEvent()
+
+                            // 长按已触发：持续消费所有事件直到松手
+                            if (longPressHandled) {
+                                event.changes.forEach { it.consume() }
+                                continue
+                            }
+
                             val pointers = event.changes.size
 
                             if (pointers >= 2) {
+                                // 双指缩放/拖动：取消长按
+                                longPressJob?.cancel()
                                 trackZoom = true
                                 val zoomDelta = event.calculateZoom()
                                 val panDelta = event.calculatePan()
@@ -378,6 +407,10 @@ fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> U
                                 val pan = event.calculatePan()
                                 totalPanDx += pan.x
                                 totalPanDy += pan.y
+                                // 移动超容差 → 取消长按
+                                if (abs(totalPanDx) > slopPx || abs(totalPanDy) > slopPx) {
+                                    longPressJob?.cancel()
+                                }
                                 if (scale > 1.01f) {
                                     // 已放大：单指拖动图片（边界限制），消费手势
                                     val maxX = size.width * (scale - 1f) / 2f
@@ -394,13 +427,12 @@ fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> U
                             event.changes.forEach { it.consume() }
                         } while (event.changes.any { it.pressed })
 
+                        // 手势结束：长按协程如果还没触发，取消它（手指抬起了）
+                        longPressJob?.cancel()
+
                         val total = System.currentTimeMillis() - downMillis
                         val moved = abs(totalPanDx) > 3f || abs(totalPanDy) > 3f || trackZoom
-                        // 长按：按住不动超过 450ms 后松手 → 触发保存回调
-                        if (!moved && total >= 450 && onLongPress != null && url != null) {
-                            onLongPress(url)
-                        }
-                        if (!moved && total < 300) {
+                        if (!longPressHandled && !moved && total < 300) {
                             if (closeJob?.isActive == true) {
                                 // 双击：缩放切换
                                 closeJob?.cancel()

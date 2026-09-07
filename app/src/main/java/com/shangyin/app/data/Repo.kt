@@ -76,13 +76,10 @@ object Repo {
                             info = if (r.category == Category.BOOK)
                                 existing.info.ifBlank { freshInfo.orEmpty() }
                             else freshInfo ?: existing.info,
-                            subTitle = if (r.category == Category.BOOK)
-                                freshInfo ?: existing.subTitle
-                            else existing.subTitle,
+                            // 图书/游戏头部副标题同步含完整日期（从搜索来的 subTitle 本来不含日期）
+                            subTitle = if (r.category == Category.GAME || r.category == Category.BOOK)
+                                freshInfo ?: existing.subTitle else existing.subTitle,
                             directors = detail.directors ?: existing.directors,
-                            casts = detail.casts ?: existing.casts,
-                            genres = detail.genres ?: existing.genres,
-                            doubanUrl = r.url ?: existing.doubanUrl
                         ))
                     }
                 }

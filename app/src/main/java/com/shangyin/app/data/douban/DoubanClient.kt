@@ -21,6 +21,7 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import okhttp3.Cache
+import okhttp3.CacheControl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -93,6 +94,8 @@ object DoubanClient {
     private fun httpGetMobile(url: String, referer: String? = null): String {
         val builder = Request.Builder().url(url).get()
         if (referer != null) builder.header("Referer", referer)
+        // max-age=0 强制缓存验证：搜索/截图/网页详情不拿陈旧缓存
+        builder.cacheControl(CacheControl.Builder().maxAge(0, TimeUnit.SECONDS).build())
         mobileClient.newCall(builder.build()).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             return resp.body?.string().orEmpty()
@@ -269,10 +272,12 @@ object DoubanClient {
         Category.GAME -> "https://m.douban.com/rexxar/api/v2/game/$doubanId" to "https://m.douban.com/game/$doubanId/"
     }
 
-    /** 请求 Rexxar API：移动 UA（客户端自带）+ Referer，无需 apikey */
+    /** 请求 Rexxar API：移动 UA（客户端自带）+ Referer，无需 apikey；
+     * 完全禁用缓存（force-network），因为 OkHttp 缓存可能保存过期响应导致发行日期/短评为空 */
     private fun httpGetRexxar(apiUrl: String, referer: String): String {
         val req = Request.Builder().url(apiUrl).get()
             .header("Referer", referer)
+            .cacheControl(CacheControl.Builder().noCache().noStore().build())
             .build()
         mobileClient.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
