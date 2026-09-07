@@ -177,6 +177,9 @@ object Repo {
 
     suspend fun deleteList(list: ItemListEntity) = listDao.deleteList(list)
 
+    /** 获取所有已加入清单的条目 ID */
+    suspend fun getAllListItemIds(): List<Long> = listDao.getAllListItemIds()
+
     /** 加入清单：若已在清单内则忽略；同时用清单首图做清单封面 */
     suspend fun addItemToList(listId: Long, itemId: Long) {
         db.withTransaction {

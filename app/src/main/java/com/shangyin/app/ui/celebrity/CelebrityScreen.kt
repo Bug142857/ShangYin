@@ -497,6 +497,7 @@ private fun CelebrityWorkCard(work: CelebrityWork, onClick: () -> Unit) {
     Column(Modifier.width(96.dp).clickable(onClick = onClick)) {
         CoverImage(
             url = work.coverUrl,
+            onClick = onClick,
             modifier = Modifier.width(96.dp).height(134.dp)
         )
         Spacer(Modifier.height(6.dp))

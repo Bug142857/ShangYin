@@ -292,7 +292,7 @@ object DoubanClient {
         val intro = o["intro"]?.jsonPrimitive?.contentOrNull
         val baseInfo = o["card_subtitle"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
 
-        // 解析上映/出版/发行日期（影视图书用 pubdate，游戏用 release_date）
+        // 解析上映/出版/发行日期（影视图书用 pubdate，游戏用 release_date/date）
         val pubdate: String? = o["pubdate"]?.let { p ->
             runCatching { p.jsonArray }.getOrNull()
                 ?.mapNotNull { el -> el.jsonPrimitive?.contentOrNull }
@@ -300,9 +300,22 @@ object DoubanClient {
                 ?.takeIf { it.isNotBlank() }
                 ?: runCatching { p.jsonPrimitive?.contentOrNull }.getOrNull()
         } ?: o["release_date"]?.jsonPrimitive?.contentOrNull
+          ?: o["date"]?.jsonPrimitive?.contentOrNull
+          ?: o["publish_date"]?.jsonPrimitive?.contentOrNull
+
+        // 去重检查：提取年月数字模式对比，避免格式不同导致重复
+        val pubYearMonth = pubdate?.let {
+            val m = Regex("""(\d{4})[-/年](\d{1,2})""").find(it)
+            if (m != null) "${m.groupValues[1]}${m.groupValues[2]}" else it.take(4)
+        }
+        val baseYearMonth = baseInfo?.let {
+            val m = Regex("""(\d{4})[-/年](\d{1,2})""").find(it)
+            if (m != null) "${m.groupValues[1]}${m.groupValues[2]}" else null
+        }
+        val isDateDuplicate = pubYearMonth != null && baseYearMonth != null && pubYearMonth == baseYearMonth
 
         // 如果 info 里没包含日期，追加到 info
-        val info = if (pubdate != null && (baseInfo == null || !baseInfo.contains(pubdate))) {
+        val info = if (pubdate != null && !isDateDuplicate && (baseInfo == null || !baseInfo.contains(pubdate))) {
             val label = when (category) {
                 Category.GAME -> "发行日期: $pubdate"
                 Category.BOOK -> "出版日期: $pubdate"
@@ -592,13 +605,10 @@ object DoubanClient {
         withContext(Dispatchers.IO) {
             runCatching {
                 val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
-                // 游戏用 collect（玩过），影视图书用 done（看过）；不传 status 兜底
-                val statusParam = when (category) {
-                    Category.GAME -> "collect"
-                    else -> "done"
-                }
+                // 影视图书用 status=done（看过），游戏不传 status 取全部（有些游戏 collect/do 都不行）
+                val statusParam = if (category == Category.GAME) "" else "&status=done"
                 val o = json.parseToJsonElement(
-                    httpGetRexxar("$apiUrl/interests?start=0&count=12&status=$statusParam", referer)
+                    httpGetRexxar("$apiUrl/interests?start=0&count=12$statusParam", referer)
                 ).jsonObject
                 o["interests"]?.jsonArray?.mapNotNull { el ->
                     val i = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null

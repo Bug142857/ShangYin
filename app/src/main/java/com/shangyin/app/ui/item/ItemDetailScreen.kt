@@ -277,10 +277,10 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     gridItemsIndexed(photoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
                         CoverImage(
                             url = url,
+                            onClick = { openViewer(photoUrls, idx) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .aspectRatio(4f / 3f)
-                                .clickable { openViewer(photoUrls, idx) }
                         )
                     }
                 }
@@ -297,14 +297,13 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 ) {
             // 头部：封面（点击查看大图） + 基本信息
             Row {
-                Box(
-                    modifier = Modifier.clickable {
-                        com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
-                            ?.let { big -> openViewer(listOf(big), 0) }
-                    }
-                ) {
+                Box {
                     CoverImage(
                         url = entity.coverUrl,
+                        onClick = {
+                            com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
+                                ?.let { big -> openViewer(listOf(big), 0) }
+                        },
                         modifier = Modifier.width(110.dp).height(154.dp)
                     )
                 }
@@ -515,6 +514,7 @@ private fun CelebrityGridCard(c: DoubanCelebrity, onClick: () -> Unit) {
     ) {
         CoverImage(
             url = c.avatarUrl,
+            onClick = onClick,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(3f / 4f)
@@ -592,10 +592,10 @@ private fun VideoCard(v: DoubanVideo, onClick: () -> Unit) {
 private fun PhotoCard(p: DoubanPhoto, onClick: () -> Unit) {
     CoverImage(
         url = p.normalUrl,
+        onClick = onClick,
         modifier = Modifier
             .width(150.dp)
-            .height(112.dp)
-            .clickable(onClick = onClick),
+            .height(112.dp),
         corner = 8.dp
     )
 }

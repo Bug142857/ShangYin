@@ -343,6 +343,7 @@ private fun ResultRow(
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             CoverImage(
                 url = r.coverUrl,
+                onClick = onClick,
                 modifier = Modifier.width(56.dp).height(78.dp)
             )
             Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
@@ -412,6 +413,7 @@ private fun CelebrityResultRow(
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             CoverImage(
                 url = c.avatarUrl,
+                onClick = onClick,
                 modifier = Modifier.size(56.dp),
                 corner = 28.dp
             )

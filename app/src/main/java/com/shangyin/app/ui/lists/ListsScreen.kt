@@ -85,6 +85,7 @@ fun ListsScreen(nav: NavHostController) {
                         ) {
                             CoverImage(
                                 url = meta.list.coverUrl,
+                                onClick = { meta.list.id?.let { nav.safeNavigate("list/$it") } },
                                 modifier = Modifier.width(48.dp).height(66.dp)
                             )
                             Column(

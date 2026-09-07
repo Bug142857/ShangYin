@@ -144,10 +144,11 @@ private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 if (covers.isEmpty()) {
-                    Icon(
-                        Icons.Rounded.List,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    // 默认封面：清单名首字
+                    Text(
+                        meta.list.name.firstOrNull()?.toString() ?: "清",
+                        style = MaterialTheme.typography.displayMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                         modifier = Modifier.align(Alignment.Center)
                     )
                 } else {

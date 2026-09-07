@@ -26,10 +26,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -59,32 +61,32 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-/** 封面图，加载失败/为空时显示占位；长按下载到相册 */
+/** 封面图，加载失败/为空时显示占位；长按弹确认对话框下载到相册 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverImage(
     url: String?,
     modifier: Modifier = Modifier,
     corner: Dp = 8.dp,
-    /** 是否允许长按下载（默认 true，所有图片都可长按下载） */
+    /** 是否允许长按下载（默认 true） */
     downloadable: Boolean = true,
-    /** 长按回调，默认下载到相册；传 null 则禁用长按 */
+    /** 点击回调（导航/查看大图）；null 则不处理点击 */
+    onClick: (() -> Unit)? = null,
+    /** 自定义长按回调，默认弹下载确认框 */
     onLongPress: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var showDownloadDialog by remember { mutableStateOf(false) }
+    var downloadUrl by remember { mutableStateOf<String?>(null) }
 
-    // API 29+ (Android 10) 用 MediaStore 不需要权限；API 26-28 需要 WRITE_EXTERNAL_STORAGE 运行时授权
     val needRuntimePermission = android.os.Build.VERSION.SDK_INT in 26..28
-    var pendingDownloadUrl by remember { mutableStateOf<String?>(null) }
-
     val permissionLauncher = if (needRuntimePermission) {
         androidx.activity.compose.rememberLauncherForActivityResult(
             contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
         ) { granted ->
-            val u = pendingDownloadUrl ?: return@rememberLauncherForActivityResult
-            pendingDownloadUrl = null
-            if (granted) {
+            val u = downloadUrl
+            if (granted && u != null) {
                 scope.launch { performDownload(context, u) }
             } else {
                 Toast.makeText(context, "存储权限被拒绝，无法保存图片", Toast.LENGTH_LONG).show()
@@ -92,35 +94,39 @@ fun CoverImage(
         }
     } else null
 
-    val longPressHandler: (() -> Unit)? = if (!downloadable) null else {
-        {
-            val imgUrl = url
-            if (!imgUrl.isNullOrBlank()) {
-                if (onLongPress != null) {
-                    onLongPress(imgUrl)
-                } else if (needRuntimePermission) {
-                    val granted = androidx.core.content.ContextCompat.checkSelfPermission(
-                        context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
-                    ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                    if (granted) {
-                        scope.launch { performDownload(context, imgUrl) }
-                    } else {
-                        pendingDownloadUrl = imgUrl
-                        permissionLauncher?.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+    // 统一手势处理：combinedClickable 同时处理点击和长按
+    val finalModifier = if (downloadable && !url.isNullOrBlank()) {
+        modifier
+            .clip(RoundedCornerShape(corner))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .combinedClickable(
+                onClick = { onClick?.invoke() },
+                onLongClick = {
+                    val imgUrl = url
+                    if (!imgUrl.isNullOrBlank()) {
+                        if (onLongPress != null) {
+                            onLongPress(imgUrl)
+                        } else {
+                            downloadUrl = imgUrl
+                            showDownloadDialog = true
+                        }
                     }
-                } else {
-                    // API 29+ 直接下
-                    scope.launch { performDownload(context, imgUrl) }
                 }
-            }
-        }
+            )
+    } else if (onClick != null) {
+        modifier
+            .clip(RoundedCornerShape(corner))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+    } else {
+        modifier
+            .clip(RoundedCornerShape(corner))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
     }
 
     if (url.isNullOrBlank()) {
         Box(
-            modifier = modifier
-                .clip(RoundedCornerShape(corner))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
+            modifier = finalModifier,
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -130,9 +136,6 @@ fun CoverImage(
             )
         }
     } else {
-        val baseModifier = modifier
-            .clip(RoundedCornerShape(corner))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(url)
@@ -140,28 +143,51 @@ fun CoverImage(
                 .build(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
-            // 自定义长按手势：pointerInput 不消费事件，完全不干扰父级 clickable
-            modifier = if (longPressHandler != null) {
-                baseModifier.longPressOnly { longPressHandler() }
-            } else baseModifier
+            modifier = finalModifier
+        )
+    }
+
+    // 下载确认对话框
+    if (showDownloadDialog && downloadUrl != null) {
+        AlertDialog(
+            onDismissRequest = { showDownloadDialog = false; downloadUrl = null },
+            title = { Text("保存图片") },
+            text = { Text("是否将这张图片保存到相册？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    val u = downloadUrl
+                    showDownloadDialog = false
+                    if (u != null) {
+                        if (needRuntimePermission) {
+                            val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+                                context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                            if (granted) {
+                                scope.launch { performDownload(context, u) }
+                            } else {
+                                permissionLauncher?.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            }
+                        } else {
+                            scope.launch { performDownload(context, u) }
+                        }
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDownloadDialog = false; downloadUrl = null }) {
+                    Text("取消")
+                }
+            }
         )
     }
 }
 
-/** 执行下载 + toast 反馈的小工具 */
+/** 执行下载 + toast 反馈 */
 private suspend fun performDownload(context: android.content.Context, url: String) {
     runCatching { com.shangyin.app.ImageDownloader.download(context, url) }
         .onSuccess { name -> Toast.makeText(context, "已保存到相册：$name", Toast.LENGTH_SHORT).show() }
         .onFailure { e -> Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show() }
 }
-
-/** 只检测长按的手势 modifier（用 detectTapGestures，onTap=null 不消费短按） */
-private fun Modifier.longPressOnly(onLongPress: () -> Unit): Modifier =
-    this.pointerInput(Unit) {
-        detectTapGestures(
-            onLongPress = { onLongPress() }
-        )
-    }
 
 /** 豆瓣评分 */
 @Composable

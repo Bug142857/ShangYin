@@ -154,8 +154,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         ChildListTile(meta) { nav.safeNavigate("list/${meta.list.id}") }
                     }
                 }
-                androidx.compose.material3.HorizontalDivider()
-                // 条目列表
+                // 条目列表（直接放下面，不用线隔开）
                 Box(Modifier.fillMaxSize()) {
                     when (layoutMode) {
                         ListLayoutMode.GRID -> LazyVerticalGrid(
@@ -407,6 +406,7 @@ private fun GridItemCard(
     ) {
         CoverImage(
             url = item.coverUrl,
+            onClick = onClick,
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(2f / 3f)
@@ -438,6 +438,7 @@ private fun ItemRowInList(
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
             CoverImage(
                 url = item.coverUrl,
+                onClick = onClick,
                 modifier = Modifier.width(44.dp).height(62.dp)
             )
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
@@ -475,12 +476,17 @@ private fun AddItemToAlertDialog(
     var query by remember { mutableStateOf("") }
     var showClearOrphan by remember { mutableStateOf(false) }
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val candidates = remember(allItems, query, existingIds) {
+    // 加载所有清单里已添加的条目 ID，过滤掉不显示
+    var allListItemIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    LaunchedEffect(Unit) {
+        allListItemIds = withContext(Dispatchers.IO) { Repo.getAllListItemIds().toSet() }
+    }
+    val candidates = remember(allItems, query, allListItemIds) {
         val list = if (query.isBlank()) allItems else allItems.filter {
             it.title.contains(query, ignoreCase = true) || it.subTitle.contains(query, ignoreCase = true)
         }
-        // 过滤已添加的条目，只显示未加入清单的
-        list.filter { it.id !in existingIds }.take(50)
+        // 不显示任何清单里已添加的条目
+        list.filter { it.id !in allListItemIds }.take(50)
     }
 
     AlertDialog(
