@@ -60,7 +60,7 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(nav: NavHostController) {
-    val lists by Repo.observeListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
+    val lists by Repo.observeRootListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
 
     Scaffold(
         topBar = {

@@ -1,8 +1,10 @@
 package com.shangyin.app.ui.common
 
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -55,13 +57,33 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-/** 封面图，加载失败/为空时显示占位 */
+/** 封面图，加载失败/为空时显示占位；支持长按下载到相册 */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverImage(
     url: String?,
     modifier: Modifier = Modifier,
-    corner: Dp = 8.dp
+    corner: Dp = 8.dp,
+    /** 长按回调，默认下载到相册；传 null 则禁用长按 */
+    onLongPress: ((String) -> Unit)? = null
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val longPressHandler = {
+        val imgUrl = url
+        if (!imgUrl.isNullOrBlank()) {
+            if (onLongPress != null) {
+                onLongPress(imgUrl)
+            } else {
+                scope.launch {
+                    runCatching { com.shangyin.app.ImageDownloader.download(context, imgUrl) }
+                        .onSuccess { name -> Toast.makeText(context, "已保存到相册：$name", Toast.LENGTH_SHORT).show() }
+                        .onFailure { e -> Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show() }
+                }
+            }
+        }
+    }
+
     if (url.isNullOrBlank()) {
         Box(
             modifier = modifier
@@ -86,6 +108,12 @@ fun CoverImage(
             modifier = modifier
                 .clip(RoundedCornerShape(corner))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
+                .combinedClickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = {},
+                    onLongClick = longPressHandler
+                )
         )
     }
 }

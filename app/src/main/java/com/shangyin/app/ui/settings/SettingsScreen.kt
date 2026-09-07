@@ -88,6 +88,19 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    var showClearCache by remember { mutableStateOf(false) }
+    var cacheSize by remember { mutableStateOf("计算中…") }
+
+    LaunchedEffect(Unit) {
+        cacheSize = runCatching {
+            val bytes = com.shangyin.app.App.cacheSizeBytes(context)
+            when {
+                bytes > 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+                bytes > 1024 -> "${bytes / 1024} KB"
+                else -> "$bytes B"
+            }
+        }.getOrDefault("未知")
+    }
 
     // 头像选择器
     val avatarPicker = rememberLauncherForActivityResult(
@@ -330,6 +343,34 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     )
                 }
             }
+
+            // 图片缓存清理
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { showClearCache = true }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Delete, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("清理缓存", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "当前缓存：$cacheSize（图片 + 网络请求）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
         }
     }
 
@@ -389,6 +430,26 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }) { Text("确认导入", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { pendingImportUri = null }) { Text("取消") } }
+        )
+    }
+
+    // 清理缓存确认
+    if (showClearCache) {
+        AlertDialog(
+            onDismissRequest = { showClearCache = false },
+            title = { Text("清理缓存") },
+            text = { Text("将清除所有图片缓存和网络请求缓存。下次打开 App 或浏览豆瓣内容时会重新下载，不影响已保存的收藏数据。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        com.shangyin.app.App.clearAllCaches(context)
+                        cacheSize = "0 B"
+                        Toast.makeText(context, "缓存已清理", Toast.LENGTH_SHORT).show()
+                        showClearCache = false
+                    }
+                }) { Text("清理") }
+            },
+            dismissButton = { TextButton(onClick = { showClearCache = false }) { Text("取消") } }
         )
     }
 
@@ -464,6 +525,7 @@ private fun buildExportJson(data: ExportData): String {
             put("name", l.name)
             put("description", l.description)
             put("coverUrl", l.coverUrl)
+            put("parentId", l.parentId)
             put("createdAt", l.createdAt)
         })
     }
@@ -522,6 +584,7 @@ private fun parseExportJson(json: String): ExportData {
                 name = o.optString("name", ""),
                 description = o.optString("description", ""),
                 coverUrl = o.optString("coverUrl").ifBlank { null },
+                parentId = o.opt("parentId")?.let { (it as? Number)?.toLong() },
                 createdAt = o.optLong("createdAt", System.currentTimeMillis())
             )
         }

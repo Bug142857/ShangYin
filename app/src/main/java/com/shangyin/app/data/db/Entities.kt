@@ -38,6 +38,8 @@ data class ItemListEntity(
     val name: String,
     val description: String = "",
     val coverUrl: String? = null,
+    /** 父清单 ID；null = 根级清单（首页分类方块） */
+    val parentId: Long? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

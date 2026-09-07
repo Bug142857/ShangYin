@@ -195,9 +195,12 @@ fun CelebrityScreen(
     // 内部跳转：把影人作品导入应用后导航到详情
     fun openWorkInternal(work: CelebrityWork) {
         scope.launch {
+            if (work.type in listOf("music", "album")) {
+                Toast.makeText(context, "音乐作品暂不支持", Toast.LENGTH_SHORT).show()
+                return@launch
+            }
             val cat = when (work.type) {
                 "book" -> Category.BOOK
-                "music", "album" -> Category.MUSIC
                 "game" -> Category.GAME
                 else -> if ("/tv/" in workDoubanUrl(work)) Category.TV else Category.MOVIE
             }

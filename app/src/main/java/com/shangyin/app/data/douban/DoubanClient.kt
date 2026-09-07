@@ -20,8 +20,10 @@ import org.jsoup.Jsoup
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import okhttp3.Cache
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 
 /**
  * 豆瓣网页接口客户端（非官方）。
@@ -69,6 +71,7 @@ object DoubanClient {
 
     private val mobileClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            .cache(Cache(File(com.shangyin.app.App.instance.cacheDir, "http"), 20 * 1024 * 1024L))
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .addInterceptor { chain ->
@@ -113,7 +116,6 @@ object DoubanClient {
             Category.MOVIE -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
             Category.TV -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
             Category.BOOK -> "https://book.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1001" to "https://book.douban.com/"
-            Category.MUSIC -> "https://music.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}" to "https://music.douban.com/"
             Category.GAME -> return searchGameWeb(query)
         }
         val html = httpGetMobile(url, referer)
@@ -151,7 +153,6 @@ object DoubanClient {
             val subTitle = abstract.replace(Regex("""\s+"""), " ").trim()
             val cat = when {
                 "/book/" in urlStr || category == Category.BOOK -> Category.BOOK
-                "/music/" in urlStr || category == Category.MUSIC -> Category.MUSIC
                 isTv -> Category.TV
                 else -> Category.MOVIE
             }
@@ -165,7 +166,6 @@ object DoubanClient {
                 url = urlStr.ifBlank {
                     when (cat) {
                         Category.BOOK -> "https://book.douban.com/subject/$id/"
-                        Category.MUSIC -> "https://music.douban.com/subject/$id/"
                         else -> "https://movie.douban.com/subject/$id/"
                     }
                 },
@@ -266,7 +266,6 @@ object DoubanClient {
         Category.MOVIE -> "https://m.douban.com/rexxar/api/v2/movie/$doubanId" to "https://m.douban.com/movie/subject/$doubanId/"
         Category.TV -> "https://m.douban.com/rexxar/api/v2/tv/$doubanId" to "https://m.douban.com/tv/subject/$doubanId/"
         Category.BOOK -> "https://m.douban.com/rexxar/api/v2/book/$doubanId" to "https://m.douban.com/book/subject/$doubanId/"
-        Category.MUSIC -> "https://m.douban.com/rexxar/api/v2/music/$doubanId" to "https://m.douban.com/music/subject/$doubanId/"
         Category.GAME -> "https://m.douban.com/rexxar/api/v2/game/$doubanId" to "https://m.douban.com/game/$doubanId/"
     }
 
@@ -808,7 +807,6 @@ object DoubanClient {
     private fun mobileUrl(category: Category, doubanId: String): String? = when (category) {
         Category.MOVIE, Category.TV -> "https://m.douban.com/movie/subject/$doubanId/"
         Category.BOOK -> "https://m.douban.com/book/subject/$doubanId/"
-        Category.MUSIC -> "https://m.douban.com/music/subject/$doubanId/"
         Category.GAME -> null
     }
 
@@ -820,7 +818,6 @@ object DoubanClient {
         val patterns = listOf(
             Regex("movie\\.douban\\.com/subject/(\\d+)") to Category.MOVIE,
             Regex("book\\.douban\\.com/subject/(\\d+)") to Category.BOOK,
-            Regex("music\\.douban\\.com/subject/(\\d+)") to Category.MUSIC,
             Regex("douban\\.com/game/(\\d+)") to Category.GAME,
             Regex("douban\\.com/subject/(\\d+)") to Category.MOVIE
         )

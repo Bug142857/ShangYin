@@ -36,6 +36,9 @@ interface ItemDao {
     @Delete
     suspend fun delete(item: CollectionItemEntity)
 
+    @Query("DELETE FROM items WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
     /** 批量改分类名（用于分类重命名 / 旧数据迁移） */
     @Query("UPDATE items SET category = :newName WHERE category = :oldName")
     suspend fun renameCategory(oldName: String, newName: String)
@@ -71,6 +74,23 @@ interface ListDao {
     @Query("SELECT * FROM lists WHERE id = :id LIMIT 1")
     suspend fun getByIdOnce(id: Long): ItemListEntity?
 
+    @Query(
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.createdAt, COUNT(li.itemId) AS itemCount " +
+            "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
+            "WHERE l.parentId IS NULL " +
+            "GROUP BY l.id ORDER BY l.createdAt DESC"
+    )
+    fun observeRootListsWithMeta(): Flow<List<ListWithMeta>>
+
+    @Query(
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.createdAt, COUNT(li.itemId) AS itemCount " +
+            "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
+            "WHERE l.parentId = :parentId " +
+            "GROUP BY l.id ORDER BY l.createdAt ASC"
+    )
+    fun observeSubListsWithMeta(parentId: Long): Flow<List<ListWithMeta>>
+
+    /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
         "SELECT l.id, l.name, l.description, l.coverUrl, l.createdAt, COUNT(li.itemId) AS itemCount " +
             "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
@@ -123,4 +143,8 @@ interface ListDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAllListItems(items: List<ListItemEntity>)
+
+    /** 获取不在任何清单中的条目 ID（清理孤立收藏） */
+    @Query("SELECT i.id FROM items i WHERE i.id NOT IN (SELECT itemId FROM list_items)")
+    suspend fun getOrphanItemIds(): List<Long>
 }

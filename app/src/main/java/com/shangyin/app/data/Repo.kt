@@ -132,7 +132,6 @@ object Repo {
 
     private fun detailDefaultUrl(r: DoubanResult): String = when (r.category) {
         Category.BOOK -> "https://book.douban.com/subject/${r.doubanId}/"
-        Category.MUSIC -> "https://music.douban.com/subject/${r.doubanId}/"
         Category.GAME -> "https://www.douban.com/game/${r.doubanId}/"
         else -> "https://movie.douban.com/subject/${r.doubanId}/"
     }
@@ -145,6 +144,12 @@ object Repo {
     // ---------- 清单 ----------
 
     fun observeListsWithMeta(): Flow<List<ListWithMeta>> = listDao.observeListsWithMeta()
+
+    /** 首页用：只显示根级清单（parentId IS NULL） */
+    fun observeRootListsWithMeta(): Flow<List<ListWithMeta>> = listDao.observeRootListsWithMeta()
+
+    /** 显示某清单的子清单 */
+    fun observeSubListsWithMeta(listId: Long): Flow<List<ListWithMeta>> = listDao.observeSubListsWithMeta(listId)
 
     /** 获取每个分类方块的前N个条目封面，用于主页拼图 */
     suspend fun getListCovers(listId: Long, limit: Int = 4): List<String> {
@@ -164,7 +169,8 @@ object Repo {
 
     fun observeAllLists(): Flow<List<ItemListEntity>> = listDao.observeAllLists()
 
-    suspend fun createList(name: String): Long = listDao.insertList(ItemListEntity(name = name.trim()))
+    suspend fun createList(name: String, parentId: Long? = null): Long =
+        listDao.insertList(ItemListEntity(name = name.trim(), parentId = parentId))
 
     suspend fun renameList(list: ItemListEntity, name: String) =
         listDao.updateList(list.copy(name = name.trim()))
@@ -189,6 +195,14 @@ object Repo {
 
     suspend fun removeItemFromList(listId: Long, itemId: Long) {
         listDao.removeItem(listId, itemId)
+    }
+
+    /** 删除所有不在任何清单中的收藏条目（清理"孤立收藏"），返回删除数量 */
+    suspend fun clearOrphanItems(): Int {
+        val orphanIds = listDao.getOrphanItemIds()
+        if (orphanIds.isEmpty()) return 0
+        orphanIds.forEach { itemDao.deleteById(it) }
+        return orphanIds.size
     }
 
     /** 上移/下移：delta = -1 上移，+1 下移 */

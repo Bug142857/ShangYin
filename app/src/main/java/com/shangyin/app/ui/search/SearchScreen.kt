@@ -77,7 +77,7 @@ fun SearchScreen(nav: NavHostController) {
     var celebrityResults by remember { mutableStateOf(SearchCache.celebrities) }
     var searching by remember { mutableStateOf(false) }
     var searched by rememberSaveable { mutableStateOf(SearchCache.searched) }
-    // 分类筛选：必须先选分类才能搜索（影视/图书/音乐/游戏/人物），防止结果互相干扰
+    // 分类筛选：必须先选分类才能搜索（影视/图书/游戏/人物），防止结果互相干扰
     // 默认选中「影视」（最常用），用户可切换
     var selectedCat by rememberSaveable { mutableStateOf("影视") }
     // 防频繁点击：导航中禁用所有点击
@@ -169,7 +169,7 @@ fun SearchScreen(nav: NavHostController) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                listOf("影视", "图书", "音乐", "游戏", "人物").forEach { label ->
+                listOf("影视", "图书", "游戏", "人物").forEach { label ->
                     FilterChip(
                         selected = selectedCat == label,
                         onClick = { selectedCat = if (selectedCat == label) "" else label },
