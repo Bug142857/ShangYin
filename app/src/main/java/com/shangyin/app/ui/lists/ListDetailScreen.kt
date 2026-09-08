@@ -67,9 +67,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.State
@@ -112,6 +114,7 @@ private fun dragReorderModifier(
 ): Modifier {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val haptic = LocalHapticFeedback.current
     val screenW = LocalConfiguration.current.screenWidthDp
     val itemHeightPx = with(density) {
         (if (isListMode) 64.dp else 180.dp).toPx()
@@ -146,6 +149,7 @@ private fun dragReorderModifier(
                     if (abs(dy) > viewConfiguration.touchSlop / 2 || abs(dx) > viewConfiguration.touchSlop / 2) {
                         state = 2
                         onDragStateChange(itemId)
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         totalY = 0f
                         totalX = 0f
                         c.consume()
@@ -166,6 +170,7 @@ private fun dragReorderModifier(
                             val target = idx + dir * cols
                             if (target in currentItemsState.value.indices) {
                                 scope.launch { Repo.reorderItem(listId, idx, target) }
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 totalY -= dir * itemHeightPx
                             } else {
                                 totalY = 0f
@@ -180,6 +185,7 @@ private fun dragReorderModifier(
                             val target = idx + dir
                             if (target in currentItemsState.value.indices && idx / cols == target / cols) {
                                 scope.launch { Repo.reorderItem(listId, idx, target) }
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 totalX -= dir * itemWidthPx
                             } else {
                                 totalX = 0f

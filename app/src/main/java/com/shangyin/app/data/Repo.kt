@@ -169,7 +169,10 @@ object Repo {
     suspend fun getFallbackCoverFromChildren(listId: Long): String? {
         val subs = listDao.observeSubListsWithMeta(listId).first()
         for (sub in subs) {
-            val items = getAllItemsIn(sub.list.id ?: continue)
+            // 先看子清单自身的 coverUrl
+            sub.list.coverUrl?.takeIf { it.isNotBlank() }?.let { return it }
+            // 再看子清单里的条目封面
+            val items = getAllItemsIn(sub.list.id)
             val cover = items.firstOrNull()?.coverUrl?.takeIf { it.isNotBlank() }
             if (cover != null) return cover
         }

@@ -87,7 +87,7 @@ fun ListsScreen(nav: NavHostController) {
                     var coverUrl by remember(meta.list.id) { mutableStateOf(meta.list.coverUrl) }
                     LaunchedEffect(meta.list.id, meta.list.coverUrl) {
                         if (coverUrl.isNullOrBlank()) {
-                            val fb = withContext(Dispatchers.IO) { Repo.getFallbackCoverFromChildren(meta.list.id ?: -1) }
+                            val fb = withContext(Dispatchers.IO) { Repo.getFallbackCoverFromChildren(meta.list.id) }
                             if (fb != null) coverUrl = fb
                         }
                     }

@@ -94,8 +94,8 @@ object DoubanClient {
     private fun httpGetMobile(url: String, referer: String? = null): String {
         val builder = Request.Builder().url(url).get()
         if (referer != null) builder.header("Referer", referer)
-        // max-age=0 强制缓存验证：搜索/截图/网页详情不拿陈旧缓存
-        builder.cacheControl(CacheControl.Builder().maxAge(0, TimeUnit.SECONDS).build())
+        // 完全禁用缓存：搜索/网页详情不拿陈旧缓存（maxAge(0) 可能返回 304 空响应）
+        builder.cacheControl(CacheControl.Builder().noCache().noStore().build())
         mobileClient.newCall(builder.build()).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             return resp.body?.string().orEmpty()
