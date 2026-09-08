@@ -50,6 +50,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -95,12 +96,10 @@ import kotlin.math.abs
 /** 清单内容布局 */
 private enum class ListLayoutMode { GRID, LIST }
 
-/**
- * 拖拽排序手势：长按后拖动改变顺序。
- * - 快速抬起 → tap
- * - 长按不动 → long press（删除确认）
- * - 长按 + 拖动 → 拖拽排序
- */
+/** 拖拽排序手势：长按后拖动改变顺序。
+ *  - 快速抬起 → tap
+ *  - 长按不动 → long press（删除确认）
+ *  - 长按 + 拖动 → 拖拽排序 */
 @Composable
 private fun dragReorderModifier(
     itemId: Long,
@@ -170,7 +169,6 @@ private fun dragReorderModifier(
                             val target = idx + dir * cols
                             if (target in currentItemsState.value.indices) {
                                 scope.launch { Repo.reorderItem(listId, idx, target) }
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 totalY -= dir * itemHeightPx
                             } else {
                                 totalY = 0f
@@ -185,7 +183,6 @@ private fun dragReorderModifier(
                             val target = idx + dir
                             if (target in currentItemsState.value.indices && idx / cols == target / cols) {
                                 scope.launch { Repo.reorderItem(listId, idx, target) }
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 totalX -= dir * itemWidthPx
                             } else {
                                 totalX = 0f
@@ -303,11 +300,12 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     }
                     gridItemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
+                        val scale by animateFloatAsState(if (isDragging) 1.08f else 1f, label = "scale")
                         GridItemCard(
                             item = item,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            modifier = if (isEditMode) dragReorderModifier(
+                            modifier = (if (isEditMode) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = false,
                                 gridColumns = 3,
@@ -316,8 +314,11 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onDragStateChange = { draggingItemId = it },
                                 onTap = {},
                                 onLongPress = {}
-                            ).graphicsLayer(alpha = if (isDragging) 0.6f else 1f)
-                            else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") }
+                            ) else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") })
+                                .graphicsLayer {
+                                    scaleX = scale; scaleY = scale
+                                    shadowElevation = if (isDragging) 24f else 0f
+                                }
                         )
                     }
                 }
@@ -331,11 +332,12 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     }
                     itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
+                        val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "scale")
                         ItemRowInList(
                             item = item,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            modifier = if (isEditMode) dragReorderModifier(
+                            modifier = (if (isEditMode) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = true,
                                 gridColumns = 1,
@@ -344,8 +346,11 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onDragStateChange = { draggingItemId = it },
                                 onTap = {},
                                 onLongPress = {}
-                            ).graphicsLayer(alpha = if (isDragging) 0.6f else 1f)
-                            else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") }
+                            ) else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") })
+                                .graphicsLayer {
+                                    scaleX = scale; scaleY = scale
+                                    shadowElevation = if (isDragging) 24f else 0f
+                                }
                         )
                     }
                 }

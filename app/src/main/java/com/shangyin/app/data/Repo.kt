@@ -159,10 +159,21 @@ object Repo {
     /** 显示某清单的子清单 */
     fun observeSubListsWithMeta(listId: Long): Flow<List<ListWithMeta>> = listDao.observeSubListsWithMeta(listId)
 
-    /** 获取每个分类方块的前N个条目封面，用于主页拼图 */
+    /** 获取每个分类方块的前N个条目封面（含子清单递归） */
     suspend fun getListCovers(listId: Long, limit: Int = 4): List<String> {
-        val items = getAllItemsIn(listId)
-        return items.take(limit).mapNotNull { it.coverUrl }
+        val covers = mutableListOf<String>()
+        val visited = mutableSetOf<Long>()
+        suspend fun collectRecursive(id: Long) {
+            if (id in visited || covers.size >= limit) return
+            visited += id
+            val directItems = getAllItemsIn(id)
+            directItems.forEach { it.coverUrl?.takeIf { c -> c.isNotBlank() && covers.none { it == c } }?.let { covers.add(it) } }
+            if (covers.size >= limit) return
+            val subs = listDao.observeSubListsWithMeta(id).first()
+            subs.forEach { collectRecursive(it.list.id) }
+        }
+        collectRecursive(listId)
+        return covers.take(limit)
     }
 
     /** 如果清单本身没有条目，取子清单里第一个有封面的条目作为封面 */
