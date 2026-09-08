@@ -75,25 +75,31 @@ interface ListDao {
     suspend fun getByIdOnce(id: Long): ItemListEntity?
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, COUNT(li.itemId) AS itemCount " +
-            "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, " +
+            "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
+            "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
+            "FROM lists l " +
             "WHERE l.parentId IS NULL " +
-            "GROUP BY l.id ORDER BY l.createdAt DESC"
+            "ORDER BY l.createdAt DESC"
     )
     fun observeRootListsWithMeta(): Flow<List<ListWithMeta>>
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, COUNT(li.itemId) AS itemCount " +
-            "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, " +
+            "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
+            "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
+            "FROM lists l " +
             "WHERE l.parentId = :parentId " +
-            "GROUP BY l.id ORDER BY l.createdAt ASC"
+            "ORDER BY l.createdAt ASC"
     )
     fun observeSubListsWithMeta(parentId: Long): Flow<List<ListWithMeta>>
 
     /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, COUNT(li.itemId) AS itemCount " +
-            "FROM lists l LEFT JOIN list_items li ON li.listId = l.id " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, " +
+            "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
+            "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
+            "FROM lists l " +
             "GROUP BY l.id ORDER BY l.createdAt DESC"
     )
     fun observeListsWithMeta(): Flow<List<ListWithMeta>>

@@ -4,6 +4,8 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,14 +22,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.List
@@ -51,16 +56,23 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.State
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
@@ -72,11 +84,121 @@ import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 
 /** 清单内容布局 */
 private enum class ListLayoutMode { GRID, LIST }
+
+/**
+ * 拖拽排序手势：长按后拖动改变顺序。
+ * - 快速抬起 → tap
+ * - 长按不动 → long press（删除确认）
+ * - 长按 + 拖动 → 拖拽排序
+ */
+@Composable
+private fun dragReorderModifier(
+    itemId: Long,
+    isListMode: Boolean,
+    gridColumns: Int,
+    listId: Long,
+    currentItemsState: State<List<CollectionItemEntity>>,
+    onDragStateChange: (Long?) -> Unit,
+    onTap: () -> Unit,
+    onLongPress: () -> Unit
+): Modifier {
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val screenW = LocalConfiguration.current.screenWidthDp
+    val itemHeightPx = with(density) {
+        (if (isListMode) 64.dp else 180.dp).toPx()
+    }
+    val itemWidthPx = with(density) {
+        val w = (screenW - 56) / gridColumns.coerceAtLeast(1)
+        w.dp.toPx()
+    }
+
+    return Modifier.pointerInput(itemId) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            var state = 0 // 0=initial, 1=longPressed, 2=dragging, -1=cancelled
+            var totalY = 0f
+            var totalX = 0f
+            val lpJob = scope.launch {
+                delay(viewConfiguration.longPressTimeoutMillis)
+                state = 1
+            }
+            do {
+                val event = awaitPointerEvent()
+                val c = event.changes.first()
+                val dy = c.positionChange().y
+                val dx = c.positionChange().x
+
+                if (state == 0) {
+                    if (abs(dx) > viewConfiguration.touchSlop || abs(dy) > viewConfiguration.touchSlop) {
+                        lpJob.cancel()
+                        state = -1
+                    }
+                } else if (state == 1) {
+                    if (abs(dy) > viewConfiguration.touchSlop / 2 || abs(dx) > viewConfiguration.touchSlop / 2) {
+                        state = 2
+                        onDragStateChange(itemId)
+                        totalY = 0f
+                        totalX = 0f
+                        c.consume()
+                    }
+                }
+
+                if (state == 2) {
+                    c.consume()
+                    totalY += dy
+                    totalX += dx
+                    val cols = if (isListMode) 1 else gridColumns
+
+                    // 垂直拖动 → 跨行交换
+                    if (abs(totalY) > itemHeightPx * 0.5f) {
+                        val dir = if (totalY > 0) 1 else -1
+                        val idx = currentItemsState.value.indexOfFirst { it.id == itemId }
+                        if (idx >= 0) {
+                            val target = idx + dir * cols
+                            if (target in currentItemsState.value.indices) {
+                                scope.launch { Repo.reorderItem(listId, idx, target) }
+                                totalY -= dir * itemHeightPx
+                            } else {
+                                totalY = 0f
+                            }
+                        }
+                    }
+                    // 水平拖动（仅网格模式）→ 同行交换
+                    if (!isListMode && abs(totalX) > itemWidthPx * 0.5f) {
+                        val dir = if (totalX > 0) 1 else -1
+                        val idx = currentItemsState.value.indexOfFirst { it.id == itemId }
+                        if (idx >= 0) {
+                            val target = idx + dir
+                            if (target in currentItemsState.value.indices && idx / cols == target / cols) {
+                                scope.launch { Repo.reorderItem(listId, idx, target) }
+                                totalX -= dir * itemWidthPx
+                            } else {
+                                totalX = 0f
+                            }
+                        }
+                    }
+                }
+            } while (event.changes.any { it.pressed })
+
+            lpJob.cancel()
+            when (state) {
+                0 -> onTap()           // 快速抬起 → 点击
+                1 -> onLongPress()     // 长按不动 → 删除确认
+                2 -> onDragStateChange(null) // 拖拽结束
+                // -1: 移动取消（滚动），不触发任何操作
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,55 +212,67 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var menuOpen by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
-    var showAddItem by remember { mutableStateOf(false) }
     var showCreateChild by remember { mutableStateOf(false) }
-    var deleteTarget by remember { mutableStateOf<CollectionItemEntity?>(null) }
     var layoutMode by rememberSaveable { mutableStateOf(ListLayoutMode.GRID) }
+    var isEditMode by remember { mutableStateOf(false) }
+    var draggingItemId by remember { mutableStateOf<Long?>(null) }
+    val currentItems = rememberUpdatedState(items)
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(list?.name.orEmpty(), maxLines = 1) },
                 navigationIcon = {
-                    IconButton(onClick = { nav.safePopBackStack() }) {
+                    IconButton(onClick = {
+                        if (isEditMode) isEditMode = false else nav.safePopBackStack()
+                    }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(if (layoutMode == ListLayoutMode.GRID) "切换为列表" else "切换为平铺")
-                            },
-                            onClick = {
-                                menuOpen = false
-                                layoutMode =
-                                    if (layoutMode == ListLayoutMode.GRID) ListLayoutMode.LIST else ListLayoutMode.GRID
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("添加条目") },
-                            leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                            onClick = { menuOpen = false; showAddItem = true }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("创建子清单") },
-                            leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                            onClick = { menuOpen = false; showCreateChild = true }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("重命名") },
-                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                            onClick = { menuOpen = false; showRename = true }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("删除清单") },
-                            leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
-                            onClick = { menuOpen = false; showDelete = true }
-                        )
+                    if (isEditMode) {
+                        TextButton(onClick = { isEditMode = false }) { Text("完成") }
+                    } else {
+                        IconButton(onClick = { menuOpen = true }) {
+                            Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
+                        }
+                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (layoutMode == ListLayoutMode.GRID) "切换为列表" else "切换为平铺")
+                                },
+                                onClick = {
+                                    menuOpen = false
+                                    layoutMode =
+                                        if (layoutMode == ListLayoutMode.GRID) ListLayoutMode.LIST else ListLayoutMode.GRID
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("编辑") },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = { menuOpen = false; isEditMode = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("添加条目") },
+                                leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                                onClick = { menuOpen = false; nav.safeNavigate("search/$listId") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("创建子清单") },
+                                leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                                onClick = { menuOpen = false; showCreateChild = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("重命名") },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = { menuOpen = false; showRename = true }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除清单") },
+                                leadingIcon = { Icon(Icons.Rounded.Delete, contentDescription = null) },
+                                onClick = { menuOpen = false; showDelete = true }
+                            )
+                        }
                     }
                 }
             )
@@ -161,49 +295,57 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     gridItems(childLists, key = { "child_${it.list.id}" }) { meta ->
                         ChildListGridCard(meta) { nav.safeNavigate("list/${meta.list.id}") }
                     }
-                    gridItems(items, key = { it.id }) { item ->
+                    gridItemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
+                        val isDragging = draggingItemId == item.id
                         GridItemCard(
                             item = item,
-                            onClick = { nav.safeNavigate("item/${item.id}") },
-                            onLongPress = { deleteTarget = item }
+                            isEditMode = isEditMode,
+                            onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
+                            modifier = if (isEditMode) dragReorderModifier(
+                                itemId = item.id,
+                                isListMode = false,
+                                gridColumns = 3,
+                                listId = listId,
+                                currentItemsState = currentItems,
+                                onDragStateChange = { draggingItemId = it },
+                                onTap = {},
+                                onLongPress = {}
+                            ).graphicsLayer(alpha = if (isDragging) 0.6f else 1f)
+                            else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") }
                         )
                     }
                 }
                 ListLayoutMode.LIST -> LazyColumn(
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
                     items(childLists, key = { "child_${it.list.id}" }) { meta ->
                         ChildListRowCard(meta) { nav.safeNavigate("list/${meta.list.id}") }
                     }
-                    items(items, key = { it.id }) { item ->
+                    itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
+                        val isDragging = draggingItemId == item.id
                         ItemRowInList(
                             item = item,
-                            onClick = { nav.safeNavigate("item/${item.id}") },
-                            onLongPress = { deleteTarget = item }
+                            isEditMode = isEditMode,
+                            onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
+                            modifier = if (isEditMode) dragReorderModifier(
+                                itemId = item.id,
+                                isListMode = true,
+                                gridColumns = 1,
+                                listId = listId,
+                                currentItemsState = currentItems,
+                                onDragStateChange = { draggingItemId = it },
+                                onTap = {},
+                                onLongPress = {}
+                            ).graphicsLayer(alpha = if (isDragging) 0.6f else 1f)
+                            else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") }
                         )
                     }
                 }
             }
         }
     } // close Scaffold content lambda
-
-    // 长按删除确认
-    deleteTarget?.let { item ->
-        AlertDialog(
-            onDismissRequest = { deleteTarget = null },
-            title = { Text("移出清单") },
-            text = { Text("把「${item.title}」从清单中移出？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch { Repo.removeItemFromList(listId, item.id) }
-                    deleteTarget = null
-                }) { Text("移出") }
-            },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
-        )
-    }
 
     // 重命名
     if (showRename && list != null) {
@@ -244,15 +386,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { showDelete = false }) { Text("取消") } }
-        )
-    }
-
-    // 添加条目
-    if (showAddItem) {
-        AddItemToAlertDialog(
-            listId = listId,
-            existingIds = remember(items) { items.map { it.id }.toSet() },
-            onDismiss = { showAddItem = false }
         )
     }
 
@@ -418,69 +551,83 @@ private fun ChildCoverCollage(covers: List<String>) {
 }
 
 /** 平铺（海报网格）卡片 */
-@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun GridItemCard(
     item: CollectionItemEntity,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit
+    modifier: Modifier = Modifier,
+    isEditMode: Boolean = false,
+    onRemove: () -> Unit = {}
 ) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongPress
+    Box(modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth()) {
+            CoverImage(
+                url = item.coverUrl,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f)
             )
-    ) {
-        CoverImage(
-            url = item.coverUrl,
-            onClick = onClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(2f / 3f)
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            item.title,
-            style = MaterialTheme.typography.labelMedium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis
-        )
-        DoubanRating(item.doubanRating)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                item.title,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            DoubanRating(item.doubanRating)
+        }
+        // 编辑模式下右上角 × 删除按钮
+        if (isEditMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCCFF4444))
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Clear,
+                    contentDescription = "移出",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun ItemRowInList(
     item: CollectionItemEntity,
-    onClick: () -> Unit,
-    onLongPress: () -> Unit
+    modifier: Modifier = Modifier,
+    isEditMode: Boolean = false,
+    onRemove: () -> Unit = {}
 ) {
-    Card(
-        modifier = Modifier.combinedClickable(
-            onClick = onClick,
-            onLongClick = onLongPress
-        )
-    ) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
             CoverImage(
                 url = item.coverUrl,
-                onClick = onClick,
-                modifier = Modifier.width(44.dp).height(62.dp)
+                modifier = Modifier.width(40.dp).height(56.dp)
             )
-            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Column(
+                Modifier.weight(1f).padding(start = 10.dp, top = 2.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
                 Text(
                     item.title,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     DoubanRating(item.doubanRating)
                     if (item.status.isNotBlank()) {
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(6.dp))
                         Text(
                             item.status,
                             style = MaterialTheme.typography.labelSmall,
@@ -488,6 +635,25 @@ private fun ItemRowInList(
                         )
                     }
                 }
+            }
+        }
+        if (isEditMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCCFF4444))
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Clear,
+                    contentDescription = "移出",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
             }
         }
     }

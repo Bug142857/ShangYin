@@ -79,6 +79,12 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             }
             composable("search") { SearchScreen(nav) }
             composable(
+                route = "search/{listId}",
+                arguments = listOf(navArgument("listId") { type = NavType.LongType; defaultValue = -1L })
+            ) { entry ->
+                SearchScreen(nav, targetListId = entry.arguments?.getLong("listId") ?: -1L)
+            }
+            composable(
                 route = "item/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })
             ) { entry ->

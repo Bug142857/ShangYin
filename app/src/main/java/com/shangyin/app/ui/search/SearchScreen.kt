@@ -65,9 +65,12 @@ import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
+/** 记住上次选择的清单 ID（跨对话框、跨搜索保持） */
+private var lastSelectedListId: Long = -1L
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(nav: NavHostController) {
+fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -103,6 +106,7 @@ fun SearchScreen(nav: NavHostController) {
             Toast.makeText(context, "请先选择要搜索的分类", Toast.LENGTH_SHORT).show()
             return
         }
+        query = ""  // 搜索后自动清空输入框
         scope.launch {
             searching = true
             searched = true
@@ -154,7 +158,7 @@ fun SearchScreen(nav: NavHostController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("搜索") },
+                title = { Text(if (targetListId > 0) "搜索添加" else "搜索") },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -283,7 +287,13 @@ fun SearchScreen(nav: NavHostController) {
 
     // 添加时选分类
     pendingAdd?.let { result ->
-        if (lists.isEmpty()) {
+        if (targetListId > 0) {
+            // 从清单内进入搜索：直接添加到目标清单，不弹选择框
+            LaunchedEffect(result) {
+                addToList(result, targetListId)
+                pendingAdd = null
+            }
+        } else if (lists.isEmpty()) {
             AlertDialog(
                 onDismissRequest = { pendingAdd = null },
                 title = { Text("还没有分类") },
@@ -296,7 +306,9 @@ fun SearchScreen(nav: NavHostController) {
                 dismissButton = { TextButton(onClick = { pendingAdd = null }) { Text("取消") } }
             )
         } else {
-            var selectedId by remember(lists) { mutableStateOf(lists.first().id) }
+            var selectedId by remember(lists) {
+                mutableStateOf(lists.firstOrNull { it.id == lastSelectedListId }?.id ?: lists.first().id)
+            }
             AlertDialog(
                 onDismissRequest = { pendingAdd = null },
                 title = { Text("添加到分类") },
@@ -323,6 +335,7 @@ fun SearchScreen(nav: NavHostController) {
                 },
                 confirmButton = {
                     TextButton(onClick = {
+                        lastSelectedListId = selectedId
                         addToList(result, selectedId)
                         pendingAdd = null
                     }) { Text("添加") }

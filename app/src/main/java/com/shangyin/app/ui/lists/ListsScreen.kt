@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +46,9 @@ import com.shangyin.app.data.Repo
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safeNavigate
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -81,13 +84,20 @@ fun ListsScreen(nav: NavHostController) {
             ) {
                 items(rootLists, key = { it.list.id }) { meta ->
                     val subCount = lists.count { it.list.parentId == meta.list.id }
+                    var coverUrl by remember(meta.list.id) { mutableStateOf(meta.list.coverUrl) }
+                    LaunchedEffect(meta.list.id, meta.list.coverUrl) {
+                        if (coverUrl.isNullOrBlank()) {
+                            val fb = withContext(Dispatchers.IO) { Repo.getFallbackCoverFromChildren(meta.list.id ?: -1) }
+                            if (fb != null) coverUrl = fb
+                        }
+                    }
                     Card(onClick = { nav.safeNavigate("list/${meta.list.id}") }) {
                         Row(
                             Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             CoverImage(
-                                url = meta.list.coverUrl,
+                                url = coverUrl,
                                 onClick = { meta.list.id?.let { nav.safeNavigate("list/$it") } },
                                 modifier = Modifier.width(48.dp).height(66.dp)
                             )

@@ -165,6 +165,17 @@ object Repo {
         return items.take(limit).mapNotNull { it.coverUrl }
     }
 
+    /** 如果清单本身没有条目，取子清单里第一个有封面的条目作为封面 */
+    suspend fun getFallbackCoverFromChildren(listId: Long): String? {
+        val subs = listDao.observeSubListsWithMeta(listId).first()
+        for (sub in subs) {
+            val items = getAllItemsIn(sub.list.id ?: continue)
+            val cover = items.firstOrNull()?.coverUrl?.takeIf { it.isNotBlank() }
+            if (cover != null) return cover
+        }
+        return null
+    }
+
     fun observeList(id: Long): Flow<ItemListEntity?> = listDao.observeList(id)
 
     fun observeItemsIn(listId: Long): Flow<List<CollectionItemEntity>> = listDao.observeItemsIn(listId)
@@ -228,6 +239,22 @@ object Repo {
             val b = order[target]
             listDao.updateItem(a.copy(orderIndex = b.orderIndex))
             listDao.updateItem(b.copy(orderIndex = a.orderIndex))
+        }
+    }
+
+    /** 拖拽排序：把 fromIdx 的条目移到 toIdx，中间条目顺延 */
+    suspend fun reorderItem(listId: Long, fromIdx: Int, toIdx: Int) {
+        if (fromIdx == toIdx) return
+        db.withTransaction {
+            val order = listDao.getOrder(listId).toMutableList()
+            if (fromIdx !in order.indices || toIdx !in order.indices) return@withTransaction
+            val item = order.removeAt(fromIdx)
+            order.add(toIdx, item)
+            order.forEachIndexed { i, li ->
+                if (li.orderIndex != i) {
+                    listDao.updateItem(li.copy(orderIndex = i))
+                }
+            }
         }
     }
 
