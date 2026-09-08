@@ -20,8 +20,10 @@ import org.jsoup.Jsoup
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import okhttp3.Cache
 import okhttp3.CacheControl
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -75,6 +77,9 @@ object DoubanClient {
             .cache(Cache(File(com.shangyin.app.App.instance.cacheDir, "http"), 20 * 1024 * 1024L))
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            // 连接池：减少频繁建连被识别为爬虫；单主机最大 5 并发
+            .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
             .addInterceptor { chain ->
                 val builder = chain.request().newBuilder()
                     .header("User-Agent", MOBILE_UA)
@@ -87,9 +92,46 @@ object DoubanClient {
                 } else {
                     builder.header("Cookie", "bid=$bid")
                 }
+                // 同主机请求限流：间隔至少 400ms，避免短时间大量请求触发反爬
+                throttleHost(chain.request().url.host)
                 chain.proceed(builder.build())
             }
             .build()
+    }
+
+    /** 每个主机上次请求时间戳 */
+    private val hostLastRequest = java.util.concurrent.ConcurrentHashMap<String, AtomicLong>()
+    private const val HOST_MIN_INTERVAL_MS = 400L
+
+    private fun throttleHost(host: String) {
+        val last = hostLastRequest.getOrPut(host) { AtomicLong(0) }
+        val now = System.currentTimeMillis()
+        val prev = last.get()
+        val wait = HOST_MIN_INTERVAL_MS - (now - prev)
+        if (wait > 0) {
+            try {
+                Thread.sleep(wait)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+        }
+        last.set(System.currentTimeMillis())
+    }
+
+    /** 检测豆瓣反爬/限流页面并抛出明确异常
+     *  豆瓣被触发反爬时返回的页面通常包含以下关键词之一，此时 HTTP 200 但不是搜索结果 */
+    private fun detectBlockPageAndThrow(html: String) {
+        if (html.isBlank()) throw IOException("返回内容为空（可能被限流，请稍后重试）")
+        val blockKeywords = listOf(
+            "sec.douban.com", "异常请求", "访问过于频繁", "请稍后再试",
+            "请输入验证码", "captcha", "robot", "机器人验证",
+            "检测到", "安全验证", "页面不存在", "429", "forbidden"
+        )
+        val lower = html.lowercase()
+        val hit = blockKeywords.firstOrNull { lower.contains(it.lowercase()) }
+        if (hit != null) {
+            throw IOException("豆瓣反爬拦截（$hit），请稍后重试或在设置里配置登录 Cookie")
+        }
     }
 
     private fun httpGetMobile(url: String, referer: String? = null): String {
@@ -124,6 +166,11 @@ object DoubanClient {
             Category.GAME -> return searchGameWeb(query)
         }
         val html = httpGetMobile(url, referer)
+        // 检测反爬/限流页面：豆瓣被触发时返回不含 window.__DATA__ 的页面
+        if (!html.contains("window.__DATA__")) {
+            detectBlockPageAndThrow(html)
+            return emptyList()
+        }
         // 提取 window.__DATA__ = { ... };
         val match = Regex("""window\.__DATA__\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL).find(html)
             ?: return emptyList()
@@ -183,6 +230,8 @@ object DoubanClient {
     private fun searchGameWeb(query: String): List<DoubanResult> {
         val url = "https://www.douban.com/search?cat=3114&q=${URLEncoder.encode(query, "UTF-8")}"
         val html = httpGetMobile(url, "https://www.douban.com/")
+        // 检测反爬页面
+        detectBlockPageAndThrow(html)
         val doc = Jsoup.parse(html, url)
         return doc.select("div.result").mapNotNull { result ->
             val link = result.selectFirst("a[title]") ?: return@mapNotNull null
@@ -225,6 +274,7 @@ object DoubanClient {
         withContext(Dispatchers.IO) {
             val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
             val html = httpGetMobile(url, "https://www.douban.com/")
+            detectBlockPageAndThrow(html)
             val doc = Jsoup.parse(html, url)
             doc.select("div.result").mapNotNull { result ->
                 val link = result.selectFirst("h3 a[href]") ?: return@mapNotNull null
