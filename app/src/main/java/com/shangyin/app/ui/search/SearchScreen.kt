@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -82,6 +83,8 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
     var celebrityResults by remember { mutableStateOf(SearchCache.celebrities) }
     var searching by remember { mutableStateOf(false) }
     var searched by rememberSaveable { mutableStateOf(SearchCache.searched) }
+    // 搜索错误信息：失败时显示在结果区域，让用户看到具体原因（不只 Toast）
+    var searchError by remember { mutableStateOf<String?>(null) }
     // 分类筛选：必须先选分类才能搜索（影视/图书/游戏/人物），防止结果互相干扰
     // 默认选中「影视」（最常用），用户可切换
     var selectedCat by rememberSaveable { mutableStateOf("影视") }
@@ -113,6 +116,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
         scope.launch {
             searching = true
             searched = true
+            searchError = null  // 清空上一次的错误
             results = emptyList()
             celebrityResults = emptyList()
             try {
@@ -132,8 +136,11 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                     results = list.distinctBy { it.category.name + it.doubanId }
                 }
             } catch (e: Exception) {
-                // 提示具体错误，避免用户以为没搜到（实际是网络异常/IP被限）
-                Toast.makeText(context, "搜索失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                // 错误信息同时通过 Toast（短暂提示）和结果区域文字（持久显示）显示
+                // 这样用户不会因为 Toast 弹一下没看到而以为"搜不到"
+                val msg = "搜索失败：${e.message ?: e.javaClass.simpleName}"
+                searchError = msg
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
             } finally {
                 SearchCache.results = results
                 SearchCache.celebrities = celebrityResults
@@ -212,6 +219,30 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                 ) {
                     CircularProgressIndicator()
                 }
+            } else if (searchError != null) {
+                // 搜索失败：把具体错误信息持久显示在结果区域，让用户看到原因
+                // （Toast 弹一下容易错过，红色文字会一直显示直到下次搜索）
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(top = 40.dp, start = 24.dp, end = 24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        searchError!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "可尝试：1) 等几秒再搜 2) 换更精确的关键词 3) 在设置里配置豆瓣登录 Cookie",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        textAlign = TextAlign.Center
+                    )
+                }
             } else if (results.isEmpty() && celebrityResults.isEmpty()) {
                 Column(
                     Modifier
@@ -225,6 +256,15 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.outline
                     )
+                    if (searched) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "豆瓣搜索接口可能未收录该条目，可尝试更精确的名字（如剧场版用全名）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             } else {
                 LazyColumn(

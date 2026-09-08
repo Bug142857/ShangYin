@@ -165,16 +165,18 @@ object DoubanClient {
     }
 
     /** 检测豆瓣反爬/限流页面并抛出明确异常
-     *  豆瓣被触发反爬时返回的页面通常包含以下关键词之一，此时 HTTP 200 但不是搜索结果 */
+     *  豆瓣被触发反爬时返回的页面通常包含以下关键词之一，此时 HTTP 200 但不是搜索结果。
+     *  实测还有一种"空壳反爬"：HTTP 200，页面只有页脚版权（约 1KB），无搜索结果、无 window.__DATA__。
+     *  这种页面包含 "all rights reserved" + "北京豆网科技" 但不含任何搜索结果标志性元素。 */
     private fun detectBlockPageAndThrow(html: String) {
         if (html.isBlank()) {
             evictConnections()
-            throw IOException("返回内容为空（可能被限流，请稍后重试）")
+            throw IOException("返回内容为空（疑似被限流，请稍后重试）")
         }
         val blockKeywords = listOf(
             "sec.douban.com", "异常请求", "访问过于频繁", "请稍后再试",
             "请输入验证码", "captcha", "robot", "机器人验证",
-            "检测到", "安全验证", "页面不存在", "429", "forbidden"
+            "检测到", "安全验证", "页面不存在", "forbidden"
         )
         val lower = html.lowercase()
         val hit = blockKeywords.firstOrNull { lower.contains(it.lowercase()) }
@@ -182,6 +184,16 @@ object DoubanClient {
             // 清理被污染的连接池，下次请求重建连接（否则复用被标记的连接会持续失败）
             evictConnections()
             throw IOException("豆瓣反爬拦截（$hit），请稍后重试或在设置里配置登录 Cookie")
+        }
+        // 空壳反爬：页面很短且只含版权页脚，没有搜索结果元素
+        // 实测 subject_search 被反爬时返回 ~1.5KB 页面，含 "all rights reserved" 但无 window.__DATA__ / 无 div.result
+        if (html.length < 3000 &&
+            lower.contains("all rights reserved") &&
+            !html.contains("window.__DATA__") &&
+            !html.contains("div class=\"result\"")
+        ) {
+            evictConnections()
+            throw IOException("豆瓣反爬拦截（空壳页面），请稍后重试或在设置里配置登录 Cookie")
         }
     }
 
@@ -249,9 +261,15 @@ object DoubanClient {
             throw IOException("搜索数据 JSON 解析失败，已自动重试")
         }
         val items = o["items"]?.jsonArray ?: run {
-            // 诊断：items 不存在时打印 JSON 的 key 列表，方便定位豆瓣页面结构变化
-            android.util.Log.w("Douban", "searchSubjectPage: no 'items' key, keys=${o.keys.joinToString(",")}")
-            return emptyList()
+            // 豆瓣反爬时可能返回带 window.__DATA__ 的 JSON，但里面没有 items 字段
+            // 抛异常触发上层重试，不要静默返回空列表（否则用户以为没搜到，Toast 也不显示）
+            android.util.Log.w("Douban", "searchSubjectPage: no 'items' key, keys=${o.keys.joinToString(",")}, html_len=${html.length}")
+            evictConnections()
+            throw IOException("搜索结果为空（可能被反爬，已重试）")
+        }
+        if (items.isEmpty()) {
+            // items 是空数组：可能是真实无结果，也可能是反爬。打印日志便于诊断
+            android.util.Log.w("Douban", "searchSubjectPage: items is empty, html_len=${html.length}, first 300=${html.take(300)}")
         }
         val wantMovie = category == Category.MOVIE
         val wantTv = category == Category.TV
