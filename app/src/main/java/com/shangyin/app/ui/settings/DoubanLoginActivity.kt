@@ -185,6 +185,32 @@ private fun LoginMenu(
     }
 }
 
+/** 合并多个域名的 cookie 字符串（去重） */
+private fun collectDoubanCookies(cm: CookieManager): String {
+    val domains = listOf(
+        "https://accounts.douban.com/",
+        "https://www.douban.com/",
+        "https://movie.douban.com/",
+        "https://book.douban.com/",
+        "https://m.douban.com/"
+    )
+    val all = LinkedHashMap<String, String>()
+    for (d in domains) {
+        val raw = cm.getCookie(d) ?: continue
+        raw.split(";").forEach { part ->
+            val idx = part.indexOf('=')
+            if (idx > 0) {
+                val k = part.substring(0, idx).trim()
+                val v = part.substring(idx + 1).trim()
+                if (k.isNotEmpty() && !all.containsKey(k)) {
+                    all[k] = v
+                }
+            }
+        }
+    }
+    return all.entries.joinToString("; ") { "${it.key}=${it.value}" }
+}
+
 /** WebView 登录：打开豆瓣登录页，检测登录成功后自动提取 cookie */
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -196,6 +222,30 @@ private fun WebViewLoginScreen(
 ) {
     var loading by remember { mutableStateOf(true) }
     val cookieManager = CookieManager.getInstance()
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    // 页面销毁时清理 WebView
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            webViewRef?.let { wv ->
+                wv.stopLoading()
+                wv.settings.javaScriptEnabled = false
+                wv.clearHistory()
+                wv.removeAllViews()
+                (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                wv.destroy()
+                webViewRef = null
+            }
+        }
+    }
+
+    /** 尝试从 CookieManager 提取登录 cookie 并保存 */
+    fun tryExtractCookies(): Boolean {
+        val merged = collectDoubanCookies(cookieManager)
+        android.util.Log.d("DoubanLogin", "merged cookie: $merged")
+        if (merged.isBlank()) return false
+        return DoubanClient.saveCookieString(merged)
+    }
 
     Scaffold(
         topBar = {
@@ -207,21 +257,15 @@ private fun WebViewLoginScreen(
                     }
                 },
                 actions = {
+                    Button(onClick = { webViewRef?.reload() }) {
+                        Text("刷新")
+                    }
                     Button(
                         onClick = {
-                            // 用户手动触发：从 CookieManager 提取 cookie 并尝试保存
-                            val cookie = cookieManager.getCookie("https://accounts.douban.com/")
-                                ?: cookieManager.getCookie("https://www.douban.com/")
-                            android.util.Log.d("DoubanLogin", "manual extract cookie: $cookie")
-                            if (!cookie.isNullOrBlank()) {
-                                val ok = DoubanClient.saveCookieString(cookie)
-                                if (ok) {
-                                    onLoginSuccess()
-                                } else {
-                                    onError("未检测到登录态，请先完成登录")
-                                }
+                            if (tryExtractCookies()) {
+                                onLoginSuccess()
                             } else {
-                                onError("未检测到 Cookie")
+                                onError("未检测到登录态，请先完成登录")
                             }
                         }
                     ) {
@@ -235,13 +279,13 @@ private fun WebViewLoginScreen(
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
+                        webViewRef = this
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.cacheMode = WebSettings.LOAD_DEFAULT
                         settings.userAgentString =
                             "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
-                        // 接受所有 cookie
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
 
@@ -254,42 +298,25 @@ private fun WebViewLoginScreen(
                                 loading = false
                                 android.util.Log.d("DoubanLogin", "WebView onPageFinished: $url")
 
-                                // 检测是否跳转到登录成功后的页面
-                                // 豆瓣登录成功后可能跳转到 home 或者 profile 页面
                                 val u = url ?: return
                                 if (u.contains("douban.com") &&
                                     !u.contains("passport/login") &&
                                     !u.contains("accounts.douban.com/passport") &&
                                     !u.contains("captcha")
                                 ) {
-                                    // 检查 cookie 里有没有 ck 或 dbcl
-                                    run {
-                                        val cookie = cookieManager.getCookie(u)
-                                        android.util.Log.d("DoubanLogin", "cookie after redirect: $cookie")
-                                        if (!cookie.isNullOrBlank()) {
-                                            val hasLoginCookie = cookie.contains("dbcl") || cookie.contains("dbcl2")
-                                            val hasCk = cookie.contains("ck=")
-                                            if (hasCk || hasLoginCookie) {
-                                                val ok = DoubanClient.saveCookieString(cookie)
-                                                if (ok) {
-                                                    onLoginSuccess()
-                                                    return@run
-                                                }
-                                            }
-                                        }
+                                    // 多域名合并 cookie 后检查
+                                    val merged = collectDoubanCookies(cookieManager)
+                                    android.util.Log.d("DoubanLogin", "auto check merged: $merged")
+                                    val hasLoginCookie = merged.contains("dbcl") || merged.contains("dbcl2")
+                                    val hasCk = Regex("""\bck=""").containsMatchIn(merged)
+                                    if (hasCk || hasLoginCookie) {
+                                        val ok = DoubanClient.saveCookieString(merged)
+                                        if (ok) onLoginSuccess()
                                     }
                                 }
                             }
-
-                            override fun shouldOverrideUrlLoading(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): Boolean {
-                                return super.shouldOverrideUrlLoading(view, request)
-                            }
                         }
 
-                        // 加载豆瓣登录页
                         loadUrl("https://accounts.douban.com/passport/login")
                     }
                 },
