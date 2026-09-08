@@ -1,7 +1,6 @@
 package com.shangyin.app.ui.settings
 
 import android.annotation.SuppressLint
-import android.app.Activity
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.webkit.CookieManager
@@ -15,12 +14,9 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Button
@@ -29,7 +25,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -37,24 +32,19 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.shangyin.app.data.douban.DoubanClient
+import com.shangyin.app.ui.settings.SettingsStore.isDoubanLoggedIn
 import com.shangyin.app.ui.theme.ShangYinTheme
-import kotlinx.coroutines.launch
 
 /**
- * 豆瓣登录 Activity：提供三种登录方式
- * 1) WebView 浏览器登录（推荐，可处理验证码）
- * 2) 账号密码登录（直调 API，可能触发 captcha_required）
- * 3) 手动粘贴 Cookie（从浏览器开发者工具复制 cookie 字符串）
+ * 豆瓣登录 Activity：内嵌 WebView 加载豆瓣官方登录页
+ * 登录成功后自动提取 ck/dbcl 保存到 SettingsStore，下次打开自动保持登录
  */
 class DoubanLoginActivity : ComponentActivity() {
 
@@ -62,125 +52,14 @@ class DoubanLoginActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             ShangYinTheme {
-                LoginHost(
+                DoubanLoginContent(
                     onBack = { finish() },
                     onLoginSuccess = {
-                        setResult(Activity.RESULT_OK)
                         Toast.makeText(this, "豆瓣登录成功", Toast.LENGTH_SHORT).show()
                         finish()
-                    },
-                    onError = { msg ->
-                        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                     }
                 )
             }
-        }
-    }
-}
-
-/** 登录方式 */
-private enum class LoginMode { MENU, WEBVIEW, PASSWORD, MANUAL }
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LoginHost(
-    onBack: () -> Unit,
-    onLoginSuccess: () -> Unit,
-    onError: (String) -> Unit
-) {
-    var mode by remember { mutableStateOf(LoginMode.MENU) }
-
-    when (mode) {
-        LoginMode.MENU -> LoginMenu(
-            onBack = onBack,
-            onPick = { mode = it }
-        )
-        LoginMode.WEBVIEW -> WebViewLoginScreen(
-            onBack = { mode = LoginMode.MENU },
-            onLoginSuccess = onLoginSuccess,
-            onError = onError
-        )
-        LoginMode.PASSWORD -> PasswordLoginScreen(
-            onBack = { mode = LoginMode.MENU },
-            onLoginSuccess = onLoginSuccess,
-            onError = onError
-        )
-        LoginMode.MANUAL -> ManualCookieScreen(
-            onBack = { mode = LoginMode.MENU },
-            onLoginSuccess = onLoginSuccess,
-            onError = onError
-        )
-    }
-}
-
-/** 登录方式选择菜单 */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LoginMenu(
-    onBack: () -> Unit,
-    onPick: (LoginMode) -> Unit
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("豆瓣登录") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        }
-    ) { pad ->
-        Column(
-            modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            Text(
-                "选择登录方式",
-                style = MaterialTheme.typography.titleLarge
-            )
-            Text(
-                "登录后搜索结果更全",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
-            )
-
-            Button(
-                onClick = { onPick(LoginMode.WEBVIEW) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("浏览器登录（推荐）")
-            }
-            Text(
-                "在内置浏览器中打开豆瓣登录页，支持图形验证码",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
-            )
-
-            Button(
-                onClick = { onPick(LoginMode.PASSWORD) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("账号密码登录")
-            }
-            Text(
-                "直接提交手机号/邮箱 + 密码，可能触发验证码拦截",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
-            )
-
-            Button(
-                onClick = { onPick(LoginMode.MANUAL) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("手动输入 Cookie")
-            }
-            Text(
-                "从桌面浏览器登录豆瓣后，在开发者工具里复制 Cookie 字符串粘贴",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.outline
-            )
         }
     }
 }
@@ -202,13 +81,77 @@ private fun collectDoubanCookies(cm: CookieManager): String {
             if (idx > 0) {
                 val k = part.substring(0, idx).trim()
                 val v = part.substring(idx + 1).trim()
-                if (k.isNotEmpty() && !all.containsKey(k)) {
-                    all[k] = v
-                }
+                if (k.isNotEmpty() && !all.containsKey(k)) all[k] = v
             }
         }
     }
     return all.entries.joinToString("; ") { "${it.key}=${it.value}" }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DoubanLoginContent(
+    onBack: () -> Unit,
+    onLoginSuccess: () -> Unit
+) {
+    // 已登录 → 显示已登录界面；未登录 → WebView
+    var alreadyLoggedIn by remember { mutableStateOf(isDoubanLoggedIn) }
+
+    if (alreadyLoggedIn) {
+        AlreadyLoggedInScreen(
+            onBack = onBack,
+            onLogout = {
+                SettingsStore.clearDoubanLogin()
+                DoubanClient.onCookieChanged()
+                // 清掉 WebView 的 cookie
+                CookieManager.getInstance().apply {
+                    removeAllCookies(null)
+                    flush()
+                }
+                alreadyLoggedIn = false
+            }
+        )
+    } else {
+        WebViewLoginScreen(
+            onBack = onBack,
+            onLoginSuccess = onLoginSuccess
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AlreadyLoggedInScreen(
+    onBack: () -> Unit,
+    onLogout: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("豆瓣登录") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text("豆瓣已登录", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "搜索将使用登录态，结果更全",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+            Button(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
+                Text("退出登录")
+            }
+        }
+    }
 }
 
 /** WebView 登录：打开豆瓣登录页，检测登录成功后自动提取 cookie */
@@ -217,14 +160,13 @@ private fun collectDoubanCookies(cm: CookieManager): String {
 @Composable
 private fun WebViewLoginScreen(
     onBack: () -> Unit,
-    onLoginSuccess: () -> Unit,
-    onError: (String) -> Unit
+    onLoginSuccess: () -> Unit
 ) {
+    val ctx = LocalContext.current
     var loading by remember { mutableStateOf(true) }
     val cookieManager = CookieManager.getInstance()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
-    // 页面销毁时清理 WebView
     androidx.compose.runtime.DisposableEffect(Unit) {
         onDispose {
             webViewRef?.let { wv ->
@@ -236,15 +178,19 @@ private fun WebViewLoginScreen(
                 wv.destroy()
                 webViewRef = null
             }
+            // 确保 cookie 持久化到磁盘
+            cookieManager.flush()
         }
     }
 
-    /** 尝试从 CookieManager 提取登录 cookie 并保存 */
+    /** 尝试提取并保存 cookie，成功返回 true */
     fun tryExtractCookies(): Boolean {
         val merged = collectDoubanCookies(cookieManager)
         android.util.Log.d("DoubanLogin", "merged cookie: $merged")
         if (merged.isBlank()) return false
-        return DoubanClient.saveCookieString(merged)
+        val ok = DoubanClient.saveCookieString(merged)
+        if (ok) cookieManager.flush() // 持久化 WebView cookie
+        return ok
     }
 
     Scaffold(
@@ -257,20 +203,20 @@ private fun WebViewLoginScreen(
                     }
                 },
                 actions = {
-                    Button(onClick = { webViewRef?.reload() }) {
-                        Text("刷新")
-                    }
+                    Button(onClick = { webViewRef?.reload() }) { Text("刷新") }
                     Button(
                         onClick = {
                             if (tryExtractCookies()) {
                                 onLoginSuccess()
                             } else {
-                                onError("未检测到登录态，请先完成登录")
+                                Toast.makeText(
+                                    ctx,
+                                    "未检测到登录态，请先完成登录",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
-                    ) {
-                        Text("已登录")
-                    }
+                    ) { Text("已登录") }
                 }
             )
         }
@@ -304,17 +250,24 @@ private fun WebViewLoginScreen(
                                     !u.contains("accounts.douban.com/passport") &&
                                     !u.contains("captcha")
                                 ) {
-                                    // 多域名合并 cookie 后检查
                                     val merged = collectDoubanCookies(cookieManager)
                                     android.util.Log.d("DoubanLogin", "auto check merged: $merged")
                                     val hasLoginCookie = merged.contains("dbcl") || merged.contains("dbcl2")
                                     val hasCk = Regex("""\bck=""").containsMatchIn(merged)
                                     if (hasCk || hasLoginCookie) {
                                         val ok = DoubanClient.saveCookieString(merged)
-                                        if (ok) onLoginSuccess()
+                                        if (ok) {
+                                            cookieManager.flush()
+                                            onLoginSuccess()
+                                        }
                                     }
                                 }
                             }
+
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean = super.shouldOverrideUrlLoading(view, request)
                         }
 
                         loadUrl("https://accounts.douban.com/passport/login")
@@ -324,238 +277,8 @@ private fun WebViewLoginScreen(
             )
 
             if (loading) {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center)
-                )
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
             }
-        }
-    }
-}
-
-/** 账号密码登录 */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PasswordLoginScreen(
-    onBack: () -> Unit,
-    onLoginSuccess: () -> Unit,
-    onError: (String) -> Unit
-) {
-    var account by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("账号密码登录") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        }
-    ) { pad ->
-        Box(modifier = Modifier.fillMaxSize().padding(pad)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    "使用豆瓣账号密码登录",
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Text(
-                    "支持手机号或邮箱作为账号\n如果遇到验证码拦截，请改用浏览器登录",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                OutlinedTextField(
-                    value = account,
-                    onValueChange = { account = it },
-                    label = { Text("手机号或邮箱") },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Text,
-                        imeAction = ImeAction.Next
-                    ),
-                    singleLine = true
-                )
-
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("密码") },
-                    modifier = Modifier.fillMaxWidth(),
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onDone = {
-                            tryPasswordLogin(
-                                account, password, loading, { loading = it },
-                                onLoginSuccess, onError, scope
-                            )
-                        }
-                    ),
-                    singleLine = true
-                )
-
-                Button(
-                    onClick = {
-                        tryPasswordLogin(
-                            account, password, loading, { loading = it },
-                            onLoginSuccess, onError, scope
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !loading && account.isNotBlank() && password.isNotBlank()
-                ) {
-                    if (loading) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.padding(0.dp), strokeWidth = 2.dp)
-                            Text("登录中…")
-                        }
-                    } else {
-                        Text("登录豆瓣")
-                    }
-                }
-            }
-        }
-    }
-}
-
-/** 手动粘贴 Cookie */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ManualCookieScreen(
-    onBack: () -> Unit,
-    onLoginSuccess: () -> Unit,
-    onError: (String) -> Unit
-) {
-    var cookieText by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("手动输入 Cookie") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-                    }
-                }
-            )
-        }
-    ) { pad ->
-        Box(modifier = Modifier.fillMaxSize().padding(pad)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Text(
-                    "如何获取 Cookie",
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Text(
-                    "1) 在电脑浏览器登录 douban.com\n" +
-                        "2) 按 F12 打开开发者工具 → Network 标签\n" +
-                        "3) 刷新页面，点开第一条请求 → Headers → Request Headers\n" +
-                        "4) 复制 Cookie: 后面的整行内容粘贴到下方\n\n" +
-                        "Cookie 中必须包含 ck 和 dbcl 才算有效登录态",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.outline
-                )
-
-                OutlinedTextField(
-                    value = cookieText,
-                    onValueChange = { cookieText = it },
-                    label = { Text("粘贴 Cookie 字符串") },
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                    minLines = 6,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Text,
-                        imeAction = ImeAction.Done
-                    )
-                )
-
-                Button(
-                    onClick = {
-                        val text = cookieText.trim()
-                        if (text.isBlank()) {
-                            onError("请先粘贴 Cookie")
-                            return@Button
-                        }
-                        // 如果用户粘贴的是 "Cookie: xxx" 格式，提取 xxx 部分
-                        val cleaned = text.removePrefix("Cookie:").removePrefix("cookie:").trim()
-                        loading = true
-                        try {
-                            val ok = DoubanClient.saveCookieString(cleaned)
-                            if (ok) {
-                                onLoginSuccess()
-                            } else {
-                                onError("Cookie 中未找到 ck/dbcl，请确认已登录豆瓣后再复制")
-                            }
-                        } finally {
-                            loading = false
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !loading && cookieText.isNotBlank()
-                ) {
-                    Text("保存并登录")
-                }
-            }
-        }
-    }
-}
-
-private fun tryPasswordLogin(
-    account: String,
-    password: String,
-    loading: Boolean,
-    setLoading: (Boolean) -> Unit,
-    onSuccess: () -> Unit,
-    onError: (String) -> Unit,
-    scope: kotlinx.coroutines.CoroutineScope
-) {
-    if (loading) return
-    if (account.isBlank() || password.isBlank()) {
-        onError("请输入账号和密码")
-        return
-    }
-    setLoading(true)
-    scope.launch {
-        try {
-            val result = DoubanClient.loginByPassword(account.trim(), password)
-            when (result) {
-                is com.shangyin.app.data.douban.LoginResult.Success -> onSuccess()
-                is com.shangyin.app.data.douban.LoginResult.Failure -> {
-                    val msg = result.message
-                    if (msg.contains("captcha", ignoreCase = true) ||
-                        msg.contains("验证", ignoreCase = true)
-                    ) {
-                        onError("豆瓣要求验证码，请返回改用【浏览器登录】")
-                    } else {
-                        onError(msg)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            onError("登录异常：${e.message}")
-        } finally {
-            setLoading(false)
         }
     }
 }
