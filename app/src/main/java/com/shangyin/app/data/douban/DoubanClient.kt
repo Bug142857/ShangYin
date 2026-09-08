@@ -1246,6 +1246,30 @@ object DoubanClient {
 
             return@withContext LoginResult.Success(ck, dbcl)
         }
+
+    /**
+     * 从 Cookie 字符串（WebView CookieManager 或用户手动粘贴）解析并保存登录信息。
+     * @return true 表示成功提取到 ck 或 dbcl
+     */
+    fun saveCookieString(cookieStr: String): Boolean {
+        if (cookieStr.isBlank()) return false
+        val cookies = cookieStr.split(";").mapNotNull { part ->
+            val idx = part.indexOf('=')
+            if (idx <= 0) null
+            else part.substring(0, idx).trim() to part.substring(idx + 1).trim()
+        }
+        val ck = cookies.firstOrNull { it.first.equals("ck", ignoreCase = true) }?.second.orEmpty()
+        val hasDbcl = cookies.any { it.first.equals("dbcl", ignoreCase = true) || it.first.equals("dbcl2", ignoreCase = true) }
+        val filtered = cookies.filter { (k, _) ->
+            !k.equals("bid", ignoreCase = true) && !k.equals("ps", ignoreCase = true)
+        }
+        val finalStr = filtered.joinToString("; ") { "${it.first}=${it.second}" }
+        // 如果没有 dbcl 说明可能未完全登录
+        SettingsStore.doubanCookie = finalStr
+        SettingsStore.doubanCk = ck
+        onCookieChanged()
+        return ck.isNotBlank() || hasDbcl
+    }
 }
 
 /** 登录结果 */
