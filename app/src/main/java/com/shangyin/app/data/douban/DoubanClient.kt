@@ -64,8 +64,8 @@ object DoubanClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 随机 bid cookie，移动版条目页需要 */
-    private val bid: String = buildString {
+    /** 每次请求生成新的随机 bid cookie，避免长期固定被豆瓣反爬识别封禁 */
+    private fun nextBid(): String = buildString {
         val cs = ('a'..'z') + ('A'..'Z') + ('0'..'9')
         repeat(11) { append(cs.random()) }
     }
@@ -81,6 +81,7 @@ object DoubanClient {
                     .header("Accept-Language", "zh-CN,zh;q=0.9")
                 // 动态添加 Cookie（含登录态 cookie 时可搜索游戏等）
                 val cookie = runCatching { SettingsStore.doubanCookie }.getOrDefault("")
+                val bid = nextBid()
                 if (cookie.isNotBlank()) {
                     builder.header("Cookie", "$cookie; bid=$bid")
                 } else {
@@ -104,10 +105,11 @@ object DoubanClient {
 
     // ---------------- 搜索 ----------------
 
-    /** 按类型搜索豆瓣：走分类 subject_search 页面（解析 window.__DATA__ JSON） */
+    /** 按类型搜索豆瓣：走分类 subject_search 页面（解析 window.__DATA__ JSON）
+     *  失败时抛 IOException，由调用方决定如何提示用户（避免静默返回空结果让用户以为没搜到） */
     suspend fun search(category: Category, query: String): List<DoubanResult> =
         withContext(Dispatchers.IO) {
-            runCatching { searchSubjectPage(category, query) }.getOrDefault(emptyList())
+            searchSubjectPage(category, query)
         }
 
     /**
@@ -217,41 +219,40 @@ object DoubanClient {
 
     // ---------------- 人物搜索 ----------------
 
-    /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接 */
+    /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接
+     *  失败时抛 IOException，让 UI 提示用户网络异常 */
     suspend fun searchCelebrities(query: String): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
-            runCatching {
-                val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
-                val html = httpGetMobile(url, "https://www.douban.com/")
-                val doc = Jsoup.parse(html, url)
-                doc.select("div.result").mapNotNull { result ->
-                    val link = result.selectFirst("h3 a[href]") ?: return@mapNotNull null
-                    val rawHref = link.attr("abs:href")
-                    // 1) 先把整段 HTML (含 onclick) URL 解码，豆瓣的 link2 跳转链接内部还做了 HTML entity &amp;
-                    val combined = rawHref + " " + (runCatching {
-                        java.net.URLDecoder.decode(link.attr("onclick"), "UTF-8")
-                    }.getOrDefault("")) + " " + java.net.URLDecoder.decode(
-                        rawHref.replace("&amp;", "&"), "UTF-8"
-                    )
-                    val id = Regex("""(?:personage|celebrity)/(\d+)""").find(combined)?.groupValues?.get(1)
-                        ?: Regex("""sid[:\s]+(\d+)""").find(combined)?.groupValues?.get(1)
-                        ?: return@mapNotNull null
-                    val name = link.text().trim()
-                    if (name.isBlank()) return@mapNotNull null
-                    val avatar = result.selectFirst("div.pic img[src]")?.attr("abs:src")
-                    // 副标题："作者 编剧 / 肠子 搏击俱乐部" 等
-                    val sub = result.select("div.content > p").map { it.text().trim() }
-                        .filter { it.isNotBlank() }
-                        .joinToString(" / ")
-                    DoubanCelebrity(
-                        id = id,
-                        name = name,
-                        latinName = "",
-                        role = sub,
-                        avatarUrl = avatar
-                    )
-                }.distinctBy { it.id }
-            }.getOrDefault(emptyList())
+            val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
+            val html = httpGetMobile(url, "https://www.douban.com/")
+            val doc = Jsoup.parse(html, url)
+            doc.select("div.result").mapNotNull { result ->
+                val link = result.selectFirst("h3 a[href]") ?: return@mapNotNull null
+                val rawHref = link.attr("abs:href")
+                // 1) 先把整段 HTML (含 onclick) URL 解码，豆瓣的 link2 跳转链接内部还做了 HTML entity &amp;
+                val combined = rawHref + " " + (runCatching {
+                    java.net.URLDecoder.decode(link.attr("onclick"), "UTF-8")
+                }.getOrDefault("")) + " " + java.net.URLDecoder.decode(
+                    rawHref.replace("&amp;", "&"), "UTF-8"
+                )
+                val id = Regex("""(?:personage|celebrity)/(\d+)""").find(combined)?.groupValues?.get(1)
+                    ?: Regex("""sid[:\s]+(\d+)""").find(combined)?.groupValues?.get(1)
+                    ?: return@mapNotNull null
+                val name = link.text().trim()
+                if (name.isBlank()) return@mapNotNull null
+                val avatar = result.selectFirst("div.pic img[src]")?.attr("abs:src")
+                // 副标题："作者 编剧 / 肠子 搏击俱乐部" 等
+                val sub = result.select("div.content > p").map { it.text().trim() }
+                    .filter { it.isNotBlank() }
+                    .joinToString(" / ")
+                DoubanCelebrity(
+                    id = id,
+                    name = name,
+                    latinName = "",
+                    role = sub,
+                    avatarUrl = avatar
+                )
+            }.distinctBy { it.id }
         }
 
     // ---------------- 条目详情 ----------------

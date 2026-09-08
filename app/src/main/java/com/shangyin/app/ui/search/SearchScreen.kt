@@ -117,21 +117,23 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
             celebrityResults = emptyList()
             try {
                 if (selectedCat == "人物") {
-                    celebrityResults = runCatching { DoubanClient.searchCelebrities(q) }.getOrDefault(emptyList())
+                    // 失败抛 IOException 由这里捕获，提示用户网络问题，而不是静默返回空
+                    celebrityResults = DoubanClient.searchCelebrities(q)
                 } else {
                     val list = if (selectedCat == "影视") {
-                        // 影视 = 电影 + 电视剧
-                        val movie = runCatching { DoubanClient.search(Category.MOVIE, q) }.getOrDefault(emptyList())
-                        val tv = runCatching { DoubanClient.search(Category.TV, q) }.getOrDefault(emptyList())
+                        // 影视 = 电影 + 电视剧，任一失败都提示用户
+                        val movie = DoubanClient.search(Category.MOVIE, q)
+                        val tv = DoubanClient.search(Category.TV, q)
                         movie + tv
                     } else {
                         val cat = Category.values().firstOrNull { it.label == selectedCat }
-                        if (cat != null) runCatching { DoubanClient.search(cat, q) }.getOrDefault(emptyList()) else emptyList()
+                        if (cat != null) DoubanClient.search(cat, q) else emptyList()
                     }
                     results = list.distinctBy { it.category.name + it.doubanId }
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, "搜索出错：${e.message}", Toast.LENGTH_LONG).show()
+                // 提示具体错误，避免用户以为没搜到（实际是网络异常/IP被限）
+                Toast.makeText(context, "搜索失败：${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
             } finally {
                 SearchCache.results = results
                 SearchCache.celebrities = celebrityResults

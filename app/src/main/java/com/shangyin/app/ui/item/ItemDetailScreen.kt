@@ -84,10 +84,14 @@ private object DetailCache {
     val photos = java.util.concurrent.ConcurrentHashMap<String, List<DoubanPhoto>>()
     val interests = java.util.concurrent.ConcurrentHashMap<String, List<DoubanInterest>>()
 
-    /** 清空空结果缓存，解决"查不到再查也没有"的问题 */
+    /** 清空空结果缓存，解决"查不到再查也没有"的问题
+     *  使用迭代器安全删除，避免多 launch 并发时 entries 视图与 map 修改冲突 */
     fun clearEmptyKeys() {
         listOf(celebrities, videos, photos, interests).forEach { map ->
-            map.entries.filter { it.value.isEmpty() }.forEach { map.remove(it.key) }
+            val it = map.entries.iterator()
+            while (it.hasNext()) {
+                if (it.next().value.isEmpty()) it.remove()
+            }
         }
     }
 }
