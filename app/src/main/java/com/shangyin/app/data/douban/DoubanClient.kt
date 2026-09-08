@@ -35,6 +35,12 @@ import java.io.File
  */
 object DoubanClient {
 
+    /** 桌面 Chrome UA：和浏览器一致，避免被豆瓣按移动 UA 区别拦截 */
+    private const val DESKTOP_UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+
+    /** Rexxar API 用移动 UA（豆瓣 App 内部接口需要移动 UA） */
     private const val MOBILE_UA =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 " +
             "(KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
@@ -66,8 +72,8 @@ object DoubanClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 每次请求生成新的随机 bid cookie，避免长期固定被豆瓣反爬识别封禁 */
-    private fun nextBid(): String = buildString {
+    /** 启动时生成一次固定 bid，模拟真实用户（真实用户的 bid 不会每次请求都变） */
+    private val fixedBid: String = buildString {
         val cs = ('a'..'z') + ('A'..'Z') + ('0'..'9')
         repeat(11) { append(cs.random()) }
     }
@@ -78,25 +84,37 @@ object DoubanClient {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            // 连接池：减少频繁建连被识别为爬虫；单主机最大 5 并发
             .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
             .addInterceptor { chain ->
-                val builder = chain.request().newBuilder()
-                    .header("User-Agent", MOBILE_UA)
-                    .header("Accept-Language", "zh-CN,zh;q=0.9")
+                val req = chain.request()
+                val isRexxar = req.url.host == "m.douban.com" && req.url.encodedPath.contains("/rexxar/")
+                val builder = req.newBuilder()
+                    .header("User-Agent", if (isRexxar) MOBILE_UA else DESKTOP_UA)
+                    .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                    // 不设 Accept-Encoding：OkHttp 自动加 gzip 并解压；手动设会导致不解压
+                    .header("Upgrade-Insecure-Requests", "1")
+                    .header("Sec-Fetch-Dest", "document")
+                    .header("Sec-Fetch-Mode", "navigate")
+                    .header("Sec-Fetch-Site", "none")
+                    .header("Sec-Fetch-User", "?1")
                 // 动态添加 Cookie（含登录态 cookie 时可搜索游戏等）
                 val cookie = runCatching { SettingsStore.doubanCookie }.getOrDefault("")
-                val bid = nextBid()
                 if (cookie.isNotBlank()) {
-                    builder.header("Cookie", "$cookie; bid=$bid")
+                    builder.header("Cookie", "$cookie; bid=$fixedBid")
                 } else {
-                    builder.header("Cookie", "bid=$bid")
+                    builder.header("Cookie", "bid=$fixedBid")
                 }
-                // 同主机请求限流：间隔至少 400ms，避免短时间大量请求触发反爬
-                throttleHost(chain.request().url.host)
+                // 同主机请求限流：间隔至少 500ms，避免短时间大量请求触发反爬
+                throttleHost(req.url.host)
                 chain.proceed(builder.build())
             }
             .build()
+    }
+
+    /** 清理连接池：检测到反爬时调用，断开所有被污染的连接，下次请求重建 */
+    private fun evictConnections() {
+        runCatching { mobileClient.connectionPool.evictAll() }
     }
 
     /** 每个主机上次请求时间戳 */
@@ -121,7 +139,10 @@ object DoubanClient {
     /** 检测豆瓣反爬/限流页面并抛出明确异常
      *  豆瓣被触发反爬时返回的页面通常包含以下关键词之一，此时 HTTP 200 但不是搜索结果 */
     private fun detectBlockPageAndThrow(html: String) {
-        if (html.isBlank()) throw IOException("返回内容为空（可能被限流，请稍后重试）")
+        if (html.isBlank()) {
+            evictConnections()
+            throw IOException("返回内容为空（可能被限流，请稍后重试）")
+        }
         val blockKeywords = listOf(
             "sec.douban.com", "异常请求", "访问过于频繁", "请稍后再试",
             "请输入验证码", "captcha", "robot", "机器人验证",
@@ -130,6 +151,8 @@ object DoubanClient {
         val lower = html.lowercase()
         val hit = blockKeywords.firstOrNull { lower.contains(it.lowercase()) }
         if (hit != null) {
+            // 清理被污染的连接池，下次请求重建连接（否则复用被标记的连接会持续失败）
+            evictConnections()
             throw IOException("豆瓣反爬拦截（$hit），请稍后重试或在设置里配置登录 Cookie")
         }
     }
@@ -148,10 +171,18 @@ object DoubanClient {
     // ---------------- 搜索 ----------------
 
     /** 按类型搜索豆瓣：走分类 subject_search 页面（解析 window.__DATA__ JSON）
-     *  失败时抛 IOException，由调用方决定如何提示用户（避免静默返回空结果让用户以为没搜到） */
+     *  失败时抛 IOException，由调用方决定如何提示用户（避免静默返回空结果让用户以为没搜到）
+     *  自带一次重试：反爬拦截时清理连接池 + 等 1 秒后重试 */
     suspend fun search(category: Category, query: String): List<DoubanResult> =
         withContext(Dispatchers.IO) {
-            searchSubjectPage(category, query)
+            runCatching { searchSubjectPage(category, query) }
+                .recover {
+                    // 第一次失败：清理连接池，等 1 秒重试一次
+                    evictConnections()
+                    Thread.sleep(1000)
+                    searchSubjectPage(category, query)
+                }
+                .getOrThrow()
         }
 
     /**
@@ -169,7 +200,10 @@ object DoubanClient {
         // 检测反爬/限流页面：豆瓣被触发时返回不含 window.__DATA__ 的页面
         if (!html.contains("window.__DATA__")) {
             detectBlockPageAndThrow(html)
-            return emptyList()
+            // 没命中已知反爬关键词但确实不是搜索结果页 → 抛异常触发重试
+            // （正常无结果页面也会有 window.__DATA__，只是 items 为空）
+            evictConnections()
+            throw IOException("返回页面非搜索结果（可能被反爬拦截），已自动重试")
         }
         // 提取 window.__DATA__ = { ... };
         val match = Regex("""window\.__DATA__\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL).find(html)
@@ -269,41 +303,51 @@ object DoubanClient {
     // ---------------- 人物搜索 ----------------
 
     /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接
-     *  失败时抛 IOException，让 UI 提示用户网络异常 */
+     *  失败时抛 IOException，让 UI 提示用户网络异常。自带一次重试。 */
     suspend fun searchCelebrities(query: String): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
-            val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
-            val html = httpGetMobile(url, "https://www.douban.com/")
-            detectBlockPageAndThrow(html)
-            val doc = Jsoup.parse(html, url)
-            doc.select("div.result").mapNotNull { result ->
-                val link = result.selectFirst("h3 a[href]") ?: return@mapNotNull null
-                val rawHref = link.attr("abs:href")
-                // 1) 先把整段 HTML (含 onclick) URL 解码，豆瓣的 link2 跳转链接内部还做了 HTML entity &amp;
-                val combined = rawHref + " " + (runCatching {
-                    java.net.URLDecoder.decode(link.attr("onclick"), "UTF-8")
-                }.getOrDefault("")) + " " + java.net.URLDecoder.decode(
-                    rawHref.replace("&amp;", "&"), "UTF-8"
-                )
-                val id = Regex("""(?:personage|celebrity)/(\d+)""").find(combined)?.groupValues?.get(1)
-                    ?: Regex("""sid[:\s]+(\d+)""").find(combined)?.groupValues?.get(1)
-                    ?: return@mapNotNull null
-                val name = link.text().trim()
-                if (name.isBlank()) return@mapNotNull null
-                val avatar = result.selectFirst("div.pic img[src]")?.attr("abs:src")
-                // 副标题："作者 编剧 / 肠子 搏击俱乐部" 等
-                val sub = result.select("div.content > p").map { it.text().trim() }
-                    .filter { it.isNotBlank() }
-                    .joinToString(" / ")
-                DoubanCelebrity(
-                    id = id,
-                    name = name,
-                    latinName = "",
-                    role = sub,
-                    avatarUrl = avatar
-                )
-            }.distinctBy { it.id }
+            runCatching { doSearchCelebrities(query) }
+                .recover {
+                    evictConnections()
+                    Thread.sleep(1000)
+                    doSearchCelebrities(query)
+                }
+                .getOrThrow()
         }
+
+    private fun doSearchCelebrities(query: String): List<DoubanCelebrity> {
+        val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
+        val html = httpGetMobile(url, "https://www.douban.com/")
+        detectBlockPageAndThrow(html)
+        val doc = Jsoup.parse(html, url)
+        return doc.select("div.result").mapNotNull { result ->
+            val link = result.selectFirst("h3 a[href]") ?: return@mapNotNull null
+            val rawHref = link.attr("abs:href")
+            // 1) 先把整段 HTML (含 onclick) URL 解码，豆瓣的 link2 跳转链接内部还做了 HTML entity &amp;
+            val combined = rawHref + " " + (runCatching {
+                java.net.URLDecoder.decode(link.attr("onclick"), "UTF-8")
+            }.getOrDefault("")) + " " + java.net.URLDecoder.decode(
+                rawHref.replace("&amp;", "&"), "UTF-8"
+            )
+            val id = Regex("""(?:personage|celebrity)/(\d+)""").find(combined)?.groupValues?.get(1)
+                ?: Regex("""sid[:\s]+(\d+)""").find(combined)?.groupValues?.get(1)
+                ?: return@mapNotNull null
+            val name = link.text().trim()
+            if (name.isBlank()) return@mapNotNull null
+            val avatar = result.selectFirst("div.pic img[src]")?.attr("abs:src")
+            // 副标题："作者 编剧 / 肠子 搏击俱乐部" 等
+            val sub = result.select("div.content > p").map { it.text().trim() }
+                .filter { it.isNotBlank() }
+                .joinToString(" / ")
+            DoubanCelebrity(
+                id = id,
+                name = name,
+                latinName = "",
+                role = sub,
+                avatarUrl = avatar
+            )
+        }.distinctBy { it.id }
+    }
 
     // ---------------- 条目详情 ----------------
 
