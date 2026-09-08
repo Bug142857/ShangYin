@@ -72,6 +72,34 @@ object DoubanClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    /**
+     * 在文本中找到 marker 之后的第一个 '{'，然后用括号匹配提取完整的 JSON 对象字符串。
+     * 不能用正则 \{.*?\}（非贪婪只匹配到第一个 }，嵌套 JSON 会截断）。
+     */
+    private fun extractJsonObjectAfter(text: String, marker: String): String? {
+        val start = text.indexOf(marker)
+        if (start < 0) return null
+        val braceStart = text.indexOf('{', start + marker.length)
+        if (braceStart < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in braceStart until text.length) {
+            val c = text[i]
+            if (escaped) { escaped = false; continue }
+            when {
+                c == '\\' -> escaped = true
+                c == '"' -> inString = !inString
+                !inString && c == '{' -> depth++
+                !inString && c == '}' -> {
+                    depth--
+                    if (depth == 0) return text.substring(braceStart, i + 1)
+                }
+            }
+        }
+        return null
+    }
+
     /** 启动时生成一次固定 bid，模拟真实用户（真实用户的 bid 不会每次请求都变） */
     private val fixedBid: String = buildString {
         val cs = ('a'..'z') + ('A'..'Z') + ('0'..'9')
@@ -172,17 +200,23 @@ object DoubanClient {
 
     /** 按类型搜索豆瓣：走分类 subject_search 页面（解析 window.__DATA__ JSON）
      *  失败时抛 IOException，由调用方决定如何提示用户（避免静默返回空结果让用户以为没搜到）
-     *  自带一次重试：反爬拦截时清理连接池 + 等 1 秒后重试 */
+     *  自带 2 次重试：反爬拦截时清理连接池 + 递增延迟后重试 */
     suspend fun search(category: Category, query: String): List<DoubanResult> =
         withContext(Dispatchers.IO) {
-            runCatching { searchSubjectPage(category, query) }
-                .recover {
-                    // 第一次失败：清理连接池，等 1 秒重试一次
+            var lastErr: Throwable? = null
+            for (attempt in 0..2) {
+                if (attempt > 0) {
                     evictConnections()
-                    Thread.sleep(1000)
-                    searchSubjectPage(category, query)
+                    Thread.sleep(1000L * attempt) // 第1次等1秒，第2次等2秒
                 }
-                .getOrThrow()
+                try {
+                    return@withContext searchSubjectPage(category, query)
+                } catch (e: Throwable) {
+                    lastErr = e
+                    android.util.Log.w("Douban", "search ${category.name}/$query attempt $attempt failed: ${e.message}")
+                }
+            }
+            throw lastErr ?: IOException("搜索失败")
         }
 
     /**
@@ -201,16 +235,24 @@ object DoubanClient {
         if (!html.contains("window.__DATA__")) {
             detectBlockPageAndThrow(html)
             // 没命中已知反爬关键词但确实不是搜索结果页 → 抛异常触发重试
-            // （正常无结果页面也会有 window.__DATA__，只是 items 为空）
             evictConnections()
             throw IOException("返回页面非搜索结果（可能被反爬拦截），已自动重试")
         }
-        // 提取 window.__DATA__ = { ... };
-        val match = Regex("""window\.__DATA__\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL).find(html)
-            ?: return emptyList()
-        val jsonStr = match.groupValues[1]
-        val o = runCatching { json.parseToJsonElement(jsonStr).jsonObject }.getOrNull() ?: return emptyList()
-        val items = o["items"]?.jsonArray ?: return emptyList()
+        // 提取 window.__DATA__ = { ... }; —— 用括号匹配提取完整 JSON（不能用非贪婪正则，嵌套{}会截断）
+        val jsonStr = extractJsonObjectAfter(html, "window.__DATA__")
+            ?: run {
+                evictConnections()
+                throw IOException("解析搜索数据失败，已自动重试")
+            }
+        val o = runCatching { json.parseToJsonElement(jsonStr).jsonObject }.getOrNull() ?: run {
+            evictConnections()
+            throw IOException("搜索数据 JSON 解析失败，已自动重试")
+        }
+        val items = o["items"]?.jsonArray ?: run {
+            // 诊断：items 不存在时打印 JSON 的 key 列表，方便定位豆瓣页面结构变化
+            android.util.Log.w("Douban", "searchSubjectPage: no 'items' key, keys=${o.keys.joinToString(",")}")
+            return emptyList()
+        }
         val wantMovie = category == Category.MOVIE
         val wantTv = category == Category.TV
         return items.mapNotNull { el ->
@@ -303,16 +345,23 @@ object DoubanClient {
     // ---------------- 人物搜索 ----------------
 
     /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接
-     *  失败时抛 IOException，让 UI 提示用户网络异常。自带一次重试。 */
+     *  失败时抛 IOException，让 UI 提示用户网络异常。自带 2 次重试。 */
     suspend fun searchCelebrities(query: String): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
-            runCatching { doSearchCelebrities(query) }
-                .recover {
+            var lastErr: Throwable? = null
+            for (attempt in 0..2) {
+                if (attempt > 0) {
                     evictConnections()
-                    Thread.sleep(1000)
-                    doSearchCelebrities(query)
+                    Thread.sleep(1000L * attempt)
                 }
-                .getOrThrow()
+                try {
+                    return@withContext doSearchCelebrities(query)
+                } catch (e: Throwable) {
+                    lastErr = e
+                    android.util.Log.w("Douban", "searchCelebrities $query attempt $attempt failed: ${e.message}")
+                }
+            }
+            throw lastErr ?: IOException("搜索失败")
         }
 
     private fun doSearchCelebrities(query: String): List<DoubanCelebrity> {
