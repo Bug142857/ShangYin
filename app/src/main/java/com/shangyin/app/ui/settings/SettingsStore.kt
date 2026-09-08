@@ -11,6 +11,7 @@ object SettingsStore {
     private const val KEY_THEME = "theme"
     private const val KEY_AVATAR_URI = "avatar_uri"
     private const val KEY_DOUBAN_COOKIE = "douban_cookie"
+    private const val KEY_DOUBAN_CK = "douban_ck"
 
     const val THEME_FOLLOW = "follow"
     const val THEME_LIGHT = "light"
@@ -43,8 +44,22 @@ object SettingsStore {
         get() = sp.getString(KEY_AVATAR_URI, "").orEmpty()
         set(v) = sp.edit().putString(KEY_AVATAR_URI, v).apply()
 
-    /** 豆瓣 Cookie（用于搜索游戏/人物等需要登录的接口） */
+    /** 豆瓣 Cookie（完整字符串，用于请求头 Cookie） */
     var doubanCookie: String
         get() = sp.getString(KEY_DOUBAN_COOKIE, "").orEmpty()
         set(v) = sp.edit().putString(KEY_DOUBAN_COOKIE, v).apply()
+
+    /** 豆瓣 ck 值（登录态的关键 token，单独存储用于搜索 URL 参数） */
+    var doubanCk: String
+        get() = sp.getString(KEY_DOUBAN_CK, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_DOUBAN_CK, v).apply()
+
+    /** 是否已登录豆瓣（有 dbcl cookie 才算登录态） */
+    val isDoubanLoggedIn: Boolean
+        get() = doubanCookie.contains("dbcl", ignoreCase = true) && doubanCk.isNotBlank()
+
+    /** 清除豆瓣登录信息 */
+    fun clearDoubanLogin() {
+        sp.edit().remove(KEY_DOUBAN_COOKIE).remove(KEY_DOUBAN_CK).apply()
+    }
 }

@@ -93,6 +93,21 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     var pendingExportJson by remember { mutableStateOf<String?>(null) }
     var showClearCache by remember { mutableStateOf(false) }
     var cacheSize by remember { mutableStateOf("计算中…") }
+    var showDoubanLogout by remember { mutableStateOf(false) }
+    // 豆瓣登录状态（keyInvalidate 触发重组）
+    var doubanLoginKey by remember { mutableStateOf(0) }
+    val isDoubanLoggedIn = remember(doubanLoginKey) { SettingsStore.isDoubanLoggedIn }
+    // 登录 Activity 回调：登录成功后刷新状态并重建 OkHttpClient
+    val loginLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        doubanLoginKey++  // 触发重组重新读登录状态
+        // 登录态变化后强制重建 OkHttpClient，让新 Cookie 立即生效
+        com.shangyin.app.data.douban.DoubanClient.onCookieChanged()
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            Toast.makeText(context, "豆瓣登录成功", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     LaunchedEffect(Unit) {
         cacheSize = runCatching {
@@ -268,6 +283,45 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                             themeLabel(currentTheme),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
+            // 豆瓣登录
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        if (isDoubanLoggedIn) {
+                            // 已登录：长按提示退出登录（这里用点击弹确认框更直观）
+                            showDoubanLogout = true
+                        } else {
+                            // 未登录：启动登录 Activity
+                            loginLauncher.launch(Intent(context, DoubanLoginActivity::class.java))
+                        }
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Person,
+                        contentDescription = null,
+                        tint = if (isDoubanLoggedIn) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("豆瓣登录", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (isDoubanLoggedIn) "已登录，搜索结果更全" else "未登录，登录后搜索结果更全",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isDoubanLoggedIn) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Icon(
@@ -477,6 +531,27 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             },
             confirmButton = { TextButton(onClick = { showThemePicker = false }) { Text("完成") } }
+        )
+    }
+
+    // 退出豆瓣登录确认
+    if (showDoubanLogout) {
+        AlertDialog(
+            onDismissRequest = { showDoubanLogout = false },
+            title = { Text("退出豆瓣登录") },
+            text = { Text("退出后搜索结果可能不完整（部分条目需要登录才能搜到），确认退出？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        SettingsStore.clearDoubanLogin()
+                        doubanLoginKey++
+                        com.shangyin.app.data.douban.DoubanClient.onCookieChanged()
+                        showDoubanLogout = false
+                        Toast.makeText(context, "已退出豆瓣登录", Toast.LENGTH_SHORT).show()
+                    }
+                ) { Text("退出", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { showDoubanLogout = false }) { Text("取消") } }
         )
     }
 }

@@ -106,44 +106,78 @@ object DoubanClient {
         repeat(11) { append(cs.random()) }
     }
 
-    private val mobileClient: OkHttpClient by lazy {
-        OkHttpClient.Builder()
-            .cache(Cache(File(com.shangyin.app.App.instance.cacheDir, "http"), 20 * 1024 * 1024L))
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
-            .addInterceptor { chain ->
-                val req = chain.request()
-                val isRexxar = req.url.host == "m.douban.com" && req.url.encodedPath.contains("/rexxar/")
-                val builder = req.newBuilder()
-                    .header("User-Agent", if (isRexxar) MOBILE_UA else DESKTOP_UA)
-                    .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-                    // 不设 Accept-Encoding：OkHttp 自动加 gzip 并解压；手动设会导致不解压
-                    .header("Upgrade-Insecure-Requests", "1")
-                    .header("Sec-Fetch-Dest", "document")
-                    .header("Sec-Fetch-Mode", "navigate")
-                    .header("Sec-Fetch-Site", "none")
-                    .header("Sec-Fetch-User", "?1")
-                // 动态添加 Cookie（含登录态 cookie 时可搜索游戏等）
-                val cookie = runCatching { SettingsStore.doubanCookie }.getOrDefault("")
-                if (cookie.isNotBlank()) {
-                    builder.header("Cookie", "$cookie; bid=$fixedBid")
-                } else {
-                    builder.header("Cookie", "bid=$fixedBid")
-                }
-                // 同主机请求限流：间隔至少 500ms，避免短时间大量请求触发反爬
-                throttleHost(req.url.host)
-                chain.proceed(builder.build())
+    /**
+     * OkHttpClient 实例：用 @Volatile + 双重检查锁实现可重建。
+     * evictAll() 只清连接，但 OkHttp 内部连接池状态可能仍被污染，
+     * 彻底重建 client（含新的 ConnectionPool + 新的 Cache 实例）才是"核武器"级别清理。
+     * 在连续失败 N 次后调用 recreateClient()，下次请求会拿全新客户端。
+     */
+    @Volatile
+    private var clientRef: OkHttpClient? = null
+
+    private val clientLock = Any()
+
+    private val mobileClient: OkHttpClient
+        get() = clientRef ?: synchronized(clientLock) {
+            clientRef ?: buildClient().also { clientRef = it }
+        }
+
+    private fun buildClient(): OkHttpClient = OkHttpClient.Builder()
+        .cache(Cache(File(com.shangyin.app.App.instance.cacheDir, "http"), 20 * 1024 * 1024L))
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+        .addInterceptor { chain ->
+            val req = chain.request()
+            val isRexxar = req.url.host == "m.douban.com" && req.url.encodedPath.contains("/rexxar/")
+            val builder = req.newBuilder()
+                .header("User-Agent", if (isRexxar) MOBILE_UA else DESKTOP_UA)
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+                // 不设 Accept-Encoding：OkHttp 自动加 gzip 并解压；手动设会导致不解压
+                .header("Upgrade-Insecure-Requests", "1")
+                .header("Sec-Fetch-Dest", "document")
+                .header("Sec-Fetch-Mode", "navigate")
+                .header("Sec-Fetch-Site", "none")
+                .header("Sec-Fetch-User", "?1")
+            // 动态添加 Cookie（含登录态 cookie 时可搜索游戏等）
+            val cookie = runCatching { SettingsStore.doubanCookie }.getOrDefault("")
+            if (cookie.isNotBlank()) {
+                builder.header("Cookie", "$cookie; bid=$fixedBid")
+            } else {
+                builder.header("Cookie", "bid=$fixedBid")
             }
-            .build()
-    }
+            // 同主机请求限流：间隔至少 500ms，避免短时间大量请求触发反爬
+            throttleHost(req.url.host)
+            chain.proceed(builder.build())
+        }
+        .build()
 
     /** 清理连接池：检测到反爬时调用，断开所有被污染的连接，下次请求重建 */
     private fun evictConnections() {
         runCatching { mobileClient.connectionPool.evictAll() }
     }
+
+    /**
+     * 彻底重建 OkHttpClient（核武器级清理）：
+     * 关闭旧 client（连接池 + 缓存），用全新的 ConnectionPool 和 Cache 实例替换。
+     * 适用于：连续多次失败、登录态变化、Cookie 更新后。
+     */
+    fun recreateClient() {
+        synchronized(clientLock) {
+            runCatching { clientRef?.connectionPool?.evictAll() }
+            runCatching {
+                // 关闭旧 cache（否则旧 cache 文件句柄不释放，新 client 无法复用同一目录）
+                clientRef?.cache?.close()
+            }
+            // 重建新 client（下次请求时会懒加载新连接池和新 Cache 实例）
+            clientRef = null
+        }
+    }
+
+    /** 登录状态或 Cookie 变化时，强制重建客户端让新 Cookie 立即生效 */
+    fun onCookieChanged() = recreateClient()
 
     /** 每个主机上次请求时间戳 */
     private val hostLastRequest = java.util.concurrent.ConcurrentHashMap<String, AtomicLong>()
@@ -212,14 +246,21 @@ object DoubanClient {
 
     /** 按类型搜索豆瓣：走分类 subject_search 页面（解析 window.__DATA__ JSON）
      *  失败时抛 IOException，由调用方决定如何提示用户（避免静默返回空结果让用户以为没搜到）
-     *  自带 2 次重试：反爬拦截时清理连接池 + 递增延迟后重试 */
+     *  自带 3 次重试，最后 1 次会彻底重建 OkHttpClient（核武器级清理，避免持续失败） */
     suspend fun search(category: Category, query: String): List<DoubanResult> =
         withContext(Dispatchers.IO) {
             var lastErr: Throwable? = null
-            for (attempt in 0..2) {
+            for (attempt in 0..3) {
                 if (attempt > 0) {
-                    evictConnections()
-                    Thread.sleep(1000L * attempt) // 第1次等1秒，第2次等2秒
+                    // 第1次轻清理+1秒延迟；第2次2秒；第3次彻底重建client+3秒
+                    if (attempt >= 3) {
+                        android.util.Log.w("Douban", "search attempt=$attempt: recreating OkHttpClient (nuclear)")
+                        recreateClient()
+                        Thread.sleep(3000)
+                    } else {
+                        evictConnections()
+                        Thread.sleep(1000L * attempt)
+                    }
                 }
                 try {
                     return@withContext searchSubjectPage(category, query)
@@ -228,18 +269,27 @@ object DoubanClient {
                     android.util.Log.w("Douban", "search ${category.name}/$query attempt $attempt failed: ${e.message}")
                 }
             }
+            // 所有重试失败后，最后再重建一次 client（避免下次搜索沿用被污染的连接）
+            recreateClient()
             throw lastErr ?: IOException("搜索失败")
         }
 
     /**
-     * 从电影/图书/音乐 subject_search 页面解析 window.__DATA__ JSON。
-     * 游戏没有 subject_search 页面，暂时走 www.douban.com/j/search_suggest 关键词建议。
+     * 从电影/图书 subject_search 页面解析 window.__DATA__ JSON。
+     * 游戏走 www.douban.com/search?cat=3114 HTML 解析。
+     * 登录态时 URL 自动加 ck 参数（豆瓣登录用户的搜索结果更全）。
      */
     private fun searchSubjectPage(category: Category, query: String): List<DoubanResult> {
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        // 登录态时加 ck 参数（豆瓣搜索 API 要求 ck 跟在 URL 查询串里）
+        val ckParam = runCatching {
+            val ck = SettingsStore.doubanCk
+            if (ck.isNotBlank()) "&ck=$ck" else ""
+        }.getOrDefault("")
         val (url, referer) = when (category) {
-            Category.MOVIE -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
-            Category.TV -> "https://movie.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1002" to "https://movie.douban.com/"
-            Category.BOOK -> "https://book.douban.com/subject_search?search_text=${URLEncoder.encode(query, "UTF-8")}&cat=1001" to "https://book.douban.com/"
+            Category.MOVIE -> "https://movie.douban.com/subject_search?search_text=$encodedQuery&cat=1002$ckParam" to "https://movie.douban.com/"
+            Category.TV -> "https://movie.douban.com/subject_search?search_text=$encodedQuery&cat=1002$ckParam" to "https://movie.douban.com/"
+            Category.BOOK -> "https://book.douban.com/subject_search?search_text=$encodedQuery&cat=1001$ckParam" to "https://book.douban.com/"
             Category.GAME -> return searchGameWeb(query)
         }
         val html = httpGetMobile(url, referer)
@@ -363,14 +413,19 @@ object DoubanClient {
     // ---------------- 人物搜索 ----------------
 
     /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接
-     *  失败时抛 IOException，让 UI 提示用户网络异常。自带 2 次重试。 */
+     *  失败时抛 IOException，让 UI 提示用户网络异常。自带 3 次重试，最后一次彻底重建客户端。 */
     suspend fun searchCelebrities(query: String): List<DoubanCelebrity> =
         withContext(Dispatchers.IO) {
             var lastErr: Throwable? = null
-            for (attempt in 0..2) {
+            for (attempt in 0..3) {
                 if (attempt > 0) {
-                    evictConnections()
-                    Thread.sleep(1000L * attempt)
+                    if (attempt >= 3) {
+                        recreateClient()
+                        Thread.sleep(3000)
+                    } else {
+                        evictConnections()
+                        Thread.sleep(1000L * attempt)
+                    }
                 }
                 try {
                     return@withContext doSearchCelebrities(query)
@@ -379,11 +434,17 @@ object DoubanClient {
                     android.util.Log.w("Douban", "searchCelebrities $query attempt $attempt failed: ${e.message}")
                 }
             }
+            recreateClient()
             throw lastErr ?: IOException("搜索失败")
         }
 
     private fun doSearchCelebrities(query: String): List<DoubanCelebrity> {
-        val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}"
+        // 登录态时加 ck 参数（人物搜索对登录态更友好）
+        val ckParam = runCatching {
+            val ck = SettingsStore.doubanCk
+            if (ck.isNotBlank()) "&ck=$ck" else ""
+        }.getOrDefault("")
+        val url = "https://www.douban.com/search?cat=1065&q=${URLEncoder.encode(query, "UTF-8")}$ckParam"
         val html = httpGetMobile(url, "https://www.douban.com/")
         detectBlockPageAndThrow(html)
         val doc = Jsoup.parse(html, url)
