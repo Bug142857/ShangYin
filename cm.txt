@@ -1,0 +1,4 @@
+chore: 版本号升至 v1.7.0 — 登录功能重构后首次正式发版
+
+- versionCode 37 → 38
+- versionName 1.6.3 → 1.7.0
