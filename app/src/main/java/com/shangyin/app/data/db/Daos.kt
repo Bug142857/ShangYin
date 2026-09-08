@@ -113,6 +113,13 @@ interface ListDao {
     @Query("SELECT * FROM list_items WHERE listId = :listId ORDER BY orderIndex ASC")
     suspend fun getOrder(listId: Long): List<ListItemEntity>
 
+    /** 按加入清单顺序取条目（list_items 隐式 rowid 倒序 = 最近加入在前） */
+    @Query(
+        "SELECT items.* FROM list_items JOIN items ON items.id = list_items.itemId " +
+            "WHERE list_items.listId IN (:listIds) ORDER BY list_items.rowid DESC"
+    )
+    suspend fun getItemsInByAddedDesc(listIds: List<Long>): List<CollectionItemEntity>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertItem(crossRef: ListItemEntity): Long
 

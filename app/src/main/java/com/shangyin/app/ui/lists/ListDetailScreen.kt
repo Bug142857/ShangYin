@@ -132,6 +132,8 @@ private fun dragReorderModifier(
             val lpJob = scope.launch {
                 delay(viewConfiguration.longPressTimeoutMillis)
                 state = 1
+                // 长按触发时震一下，提醒用户"可以拖动了"；进入拖动阶段就不再震
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             }
             do {
                 val event = awaitPointerEvent()
@@ -148,7 +150,6 @@ private fun dragReorderModifier(
                     if (abs(dy) > viewConfiguration.touchSlop / 2 || abs(dx) > viewConfiguration.touchSlop / 2) {
                         state = 2
                         onDragStateChange(itemId)
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         totalY = 0f
                         totalX = 0f
                         c.consume()

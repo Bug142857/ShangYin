@@ -48,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -73,6 +74,7 @@ private var lastSelectedListId: Long = -1L
 fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
 
     var query by rememberSaveable { mutableStateOf("") }
     // 用单例缓存搜索结果，避免导航后丢失
@@ -106,6 +108,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
             Toast.makeText(context, "请先选择要搜索的分类", Toast.LENGTH_SHORT).show()
             return
         }
+        keyboard?.hide()  // 搜索后自动收起键盘
         query = ""  // 搜索后自动清空输入框
         scope.launch {
             searching = true

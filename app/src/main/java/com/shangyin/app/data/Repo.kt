@@ -159,20 +159,26 @@ object Repo {
     /** 显示某清单的子清单 */
     fun observeSubListsWithMeta(listId: Long): Flow<List<ListWithMeta>> = listDao.observeSubListsWithMeta(listId)
 
-    /** 获取每个分类方块的前N个条目封面（含子清单递归） */
+    /** 获取每个分类方块的前N个条目封面（按"最近加入清单"顺序，跨所有子层级） */
     suspend fun getListCovers(listId: Long, limit: Int = 4): List<String> {
-        val covers = mutableListOf<String>()
-        val visited = mutableSetOf<Long>()
-        suspend fun collectRecursive(id: Long) {
-            if (id in visited || covers.size >= limit) return
-            visited += id
-            val directItems = getAllItemsIn(id)
-            directItems.forEach { it.coverUrl?.takeIf { c -> c.isNotBlank() && covers.none { it == c } }?.let { covers.add(it) } }
-            if (covers.size >= limit) return
+        // BFS 收集所有层级的 listId
+        val allListIds = mutableSetOf<Long>()
+        val queue = ArrayDeque<Long>()
+        queue.addLast(listId)
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            if (id in allListIds) continue
+            allListIds.add(id)
             val subs = listDao.observeSubListsWithMeta(id).first()
-            subs.forEach { collectRecursive(it.list.id) }
+            subs.forEach { queue.addLast(it.list.id) }
         }
-        collectRecursive(listId)
+        // 按 list_items.rowid DESC 取 = 最近加入清单的条目在前，新增封面有新鲜感
+        val items = if (allListIds.isEmpty()) emptyList() else listDao.getItemsInByAddedDesc(allListIds.toList())
+        val covers = mutableListOf<String>()
+        for (it in items) {
+            it.coverUrl?.takeIf { c -> c.isNotBlank() && c !in covers }?.let { covers.add(it) }
+            if (covers.size >= limit) break
+        }
         return covers.take(limit)
     }
 
