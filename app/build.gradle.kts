@@ -14,8 +14,8 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 36
-        versionName = "1.6.2"
+        versionCode = 37
+        versionName = "1.6.3"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
@@ -67,6 +67,14 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    // APK 文件名: 老郑分享-版本号.apk
+    applicationVariants.all {
+        outputs.all {
+            val out = this as com.android.build.gradle.internal.api.ApkVariantOutputImpl
+            out.outputFileName = "老郑分享-${versionName}.apk"
         }
     }
 }

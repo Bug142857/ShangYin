@@ -1143,4 +1143,113 @@ object DoubanClient {
         }
         return null
     }
+
+    // ---------------- 豆瓣登录（OkHttp 直调 API） ----------------
+
+    /**
+     * 豆瓣密码登录（手机号或邮箱 + 密码）。
+     * 流程：
+     * 1) 先 GET 登录页拿初始 Cookie（bid 等）
+     * 2) POST j/mobile/login/basic 提交 name/password
+     * 3) 从响应 Set-Cookie 头提取 ck/dbcl 保存到 SettingsStore
+     *
+     * 豆瓣 API: https://accounts.douban.com/j/mobile/login/basic
+     * POST 参数: ck(空), name(账号), password(密码), remember(true/false)
+     */
+    suspend fun loginByPassword(name: String, password: String): LoginResult =
+        withContext(Dispatchers.IO) {
+            val loginClient = OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(15, TimeUnit.SECONDS)
+                .cookieJar(object : okhttp3.CookieJar {
+                    // 登录专用 client，不需要持久 cookie jar，直接从响应头提取
+                    private val cookies = mutableListOf<okhttp3.Cookie>()
+                    override fun saveFromResponse(url: okhttp3.HttpUrl, cookies: List<okhttp3.Cookie>) {
+                        this.cookies.addAll(cookies)
+                    }
+                    override fun loadForRequest(url: okhttp3.HttpUrl): List<okhttp3.Cookie> = cookies
+                    fun all(): List<okhttp3.Cookie> = cookies.toList()
+                })
+                .build()
+
+            // 1) 先 GET 登录页，拿初始 bid cookie
+            val initReq = Request.Builder()
+                .url("https://accounts.douban.com/passport/login")
+                .header("User-Agent", DESKTOP_UA)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .header("Referer", "https://www.douban.com/")
+                .build()
+            val initResp = loginClient.newCall(initReq).execute()
+            initResp.body?.close()
+
+            // 2) POST 登录
+            val form = okhttp3.FormBody.Builder()
+                .add("ck", "")
+                .add("name", name)
+                .add("password", password)
+                .add("remember", "true")
+                .add("ticket", "")
+                .build()
+            val loginReq = Request.Builder()
+                .url("https://accounts.douban.com/j/mobile/login/basic")
+                .post(form)
+                .header("User-Agent", DESKTOP_UA)
+                .header("Accept", "application/json, text/plain, */*")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+                .header("Referer", "https://accounts.douban.com/passport/login")
+                .header("X-Requested-With", "XMLHttpRequest")
+                .build()
+            val loginResp = loginClient.newCall(loginReq).execute()
+            val body = loginResp.body?.string().orEmpty()
+            android.util.Log.d("DoubanLogin", "login response: $body")
+
+            // 3) 解析 JSON 响应
+            val jsonObj = runCatching {
+                json.parseToJsonElement(body).jsonObject
+            }.getOrNull()
+
+            // 豆瓣返回格式: {"r":0,"user_info":{...}} 表示成功; {"r":1,"err_msg":"xxx"} 表示失败
+            val r = jsonObj?.get("r")?.jsonPrimitive?.intOrNull ?: -1
+            if (r != 0) {
+                val errMsg = jsonObj?.get("err_msg")?.jsonPrimitive?.contentOrNull
+                    ?: jsonObj?.get("message")?.jsonPrimitive?.contentOrNull
+                    ?: "登录失败（错误码 r=$r）"
+                return@withContext LoginResult.Failure(errMsg)
+            }
+
+            // 4) 从 CookieJar 提取 ck / dbcl
+            val jar = loginClient.cookieJar as? okhttp3.CookieJar ?: return@withContext LoginResult.Failure("登录成功但无法提取 Cookie")
+            val domain = runCatching {
+                okhttp3.HttpUrl.Builder()
+                    .scheme("https")
+                    .host("accounts.douban.com")
+                    .build()
+            }.getOrNull() ?: return@withContext LoginResult.Failure("登录成功但无法提取 Cookie")
+            val cookieList = jar.loadForRequest(domain)
+            val ck = cookieList.firstOrNull { it.name == "ck" }?.value.orEmpty()
+            val dbcl = cookieList.firstOrNull { it.name == "dbcl" || it.name == "dbcl2" }?.value.orEmpty()
+
+            android.util.Log.d("DoubanLogin", "login success: ck=$ck, dbcl=$dbcl")
+
+            if (ck.isBlank() && dbcl.isBlank()) {
+                // 虽然 r=0 但没拿到 cookie，可能被反爬或需要验证码
+                return@withContext LoginResult.Failure("登录成功但未获取到登录 Cookie（可能需要验证码）")
+            }
+
+            // 5) 保存到 SettingsStore
+            // 拼完整 Cookie 字符串
+            val cookieStr = cookieList.joinToString("; ") { "${it.name}=${it.value}" }
+            SettingsStore.doubanCookie = cookieStr
+            SettingsStore.doubanCk = ck
+            onCookieChanged()
+
+            return@withContext LoginResult.Success(ck, dbcl)
+        }
+}
+
+/** 登录结果 */
+sealed class LoginResult {
+    data class Success(val ck: String, val dbcl: String) : LoginResult()
+    data class Failure(val message: String) : LoginResult()
 }
