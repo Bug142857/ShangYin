@@ -12,6 +12,10 @@ object SettingsStore {
     private const val KEY_AVATAR_URI = "avatar_uri"
     private const val KEY_DOUBAN_COOKIE = "douban_cookie"
     private const val KEY_DOUBAN_CK = "douban_ck"
+    private const val KEY_WEBDAV_URL = "webdav_url"
+    private const val KEY_WEBDAV_USER = "webdav_user"
+    private const val KEY_WEBDAV_PASS = "webdav_pass"
+    private const val KEY_LAST_CLOUD_SYNC = "last_cloud_sync"
 
     const val THEME_FOLLOW = "follow"
     const val THEME_LIGHT = "light"
@@ -70,5 +74,34 @@ object SettingsStore {
     /** 清除豆瓣登录信息 */
     fun clearDoubanLogin() {
         sp.edit().remove(KEY_DOUBAN_COOKIE).remove(KEY_DOUBAN_CK).apply()
+    }
+
+    // ---------- WebDAV 云同步 ----------
+
+    /** WebDAV 服务器地址，如 https://dav.jianguoyun.com/dav/ */
+    var webdavUrl: String
+        get() = sp.getString(KEY_WEBDAV_URL, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_WEBDAV_URL, v).apply()
+
+    var webdavUser: String
+        get() = sp.getString(KEY_WEBDAV_USER, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_WEBDAV_USER, v).apply()
+
+    /** WebDAV 应用密码（坚果云等用应用密码而非登录密码） */
+    var webdavPass: String
+        get() = sp.getString(KEY_WEBDAV_PASS, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_WEBDAV_PASS, v).apply()
+
+    /** 上次云同步成功时间戳（0 = 从未同步） */
+    var lastCloudSync: Long
+        get() = sp.getLong(KEY_LAST_CLOUD_SYNC, 0L)
+        set(v) = sp.edit().putLong(KEY_LAST_CLOUD_SYNC, v).apply()
+
+    val isWebdavConfigured: Boolean
+        get() = webdavUrl.isNotBlank() && webdavUser.isNotBlank() && webdavPass.isNotBlank()
+
+    fun clearWebdavConfig() {
+        sp.edit().remove(KEY_WEBDAV_URL).remove(KEY_WEBDAV_USER)
+            .remove(KEY_WEBDAV_PASS).remove(KEY_LAST_CLOUD_SYNC).apply()
     }
 }

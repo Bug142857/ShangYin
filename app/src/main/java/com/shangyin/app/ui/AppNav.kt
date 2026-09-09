@@ -29,6 +29,7 @@ import com.shangyin.app.ui.home.HomeScreen
 import com.shangyin.app.ui.item.ItemDetailScreen
 import com.shangyin.app.ui.lists.ListDetailScreen
 import com.shangyin.app.ui.search.SearchScreen
+import com.shangyin.app.ui.settings.CloudSyncScreen
 import com.shangyin.app.ui.settings.SettingsScreen
 
 /**
@@ -128,6 +129,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 )
             }
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
+            composable("cloudsync") { CloudSyncScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

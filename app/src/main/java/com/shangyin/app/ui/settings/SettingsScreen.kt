@@ -25,6 +25,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.List
@@ -62,16 +63,16 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
-import com.shangyin.app.data.ExportData
 import com.shangyin.app.data.Repo
+import com.shangyin.app.data.buildExportJson
+import com.shangyin.app.data.parseExportJson
 import com.shangyin.app.data.db.ItemListEntity
 import com.shangyin.app.ui.lists.NameListDialog
+import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -333,6 +334,40 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
+            // 云同步
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        nav.safeNavigate("cloudsync")
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Cloud, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("云同步", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (SettingsStore.isWebdavConfigured) {
+                                val t = SettingsStore.lastCloudSync
+                                if (t > 0L) "已连接 WebDAV · 上次同步 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(t))}"
+                                else "已连接 WebDAV · 从未同步"
+                            } else "用 WebDAV 网盘备份/恢复，换手机不丢数据",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
             // 导出
             Card {
                 Row(
@@ -562,125 +597,7 @@ private fun themeLabel(theme: String): String = when (theme) {
     else -> "跟随系统"
 }
 
-// ---------- JSON 序列化 ----------
-
-private fun buildExportJson(data: ExportData): String {
-    val root = JSONObject().apply {
-        put("version", 1)
-        put("exportAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
-    }
-
-    val itemsArr = JSONArray()
-    data.items.forEach { e ->
-        itemsArr.put(JSONObject().apply {
-            put("id", e.id)
-            put("category", e.category)
-            put("doubanId", e.doubanId)
-            put("title", e.title)
-            put("subTitle", e.subTitle)
-            put("year", e.year)
-            put("doubanRating", e.doubanRating)
-            put("coverUrl", e.coverUrl)
-            put("summary", e.summary)
-            put("info", e.info)
-            put("directors", e.directors)
-            put("casts", e.casts)
-            put("genres", e.genres)
-            put("doubanUrl", e.doubanUrl)
-            put("status", e.status)
-            put("myRating", e.myRating)
-            put("note", e.note)
-            put("createdAt", e.createdAt)
-            put("updatedAt", e.updatedAt)
-        })
-    }
-    root.put("items", itemsArr)
-
-    val listsArr = JSONArray()
-    data.lists.forEach { l ->
-        listsArr.put(JSONObject().apply {
-            put("id", l.id)
-            put("name", l.name)
-            put("description", l.description)
-            put("coverUrl", l.coverUrl)
-            put("parentId", l.parentId)
-            put("createdAt", l.createdAt)
-        })
-    }
-    root.put("lists", listsArr)
-
-    val relArr = JSONArray()
-    data.listItems.forEach { li ->
-        relArr.put(JSONObject().apply {
-            put("listId", li.listId)
-            put("itemId", li.itemId)
-            put("orderIndex", li.orderIndex)
-        })
-    }
-    root.put("listItems", relArr)
-
-    return root.toString(2)
-}
-
-private fun parseExportJson(json: String): ExportData {
-    val root = JSONObject(json)
-
-    val items = root.optJSONArray("items")?.let { arr ->
-        (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            com.shangyin.app.data.db.CollectionItemEntity(
-                id = o.getLong("id"),
-                category = o.optString("category", ""),
-                doubanId = o.optString("doubanId", ""),
-                title = o.optString("title", ""),
-                subTitle = o.optString("subTitle", ""),
-                year = o.optString("year", ""),
-                doubanRating = o.opt("doubanRating")?.let {
-                    if (it is Number) it.toFloat() else null
-                },
-                coverUrl = o.optString("coverUrl").ifBlank { null },
-                summary = o.optString("summary", ""),
-                info = o.optString("info", ""),
-                directors = o.optString("directors", ""),
-                casts = o.optString("casts", ""),
-                genres = o.optString("genres", ""),
-                doubanUrl = o.optString("doubanUrl").ifBlank { null },
-                status = o.optString("status", ""),
-                myRating = o.optInt("myRating", 0),
-                note = o.optString("note", ""),
-                createdAt = o.optLong("createdAt", System.currentTimeMillis()),
-                updatedAt = o.optLong("updatedAt", System.currentTimeMillis())
-            )
-        }
-    } ?: emptyList()
-
-    val lists = root.optJSONArray("lists")?.let { arr ->
-        (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            ItemListEntity(
-                id = o.getLong("id"),
-                name = o.optString("name", ""),
-                description = o.optString("description", ""),
-                coverUrl = o.optString("coverUrl").ifBlank { null },
-                parentId = o.opt("parentId")?.let { (it as? Number)?.toLong() },
-                createdAt = o.optLong("createdAt", System.currentTimeMillis())
-            )
-        }
-    } ?: emptyList()
-
-    val rels = root.optJSONArray("listItems")?.let { arr ->
-        (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            com.shangyin.app.data.db.ListItemEntity(
-                listId = o.getLong("listId"),
-                itemId = o.getLong("itemId"),
-                orderIndex = o.optInt("orderIndex", 0)
-            )
-        }
-    } ?: emptyList()
-
-    return ExportData(items, lists, rels)
-}
+// JSON 序列化（buildExportJson / parseExportJson）已抽到 data/ExportJson.kt，与云同步共用
 
 // ---------- 分类管理对话框 ----------
 
