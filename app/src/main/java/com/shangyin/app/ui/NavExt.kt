@@ -9,7 +9,7 @@ import androidx.navigation.NavController
 object NavGuard {
     @Volatile
     private var lastActionTime = 0L
-    private const val INTERVAL = 500L
+    private const val INTERVAL = 300L
 
     /** 是否允许执行一次导航/返回（带节流） */
     fun allow(): Boolean {

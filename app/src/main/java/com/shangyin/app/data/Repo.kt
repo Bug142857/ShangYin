@@ -161,7 +161,7 @@ object Repo {
 
     /** 获取每个分类方块的前N个条目封面（按"最近加入清单"顺序，跨所有子层级） */
     suspend fun getListCovers(listId: Long, limit: Int = 4): List<String> {
-        // BFS 收集所有层级的 listId
+        // BFS 收集所有层级的 listId（用一次性查询避免每层跑递归 CTE）
         val allListIds = mutableSetOf<Long>()
         val queue = ArrayDeque<Long>()
         queue.addLast(listId)
@@ -169,8 +169,8 @@ object Repo {
             val id = queue.removeFirst()
             if (id in allListIds) continue
             allListIds.add(id)
-            val subs = listDao.observeSubListsWithMeta(id).first()
-            subs.forEach { queue.addLast(it.list.id) }
+            val subs = listDao.getSubListsOnce(id)
+            subs.forEach { queue.addLast(it.id) }
         }
         // 按 list_items.rowid DESC 取 = 最近加入清单的条目在前，新增封面有新鲜感
         val items = if (allListIds.isEmpty()) emptyList() else listDao.getItemsInByAddedDesc(allListIds.toList())
@@ -184,12 +184,12 @@ object Repo {
 
     /** 如果清单本身没有条目，取子清单里第一个有封面的条目作为封面 */
     suspend fun getFallbackCoverFromChildren(listId: Long): String? {
-        val subs = listDao.observeSubListsWithMeta(listId).first()
+        val subs = listDao.getSubListsOnce(listId)
         for (sub in subs) {
             // 先看子清单自身的 coverUrl
-            sub.list.coverUrl?.takeIf { it.isNotBlank() }?.let { return it }
+            sub.coverUrl?.takeIf { it.isNotBlank() }?.let { return it }
             // 再看子清单里的条目封面
-            val items = getAllItemsIn(sub.list.id)
+            val items = listDao.observeItemsIn(sub.id).first()
             val cover = items.firstOrNull()?.coverUrl?.takeIf { it.isNotBlank() }
             if (cover != null) return cover
         }
@@ -279,7 +279,9 @@ object Repo {
     suspend fun clearOrphanItems(): Int {
         val orphanIds = listDao.getOrphanItemIds()
         if (orphanIds.isEmpty()) return 0
-        orphanIds.forEach { itemDao.deleteById(it) }
+        db.withTransaction {
+            orphanIds.forEach { itemDao.deleteById(it) }
+        }
         return orphanIds.size
     }
 

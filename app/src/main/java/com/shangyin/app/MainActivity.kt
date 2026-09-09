@@ -1,18 +1,12 @@
 package com.shangyin.app
 
+import android.content.SharedPreferences
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.core.view.WindowCompat
 import com.shangyin.app.ui.AppNav
 import com.shangyin.app.ui.settings.SettingsStore
@@ -20,39 +14,31 @@ import com.shangyin.app.ui.theme.ShangYinTheme
 
 class MainActivity : ComponentActivity() {
 
+    private val spListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key == "theme") runOnUiThread { recreate() }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        SettingsStore.registerListener(spListener)
         enableEdgeToEdge()
         setContent {
-            var forceDark by remember { mutableStateOf(SettingsStore.isDark) }
-            val dark = forceDark ?: isSystemInDarkTheme()
+            val forceDark = SettingsStore.isDark ?: isSystemInDarkTheme()
 
             val insets = WindowCompat.getInsetsController(window, window.decorView)
-            LaunchedEffect(dark) {
-                insets.isAppearanceLightStatusBars = !dark
-                insets.isAppearanceLightNavigationBars = !dark
+            LaunchedEffect(forceDark) {
+                insets.isAppearanceLightStatusBars = !forceDark
+                insets.isAppearanceLightNavigationBars = !forceDark
             }
 
-            // 主题监听
-            LaunchedEffect(Unit) {
-                while (true) {
-                    kotlinx.coroutines.delay(1000)
-                    val current = SettingsStore.isDark
-                    if (current != forceDark) forceDark = current
-                }
-            }
-
-            ShangYinTheme(forceDark = dark) {
-                AppNav(onThemeChanged = {
-                    forceDark = SettingsStore.isDark
-                })
+            ShangYinTheme(forceDark = forceDark) {
+                AppNav(onThemeChanged = { recreate() })
             }
         }
     }
 
-    override fun onBackPressed() {
-        // 导航过渡期间忽略系统返回连点，避免白屏
-        if (!com.shangyin.app.ui.NavGuard.allow()) return
-        super.onBackPressed()
+    override fun onDestroy() {
+        SettingsStore.unregisterListener(spListener)
+        super.onDestroy()
     }
 }

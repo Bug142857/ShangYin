@@ -177,19 +177,11 @@ private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
 @Composable
 private fun CoverCollage(covers: List<String>) {
     when (covers.size) {
-        1 -> AsyncImage(covers[0])
+        1 -> AsyncImage(covers[0], Modifier.fillMaxSize())
         2 -> TwoCovers(covers[0], covers[1])
         3 -> ThreeCovers(covers[0], covers[1], covers[2])
         else -> FourCovers(covers[0], covers[1], covers[2], covers[3])
     }
-}
-
-@Composable
-private fun AsyncImage(url: String) {
-    AsyncImage(
-        model = url, contentDescription = null, contentScale = ContentScale.Crop,
-        modifier = Modifier.fillMaxSize()
-    )
 }
 
 @Composable

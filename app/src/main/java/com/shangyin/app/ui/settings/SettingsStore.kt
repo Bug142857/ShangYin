@@ -23,6 +23,15 @@ object SettingsStore {
         sp = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
     }
 
+    /** 注册 SharedPreferences 变更监听（用于主题切换等） */
+    fun registerListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        sp.registerOnSharedPreferenceChangeListener(listener)
+    }
+
+    fun unregisterListener(listener: SharedPreferences.OnSharedPreferenceChangeListener) {
+        sp.unregisterOnSharedPreferenceChangeListener(listener)
+    }
+
     var nickname: String
         get() = sp.getString(KEY_NICKNAME, "东北老郑").orEmpty()
         set(v) = sp.edit().putString(KEY_NICKNAME, v).apply()
