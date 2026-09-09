@@ -74,10 +74,17 @@ interface ListDao {
     @Query("SELECT * FROM lists WHERE id = :id LIMIT 1")
     suspend fun getByIdOnce(id: Long): ItemListEntity?
 
+    // 递归 CTE：收集某清单及其所有层级后代清单的 ID，
+    // 用于统计包含子清单内所有条目的总数
+
     @Query(
         "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
-            "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
-            "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
+            "(WITH RECURSIVE descendants(id) AS (" +
+            "  SELECT id FROM lists WHERE id = l.id " +
+            "  UNION ALL " +
+            "  SELECT child.id FROM lists child JOIN descendants d ON child.parentId = d.id " +
+            ") SELECT COUNT(*) FROM list_items li WHERE li.listId IN (SELECT id FROM descendants)" +
+            ") AS itemCount " +
             "FROM lists l " +
             "WHERE l.parentId IS NULL " +
             "ORDER BY l.createdAt DESC"
@@ -86,8 +93,12 @@ interface ListDao {
 
     @Query(
         "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
-            "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
-            "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
+            "(WITH RECURSIVE descendants(id) AS (" +
+            "  SELECT id FROM lists WHERE id = l.id " +
+            "  UNION ALL " +
+            "  SELECT child.id FROM lists child JOIN descendants d ON child.parentId = d.id " +
+            ") SELECT COUNT(*) FROM list_items li WHERE li.listId IN (SELECT id FROM descendants)" +
+            ") AS itemCount " +
             "FROM lists l " +
             "WHERE l.parentId = :parentId " +
             "ORDER BY l.sortIndex ASC, l.createdAt ASC"
@@ -97,8 +108,12 @@ interface ListDao {
     /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
         "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
-            "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
-            "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
+            "(WITH RECURSIVE descendants(id) AS (" +
+            "  SELECT id FROM lists WHERE id = l.id " +
+            "  UNION ALL " +
+            "  SELECT child.id FROM lists child JOIN descendants d ON child.parentId = d.id " +
+            ") SELECT COUNT(*) FROM list_items li WHERE li.listId IN (SELECT id FROM descendants)" +
+            ") AS itemCount " +
             "FROM lists l " +
             "GROUP BY l.id ORDER BY l.createdAt DESC"
     )
