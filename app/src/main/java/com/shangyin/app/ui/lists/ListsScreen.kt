@@ -172,15 +172,23 @@ fun ListsScreen(nav: NavHostController) {
     }
 
     deleteTarget?.let { meta ->
+        val subCount = lists.count { it.list.parentId == meta.list.id }
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("删除清单") },
-            text = { Text("删除清单「${meta.list.name}」不会删除收藏的条目本身。") },
+            text = {
+                Text(
+                    buildString {
+                        append("删除清单「${meta.list.name}」不会删除收藏的条目本身。")
+                        if (subCount > 0) append("\n⚠️ 该清单下还有 $subCount 个子清单（含其下级），将一并删除。")
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            Repo.deleteList(meta.list)
+                            Repo.deleteListTree(meta.list)
                             deleteTarget = null
                         }
                     }

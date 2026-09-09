@@ -75,7 +75,7 @@ interface ListDao {
     suspend fun getByIdOnce(id: Long): ItemListEntity?
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
             "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
             "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
             "FROM lists l " +
@@ -85,24 +85,32 @@ interface ListDao {
     fun observeRootListsWithMeta(): Flow<List<ListWithMeta>>
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
             "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
             "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
             "FROM lists l " +
             "WHERE l.parentId = :parentId " +
-            "ORDER BY l.createdAt ASC"
+            "ORDER BY l.sortIndex ASC, l.createdAt ASC"
     )
     fun observeSubListsWithMeta(parentId: Long): Flow<List<ListWithMeta>>
 
     /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
             "(SELECT COUNT(*) FROM list_items li WHERE li.listId = l.id) + " +
             "COALESCE((SELECT COUNT(*) FROM list_items li2 JOIN lists cl ON cl.id = li2.listId WHERE cl.parentId = l.id), 0) AS itemCount " +
             "FROM lists l " +
             "GROUP BY l.id ORDER BY l.createdAt DESC"
     )
     fun observeListsWithMeta(): Flow<List<ListWithMeta>>
+
+    /** 一次性拿某父清单下的子清单（按展示顺序），用于拖拽排序 */
+    @Query("SELECT * FROM lists WHERE parentId = :parentId ORDER BY sortIndex ASC, createdAt ASC")
+    suspend fun getSubListsOnce(parentId: Long): List<ItemListEntity>
+
+    /** 统计某清单下直接子清单数量 */
+    @Query("SELECT COUNT(*) FROM lists WHERE parentId = :id")
+    suspend fun countSubLists(id: Long): Int
 
     @Query(
         "SELECT items.* FROM list_items JOIN items ON items.id = list_items.itemId " +

@@ -99,15 +99,16 @@ private enum class ListLayoutMode { GRID, LIST }
 /** 拖拽排序手势：长按后拖动改变顺序。
  *  - 快速抬起 → tap
  *  - 长按不动 → long press（删除确认）
- *  - 长按 + 拖动 → 拖拽排序 */
+ *  - 长按 + 拖动 → 拖拽排序
+ * 通用版：currentIdsState 为当前可排序区域的有序 ID 列表，onReorder 执行落库 */
 @Composable
 private fun dragReorderModifier(
     itemId: Long,
     isListMode: Boolean,
     gridColumns: Int,
-    listId: Long,
-    currentItemsState: State<List<CollectionItemEntity>>,
+    currentIdsState: State<List<Long>>,
     onDragStateChange: (Long?) -> Unit,
+    onReorder: suspend (fromIdx: Int, toIdx: Int) -> Unit,
     onTap: () -> Unit,
     onLongPress: () -> Unit
 ): Modifier {
@@ -165,11 +166,11 @@ private fun dragReorderModifier(
                     // 垂直拖动 → 跨行交换
                     if (abs(totalY) > itemHeightPx * 0.5f) {
                         val dir = if (totalY > 0) 1 else -1
-                        val idx = currentItemsState.value.indexOfFirst { it.id == itemId }
+                        val idx = currentIdsState.value.indexOf(itemId)
                         if (idx >= 0) {
                             val target = idx + dir * cols
-                            if (target in currentItemsState.value.indices) {
-                                scope.launch { Repo.reorderItem(listId, idx, target) }
+                            if (target in currentIdsState.value.indices) {
+                                scope.launch { onReorder(idx, target) }
                                 totalY -= dir * itemHeightPx
                             } else {
                                 totalY = 0f
@@ -179,11 +180,11 @@ private fun dragReorderModifier(
                     // 水平拖动（仅网格模式）→ 同行交换
                     if (!isListMode && abs(totalX) > itemWidthPx * 0.5f) {
                         val dir = if (totalX > 0) 1 else -1
-                        val idx = currentItemsState.value.indexOfFirst { it.id == itemId }
+                        val idx = currentIdsState.value.indexOf(itemId)
                         if (idx >= 0) {
                             val target = idx + dir
-                            if (target in currentItemsState.value.indices && idx / cols == target / cols) {
-                                scope.launch { Repo.reorderItem(listId, idx, target) }
+                            if (target in currentIdsState.value.indices && idx / cols == target / cols) {
+                                scope.launch { onReorder(idx, target) }
                                 totalX -= dir * itemWidthPx
                             } else {
                                 totalX = 0f
@@ -220,7 +221,10 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var layoutMode by rememberSaveable { mutableStateOf(ListLayoutMode.GRID) }
     var isEditMode by remember { mutableStateOf(false) }
     var draggingItemId by remember { mutableStateOf<Long?>(null) }
-    val currentItems = rememberUpdatedState(items)
+    var draggingSubListId by remember { mutableStateOf<Long?>(null) }
+    var deleteSubTarget by remember { mutableStateOf<ListWithMeta?>(null) }
+    val currentItemIds = rememberUpdatedState(items.map { it.id })
+    val currentSubIds = rememberUpdatedState(childLists.map { it.list.id })
 
     Scaffold(
         topBar = {
@@ -297,7 +301,28 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
                     gridItems(childLists, key = { "child_${it.list.id}" }) { meta ->
-                        ChildListGridCard(meta) { nav.safeNavigate("list/${meta.list.id}") }
+                        val isDragging = draggingSubListId == meta.list.id
+                        val scale by animateFloatAsState(if (isDragging) 1.08f else 1f, label = "subScale")
+                        ChildListGridCard(
+                            meta = meta,
+                            isEditMode = isEditMode,
+                            onRemove = { deleteSubTarget = meta },
+                            modifier = (if (isEditMode) dragReorderModifier(
+                                itemId = meta.list.id,
+                                isListMode = false,
+                                gridColumns = 3,
+                                currentIdsState = currentSubIds,
+                                onDragStateChange = { draggingSubListId = it },
+                                onReorder = { from, to -> Repo.reorderSubList(listId, from, to) },
+                                onTap = {},
+                                onLongPress = {}
+                            ) else Modifier)
+                                .graphicsLayer {
+                                    scaleX = scale; scaleY = scale
+                                    shadowElevation = if (isDragging) 24f else 0f
+                                },
+                            onClick = { nav.safeNavigate("list/${meta.list.id}") }
+                        )
                     }
                     gridItemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
@@ -310,9 +335,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 itemId = item.id,
                                 isListMode = false,
                                 gridColumns = 3,
-                                listId = listId,
-                                currentItemsState = currentItems,
+                                currentIdsState = currentItemIds,
                                 onDragStateChange = { draggingItemId = it },
+                                onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
                                 onTap = {},
                                 onLongPress = {}
                             ) else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") })
@@ -329,7 +354,28 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
                     items(childLists, key = { "child_${it.list.id}" }) { meta ->
-                        ChildListRowCard(meta) { nav.safeNavigate("list/${meta.list.id}") }
+                        val isDragging = draggingSubListId == meta.list.id
+                        val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "subScale")
+                        ChildListRowCard(
+                            meta = meta,
+                            isEditMode = isEditMode,
+                            onRemove = { deleteSubTarget = meta },
+                            modifier = (if (isEditMode) dragReorderModifier(
+                                itemId = meta.list.id,
+                                isListMode = true,
+                                gridColumns = 1,
+                                currentIdsState = currentSubIds,
+                                onDragStateChange = { draggingSubListId = it },
+                                onReorder = { from, to -> Repo.reorderSubList(listId, from, to) },
+                                onTap = {},
+                                onLongPress = {}
+                            ) else Modifier)
+                                .graphicsLayer {
+                                    scaleX = scale; scaleY = scale
+                                    shadowElevation = if (isDragging) 24f else 0f
+                                },
+                            onClick = { nav.safeNavigate("list/${meta.list.id}") }
+                        )
                     }
                     itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
@@ -342,9 +388,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 itemId = item.id,
                                 isListMode = true,
                                 gridColumns = 1,
-                                listId = listId,
-                                currentItemsState = currentItems,
+                                currentIdsState = currentItemIds,
                                 onDragStateChange = { draggingItemId = it },
+                                onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
                                 onTap = {},
                                 onLongPress = {}
                             ) else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") })
@@ -372,7 +418,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         )
     }
 
-    // 删除清单
+    // 删除清单（递归删除所有层级子清单）
     if (showDelete && list != null) {
         val hasChildren = childLists.isNotEmpty()
         AlertDialog(
@@ -382,22 +428,49 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 Text(
                     buildString {
                         append("删除清单「${list!!.name}」不会删除收藏的条目本身。")
-                        if (hasChildren) append("\n⚠️ 该清单下还有 ${childLists.size} 个子清单，将一并删除。")
+                        if (hasChildren) append("\n⚠️ 该清单下还有 ${childLists.size} 个子清单（含其下级），将一并删除。")
                     }
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        // 先删所有子清单
-                        childLists.forEach { Repo.deleteList(it.list) }
-                        Repo.deleteList(list!!)
+                        Repo.deleteListTree(list!!)
                         showDelete = false
                         nav.safePopBackStack()
                     }
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { showDelete = false }) { Text("取消") } }
+        )
+    }
+
+    // 删除子清单（编辑模式 × 按钮触发）
+    deleteSubTarget?.let { meta ->
+        var grandchildCount by remember(meta.list.id) { mutableStateOf(0) }
+        LaunchedEffect(meta.list.id) {
+            grandchildCount = withContext(Dispatchers.IO) { Repo.countSubLists(meta.list.id) }
+        }
+        AlertDialog(
+            onDismissRequest = { deleteSubTarget = null },
+            title = { Text("删除子清单") },
+            text = {
+                Text(
+                    buildString {
+                        append("删除子清单「${meta.list.name}」不会删除收藏的条目本身。")
+                        if (grandchildCount > 0) append("\n⚠️ 其下还有 $grandchildCount 个下级子清单，将一并删除。")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        Repo.deleteListTree(meta.list)
+                        deleteSubTarget = null
+                    }
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { deleteSubTarget = null }) { Text("取消") } }
         )
     }
 
@@ -420,7 +493,13 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
 /** 子清单网格卡片：和条目同尺寸（2:3 封面），角标区分 */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun ChildListGridCard(meta: ListWithMeta, onClick: () -> Unit) {
+private fun ChildListGridCard(
+    meta: ListWithMeta,
+    modifier: Modifier = Modifier,
+    isEditMode: Boolean = false,
+    onRemove: () -> Unit = {},
+    onClick: () -> Unit
+) {
     var covers by remember(meta.list.id) { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(meta.list.id) {
         covers = withContext(Dispatchers.IO) { Repo.getListCovers(meta.list.id, 4) }
@@ -428,9 +507,13 @@ private fun ChildListGridCard(meta: ListWithMeta, onClick: () -> Unit) {
     val firstChar = meta.list.name.firstOrNull()?.toString() ?: "清"
 
     Column(
-        Modifier
+        modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onClick)
+            .then(
+                // 编辑模式下点击/长按不跳转（交给拖拽手势），非编辑模式正常进入子清单
+                if (isEditMode) Modifier
+                else Modifier.combinedClickable(onClick = onClick, onLongClick = onClick)
+            )
     ) {
         Box(
             modifier = Modifier
@@ -466,6 +549,26 @@ private fun ChildListGridCard(meta: ListWithMeta, onClick: () -> Unit) {
                     modifier = Modifier.size(12.dp)
                 )
             }
+            // 编辑模式下右上角 × 删除按钮
+            if (isEditMode) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(4.dp)
+                        .size(24.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color(0xCCFF4444))
+                        .clickable { onRemove() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Rounded.Clear,
+                        contentDescription = "删除子清单",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -485,45 +588,101 @@ private fun ChildListGridCard(meta: ListWithMeta, onClick: () -> Unit) {
 /** 子清单列表卡片：和条目行同尺寸 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ChildListRowCard(meta: ListWithMeta, onClick: () -> Unit) {
+private fun ChildListRowCard(
+    meta: ListWithMeta,
+    modifier: Modifier = Modifier,
+    isEditMode: Boolean = false,
+    onRemove: () -> Unit = {},
+    onClick: () -> Unit
+) {
     var covers by remember(meta.list.id) { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(meta.list.id) {
         covers = withContext(Dispatchers.IO) { Repo.getListCovers(meta.list.id, 4) }
     }
     val firstChar = meta.list.name.firstOrNull()?.toString() ?: "清"
 
-    Card(onClick = onClick) {
-        Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .width(44.dp)
-                    .height(62.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                if (covers.isNotEmpty()) {
-                    ChildCoverCollage(covers.take(4))
-                } else {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(modifier.fillMaxWidth()) {
+        if (isEditMode) {
+            // 编辑模式：不可点击的 Card，点击/长按交给外层拖拽手势
+            Card {
+                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ChildRowCover(covers, firstChar)
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                         Text(
-                            firstChar,
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            meta.list.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "子清单 · ${meta.itemCount} 件",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
-            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-                Text(
-                    meta.list.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+        } else {
+            Card(onClick = onClick) {
+                Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ChildRowCover(covers, firstChar)
+                    Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                        Text(
+                            meta.list.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            "子清单 · ${meta.itemCount} 件",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        // 编辑模式下右上角 × 删除按钮
+        if (isEditMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCCFF4444))
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Clear,
+                    contentDescription = "删除子清单",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
                 )
+            }
+        }
+    }
+}
+
+/** 子清单列表行封面 */
+@Composable
+private fun ChildRowCover(covers: List<String>, firstChar: String) {
+    Box(
+        modifier = Modifier
+            .width(44.dp)
+            .height(62.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        if (covers.isNotEmpty()) {
+            ChildCoverCollage(covers.take(4))
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    "子清单 · ${meta.itemCount} 件",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    firstChar,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
             }
         }

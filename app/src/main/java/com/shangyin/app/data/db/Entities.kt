@@ -40,6 +40,8 @@ data class ItemListEntity(
     val coverUrl: String? = null,
     /** 父清单 ID；null = 根级清单（首页分类方块） */
     val parentId: Long? = null,
+    /** 同级排序权重：子清单拖拽排序后写入，0 = 未手动排序（按 createdAt） */
+    val sortIndex: Int = 0,
     val createdAt: Long = System.currentTimeMillis()
 )
 

@@ -216,6 +216,42 @@ object Repo {
 
     suspend fun deleteList(list: ItemListEntity) = listDao.deleteList(list)
 
+    /** 删除清单并递归删除所有层级的子清单（list_items 由外键 CASCADE 自动清理） */
+    suspend fun deleteListTree(list: ItemListEntity) {
+        db.withTransaction {
+            // BFS 收集所有后代清单
+            val toDelete = mutableListOf<ItemListEntity>()
+            val queue = ArrayDeque<Long>()
+            queue.add(list.id)
+            while (queue.isNotEmpty()) {
+                val id = queue.removeFirst()
+                val children = listDao.getSubListsOnce(id)
+                toDelete.addAll(children)
+                children.forEach { queue.add(it.id) }
+            }
+            // lists 表无自引用外键，逐层先删子再删父即可
+            toDelete.forEach { listDao.deleteList(it) }
+            listDao.deleteList(list)
+        }
+    }
+
+    /** 子清单数量（用于删除确认提示） */
+    suspend fun countSubLists(id: Long): Int = listDao.countSubLists(id)
+
+    /** 子清单拖拽排序：把 fromIdx 的子清单移到 toIdx，重排 sortIndex */
+    suspend fun reorderSubList(parentId: Long, fromIdx: Int, toIdx: Int) {
+        if (fromIdx == toIdx) return
+        db.withTransaction {
+            val subs = listDao.getSubListsOnce(parentId).toMutableList()
+            if (fromIdx !in subs.indices || toIdx !in subs.indices) return@withTransaction
+            val moved = subs.removeAt(fromIdx)
+            subs.add(toIdx, moved)
+            subs.forEachIndexed { i, sub ->
+                if (sub.sortIndex != i) listDao.updateList(sub.copy(sortIndex = i))
+            }
+        }
+    }
+
     /** 获取所有已加入清单的条目 ID */
     suspend fun getAllListItemIds(): List<Long> = listDao.getAllListItemIds()
 
