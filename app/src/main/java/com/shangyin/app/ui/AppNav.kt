@@ -79,6 +79,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 HomeScreen(nav)
             }
             composable("search") { SearchScreen(nav) }
+            composable("musicSearch") { com.shangyin.app.ui.music.MusicSearchScreen(nav) }
             composable(
                 route = "search/{listId}",
                 arguments = listOf(navArgument("listId") { type = NavType.LongType; defaultValue = -1L })

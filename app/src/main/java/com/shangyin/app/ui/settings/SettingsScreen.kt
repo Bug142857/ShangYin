@@ -84,9 +84,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var nickname by rememberSaveable { mutableStateOf(SettingsStore.nickname) }
-    var avatarUri by rememberSaveable { mutableStateOf(SettingsStore.avatarUri) }
-    var showEditName by remember { mutableStateOf(false) }
     var showListManager by remember { mutableStateOf(false) }
     var showThemePicker by remember { mutableStateOf(false) }
     var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
@@ -119,22 +116,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 else -> "$bytes B"
             }
         }.getOrDefault("未知")
-    }
-
-    // 头像选择器
-    val avatarPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let {
-            // 持久化 URI 权限（Android 10+ 需要）
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    it, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            } catch (_: Exception) {}
-            avatarUri = it.toString()
-            SettingsStore.avatarUri = it.toString()
-        }
     }
 
     // 导入选择器
@@ -190,57 +171,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 用户信息区（头像可点击换，整行可改昵称）
-            Card {
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable { showEditName = true }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier
-                            .size(72.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer)
-                            .clickable { avatarPicker.launch("image/*") },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (avatarUri.isNotBlank()) {
-                            AsyncImage(
-                                model = avatarUri,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            Icon(
-                                Icons.Rounded.Person,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                modifier = Modifier.size(40.dp)
-                            )
-                        }
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            nickname.ifBlank { "点击设置昵称" },
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            "点击头像更换图片",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp).rotate(180f),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
-
             // 分类管理
             Card {
                 Row(
@@ -466,34 +396,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
         }
-    }
-
-    // 编辑昵称
-    if (showEditName) {
-        var tempName by remember { mutableStateOf(nickname) }
-        AlertDialog(
-            onDismissRequest = { showEditName = false },
-            title = { Text("设置昵称") },
-            text = {
-                OutlinedTextField(
-                    value = tempName,
-                    onValueChange = { tempName = it },
-                    singleLine = true,
-                    label = { Text("昵称") }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val n = tempName.trim()
-                    if (n.isNotBlank()) {
-                        nickname = n
-                        SettingsStore.nickname = n
-                    }
-                    showEditName = false
-                }) { Text("保存") }
-            },
-            dismissButton = { TextButton(onClick = { showEditName = false }) { Text("取消") } }
-        )
     }
 
     // 分类管理

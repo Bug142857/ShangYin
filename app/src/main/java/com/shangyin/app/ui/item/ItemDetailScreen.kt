@@ -376,6 +376,11 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
+            // 音乐：在线播放器（播放地址 = 收藏时嗅探到的音频直链）
+            if (entity.category == "音乐" && !entity.doubanUrl.isNullOrBlank()) {
+                MusicSinglePlayer(playUrl = entity.doubanUrl, title = entity.title)
+            }
+
             // 简介
             if (entity.summary.isNotBlank()) {
                 Column {
