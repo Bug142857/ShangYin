@@ -74,6 +74,7 @@ import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -376,9 +377,26 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
-            // 音乐：在线播放器（播放地址 = 收藏时嗅探到的音频直链）
+            // 音乐：在线播放器（播放地址 = 收藏时嗅探到的音频直链；失效自动刷新并存库）
             if (entity.category == "音乐" && !entity.doubanUrl.isNullOrBlank()) {
-                MusicSinglePlayer(playUrl = entity.doubanUrl, title = entity.title)
+                val playerScope = rememberCoroutineScope()
+                MusicSinglePlayer(
+                    playUrl = entity.doubanUrl,
+                    title = entity.title,
+                    artist = entity.subTitle ?: "",
+                    onNewUrl = { newUrl ->
+                        playerScope.launch(Dispatchers.IO) {
+                            runCatching {
+                                Repo.saveMusic(
+                                    name = entity.title,
+                                    artist = entity.subTitle ?: "",
+                                    coverUrl = entity.coverUrl,
+                                    playUrl = newUrl
+                                )
+                            }
+                        }
+                    }
+                )
             }
 
             // 简介

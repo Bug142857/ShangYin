@@ -7,17 +7,18 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Search
@@ -73,11 +74,9 @@ fun HomeScreen(nav: NavHostController) {
         if (lists.isEmpty()) {
             EmptyHomeContent(nav, Modifier.padding(pad).fillMaxSize())
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(150.dp),
+            LazyColumn(
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.padding(pad).fillMaxSize()
             ) {
                 items(lists, key = { it.list.id }) { meta ->
@@ -130,48 +129,47 @@ private val TILE_GRADIENTS = listOf(
 private fun tileGradient(name: String) =
     TILE_GRADIENTS[kotlin.math.abs(name.hashCode()) % TILE_GRADIENTS.size]
 
-/** 分类方块：渐变底 + 清单名首字（简洁封面，不使用条目图片）+ 分类名 + 条目数 */
+/** 清单行卡片：左侧 52dp 渐变小方块（清单名）+ 名称 + 条目数 + 箭头 */
 @Composable
 private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
     val (c1, c2) = tileGradient(meta.list.name)
 
-    Card(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column {
+    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(1f)
-                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(12.dp))
                     .background(
                         androidx.compose.ui.graphics.Brush.linearGradient(listOf(c1, c2))
                     ),
                 contentAlignment = Alignment.Center
             ) {
-                // 封面显示完整清单名（基本两字；过长的名单自动缩小字号）
+                // 小方块里放清单名（基本两字；过长的自动缩小）
                 val n = meta.list.name
                 val fontSize = when {
-                    n.length <= 2 -> 40.sp
-                    n.length <= 4 -> 30.sp
-                    n.length <= 6 -> 22.sp
-                    else -> 17.sp
+                    n.length <= 2 -> 16.sp
+                    n.length <= 4 -> 12.sp
+                    else -> 10.sp
                 }
                 Text(
                     n,
                     fontSize = fontSize,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.92f),
+                    color = Color.White.copy(alpha = 0.95f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 10.dp)
+                    modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
                 Text(
                     text = meta.list.name,
-                    style = MaterialTheme.typography.titleSmall,
+                    style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     fontWeight = FontWeight.Medium
@@ -182,6 +180,11 @@ private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
                     color = MaterialTheme.colorScheme.outline
                 )
             }
+            Icon(
+                Icons.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline
+            )
         }
     }
 }

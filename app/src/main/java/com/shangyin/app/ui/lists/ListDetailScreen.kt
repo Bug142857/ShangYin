@@ -99,6 +99,7 @@ import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.music.MusicRefresher
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
@@ -260,6 +261,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     // ---- 音乐清单排序：0=新增在上（默认） 1=按歌手；编辑模式保持手动拖拽顺序 ----
     var musicSortOrder by rememberSaveable { mutableIntStateOf(0) }
     val isMusicRoot = list?.parentId == null && list?.name == "音乐"
+    // 直链过期自动刷新：正在重新嗅探直链的歌曲
+    var refreshSong by remember { mutableStateOf<CollectionItemEntity?>(null) }
     val displayItems = remember(items, musicSortOrder, isMusicRoot, isEditMode) {
         when {
             !isMusicRoot || isEditMode -> items
@@ -322,7 +325,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             m.setOnErrorListener { _, what, extra ->
                 playPreparing = false
                 playPlaying = false
-                android.widget.Toast.makeText(context, "播放失败（$what/$extra），直链可能已失效", android.widget.Toast.LENGTH_SHORT).show()
+                // 直链过期 → 自动重新嗅探并续播
+                android.widget.Toast.makeText(context, "直链已失效，正在自动刷新…", android.widget.Toast.LENGTH_SHORT).show()
+                refreshSong = item
                 true
             }
             m.prepareAsync()
@@ -353,6 +358,37 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             }
             kotlinx.coroutines.delay(500)
         }
+    }
+
+    // ---- 直链过期自动刷新：离屏 WebView 重新嗅探该歌直链并续播 ----
+    refreshSong?.let { song ->
+        MusicRefresher(
+            songName = song.title,
+            artist = song.subTitle ?: "",
+            onCaptured = { newUrl ->
+                scope.launch {
+                    // 同名同歌手条目会被 Repo.saveMusic 原位更新直链
+                    runCatching {
+                        Repo.saveMusic(
+                            name = song.title,
+                            artist = song.subTitle ?: "",
+                            coverUrl = song.coverUrl,
+                            playUrl = newUrl
+                        )
+                    }
+                    refreshSong = null
+                    playMusic(song.copy(doubanUrl = newUrl))
+                }
+            },
+            onTimeout = {
+                android.widget.Toast.makeText(
+                    context,
+                    "自动刷新失败——到「搜索 → 音乐」重新试听一次即可",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                refreshSong = null
+            }
+        )
     }
 
     // ---- 清单内搜索：本清单 + 所有层级子清单 ----

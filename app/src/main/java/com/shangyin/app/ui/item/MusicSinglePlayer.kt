@@ -32,18 +32,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.shangyin.app.ui.music.MusicRefresher
 import kotlinx.coroutines.delay
 import java.util.Locale
 
 /**
  * 音乐条目详情页的单曲播放器：
  * 播放地址来自收藏时嗅探到的音频直链（存在 doubanUrl 字段）。
- * 直链通常有时效，失效时提示到音乐搜索重新收藏。
+ * 直链有时效——失效时自动用离屏 WebView 重新嗅探新直链并续播（onNewUrl 回调给调用方存库）。
  */
 @Composable
 fun MusicSinglePlayer(
     playUrl: String,
-    title: String
+    title: String,
+    artist: String = "",
+    onNewUrl: (String) -> Unit = {}
 ) {
     var player by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
@@ -52,6 +55,9 @@ fun MusicSinglePlayer(
     var positionMs by remember { mutableIntStateOf(0) }
     var durationMs by remember { mutableIntStateOf(0) }
     var started by remember { mutableStateOf(false) }
+    var currentUrl by remember(playUrl) { mutableStateOf(playUrl) }
+    var refreshing by remember { mutableStateOf(false) }
+    var userStarted by remember { mutableStateOf(false) } // 用户点过播放后才允许自动续播
     val context = androidx.compose.ui.platform.LocalContext.current
 
     fun release() {
@@ -69,12 +75,12 @@ fun MusicSinglePlayer(
             // 带上泡椒站的 Cookie/Referer/UA，绕过防盗链
             val ctx = context
             val headers = mutableMapOf(
-                "Referer" to "https://flac.music.hi.cn/",
+                "Referer" to com.shangyin.app.ui.music.MUSIC_SITE,
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
             )
             android.webkit.CookieManager.getInstance()
-                .getCookie("https://flac.music.hi.cn/")?.let { headers["Cookie"] = it }
-            mp.setDataSource(ctx, android.net.Uri.parse(playUrl), headers)
+                .getCookie(com.shangyin.app.ui.music.MUSIC_SITE)?.let { headers["Cookie"] = it }
+            mp.setDataSource(ctx, android.net.Uri.parse(currentUrl), headers)
             mp.setOnPreparedListener {
                 durationMs = it.duration
                 it.start()
@@ -87,9 +93,15 @@ fun MusicSinglePlayer(
                 positionMs = 0
             }
             mp.setOnErrorListener { _, what, extra ->
-                error = "播放失败（$what/$extra），音频链接可能已失效，请到「搜索 → 音乐」重新收藏"
                 isPlaying = false
                 preparing = false
+                if (!refreshing) {
+                    // 直链过期 → 自动重新嗅探
+                    error = "直链已失效，正在自动刷新…"
+                    refreshing = true
+                } else {
+                    error = "刷新后的直链仍无法播放，请到「搜索 → 音乐」重新收藏"
+                }
                 true
             }
             mp.prepareAsync()
@@ -101,7 +113,12 @@ fun MusicSinglePlayer(
         }
     }
 
-    DisposableEffect(playUrl) {
+    // 换链后自动续播（仅当用户此前主动播放过）
+    LaunchedEffect(currentUrl) {
+        if (userStarted && currentUrl.isNotBlank()) start()
+    }
+
+    DisposableEffect(Unit) {
         onDispose { release() }
     }
 
@@ -117,6 +134,22 @@ fun MusicSinglePlayer(
             }
             delay(500)
         }
+    }
+
+    if (refreshing) {
+        MusicRefresher(
+            songName = title,
+            artist = artist,
+            onCaptured = { newUrl ->
+                onNewUrl(newUrl)
+                currentUrl = newUrl
+                refreshing = false
+            },
+            onTimeout = {
+                refreshing = false
+                error = "自动刷新失败——到「搜索 → 音乐」重新试听一次即可"
+            }
+        )
     }
 
     Card(colors = CardDefaults.cardColors()) {
@@ -136,6 +169,7 @@ fun MusicSinglePlayer(
                 IconButton(onClick = {
                     val mp = player
                     if (mp == null || !started) {
+                        userStarted = true
                         start()
                     } else if (mp.isPlaying) {
                         mp.pause(); isPlaying = false
@@ -144,7 +178,7 @@ fun MusicSinglePlayer(
                     }
                 }) {
                     when {
-                        preparing -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        preparing || refreshing -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                         isPlaying -> Icon(Icons.Rounded.Pause, contentDescription = "暂停")
                         else -> Icon(Icons.Rounded.PlayArrow, contentDescription = "播放")
                     }
