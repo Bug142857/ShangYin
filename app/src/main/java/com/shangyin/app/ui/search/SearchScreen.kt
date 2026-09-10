@@ -185,7 +185,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                listOf("影视", "图书", "游戏", "音乐", "人物").forEach { label ->
+                listOf("影视", "图书", "游戏", "人物").forEach { label ->
                     FilterChip(
                         selected = selectedCat == label,
                         onClick = { selectedCat = if (selectedCat == label) "" else label },

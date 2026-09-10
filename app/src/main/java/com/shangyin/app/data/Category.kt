@@ -8,6 +8,5 @@ enum class Category(val label: String) {
     MOVIE("电影"),
     TV("剧集"),
     BOOK("图书"),
-    GAME("游戏"),
-    MUSIC("音乐")
+    GAME("游戏")
 }

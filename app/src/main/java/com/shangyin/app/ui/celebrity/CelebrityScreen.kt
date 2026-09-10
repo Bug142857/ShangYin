@@ -111,14 +111,12 @@ fun CelebrityScreen(
     val catLabel = when (fromCategory) {
         "book" -> "图书"
         "game" -> "游戏"
-        "music" -> "音乐"
         "film", "电影", "剧集", "影视" -> "影视"
         else -> ""
     }
     val catSource = when (fromCategory) {
         "图书" -> "book"
         "游戏" -> "game"
-        "音乐" -> "music"
         "电影", "剧集", "影视" -> "film"
         else -> fromCategory
     }

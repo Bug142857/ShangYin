@@ -291,7 +291,6 @@ object DoubanClient {
             Category.TV -> "https://movie.douban.com/subject_search?search_text=$encodedQuery&cat=1002$ckParam" to "https://movie.douban.com/"
             Category.BOOK -> "https://book.douban.com/subject_search?search_text=$encodedQuery&cat=1001$ckParam" to "https://book.douban.com/"
             Category.GAME -> return searchGameWeb(query)
-            Category.MUSIC -> return searchMusicSuggest(query)
         }
         val html = httpGetMobile(url, referer)
         // 检测反爬/限流页面：豆瓣被触发时返回不含 window.__DATA__ 的页面
@@ -411,48 +410,6 @@ object DoubanClient {
         }
     }
 
-    /** 音乐搜索：music.douban.com suggest 接口（轻量 JSON，无需登录）
-     *  返回数组：[{title, url(music.douban.com/subject/{id}/), author_name:[歌手], image, type:"M"}] */
-    private fun searchMusicSuggest(query: String): List<DoubanResult> {
-        val url = "https://music.douban.com/j/subject_suggest?q=${URLEncoder.encode(query, "UTF-8")}"
-        val body = httpGetDesktop(url, "https://music.douban.com/")
-        detectBlockPageAndThrow(body)
-        val arr = runCatching { json.parseToJsonElement(body).jsonArray }.getOrNull()
-            ?: throw IOException("音乐搜索数据解析失败")
-        return arr.mapNotNull { el ->
-            val o = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
-            val urlStr = o["url"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            // suggest 可能混入书籍等（type M = 音乐），按 url 域名过滤
-            if (!urlStr.contains("music.douban.com/subject/")) return@mapNotNull null
-            val id = Regex("""subject/(\d+)""").find(urlStr)?.groupValues?.get(1) ?: return@mapNotNull null
-            val title = o["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            val singers = o["author_name"]?.jsonArray
-                ?.mapNotNull { runCatching { it.jsonPrimitive.contentOrNull }.getOrNull() }
-                .orEmpty()
-                .joinToString("/")
-            DoubanResult(
-                category = Category.MUSIC,
-                doubanId = id,
-                title = title,
-                subTitle = singers,
-                coverUrl = o["image"]?.jsonPrimitive?.contentOrNull,
-                url = urlStr
-            )
-        }
-    }
-
-    /** 桌面 UA GET（音乐 suggest 等 JSON 接口用） */
-    private fun httpGetDesktop(url: String, referer: String): String {
-        val req = Request.Builder().url(url).get()
-            .header("User-Agent", DESKTOP_UA)
-            .header("Referer", referer)
-            .build()
-        mobileClient.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
-            return resp.body?.string().orEmpty()
-        }
-    }
-
     // ---------------- 人物搜索 ----------------
 
     /** 搜索影人：豆瓣网页搜索（cat=1065 人物），解析 personage 链接
@@ -549,7 +506,6 @@ object DoubanClient {
         Category.TV -> "https://m.douban.com/rexxar/api/v2/tv/$doubanId" to "https://m.douban.com/tv/subject/$doubanId/"
         Category.BOOK -> "https://m.douban.com/rexxar/api/v2/book/$doubanId" to "https://m.douban.com/book/subject/$doubanId/"
         Category.GAME -> "https://m.douban.com/rexxar/api/v2/game/$doubanId" to "https://m.douban.com/game/$doubanId/"
-        Category.MUSIC -> "https://m.douban.com/rexxar/api/v2/music/$doubanId" to "https://m.douban.com/music/subject/$doubanId/"
     }
 
     /** 请求 Rexxar API：移动 UA（客户端自带）+ Referer，无需 apikey；
@@ -594,7 +550,6 @@ object DoubanClient {
                 ?.joinToString("/")?.takeIf { it.isNotBlank() }
 
         val directors = names("directors") ?: names("author") // 图书作者/音乐人回退到 author
-            ?: names("singers") // 音乐歌手
         val casts = names("actors") ?: names("translators") // 图书译者回退
         // 游戏：developers / publishers 是字符串，platforms 是对象数组
         val gameDeveloper = (o["developers"]?.jsonPrimitive?.contentOrNull
@@ -707,8 +662,6 @@ object DoubanClient {
         withContext(Dispatchers.IO) {
             // 游戏不再抓取开发商（用户要求移除）
             if (category == Category.GAME) return@withContext emptyList()
-            // 音乐无演职员概念（歌手已在头部信息行显示）
-            if (category == Category.MUSIC) return@withContext emptyList()
             // 影视条目：用 celebrities 端点
             if (category == Category.MOVIE || category == Category.TV) {
                 runCatching {
@@ -1172,7 +1125,6 @@ object DoubanClient {
         Category.MOVIE, Category.TV -> "https://m.douban.com/movie/subject/$doubanId/"
         Category.BOOK -> "https://m.douban.com/book/subject/$doubanId/"
         Category.GAME -> "https://www.douban.com/game/$doubanId/"
-        Category.MUSIC -> "https://m.douban.com/music/subject/$doubanId/"
     }
 
     private fun JsonElement?.obj(key: String): JsonObject? =
@@ -1183,7 +1135,6 @@ object DoubanClient {
         val patterns = listOf(
             Regex("movie\\.douban\\.com/subject/(\\d+)") to Category.MOVIE,
             Regex("book\\.douban\\.com/subject/(\\d+)") to Category.BOOK,
-            Regex("music\\.douban\\.com/subject/(\\d+)") to Category.MUSIC,
             Regex("douban\\.com/game/(\\d+)") to Category.GAME,
             Regex("douban\\.com/subject/(\\d+)") to Category.MOVIE
         )

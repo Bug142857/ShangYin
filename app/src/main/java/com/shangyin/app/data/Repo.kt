@@ -76,9 +76,8 @@ object Repo {
                             info = if (r.category == Category.BOOK)
                                 existing.info.ifBlank { freshInfo.orEmpty() }
                             else freshInfo ?: existing.info,
-                            // 图书/游戏/音乐头部副标题同步含完整日期（从搜索来的 subTitle 本来不含日期）
-                            subTitle = if (r.category == Category.GAME || r.category == Category.BOOK ||
-                                r.category == Category.MUSIC)
+                            // 图书/游戏头部副标题同步含完整日期（从搜索来的 subTitle 本来不含日期）
+                            subTitle = if (r.category == Category.GAME || r.category == Category.BOOK)
                                 freshInfo ?: existing.subTitle else existing.subTitle,
                             directors = detail.directors ?: existing.directors,
                         ))
