@@ -61,6 +61,7 @@ import com.shangyin.app.data.Repo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.resume
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -88,6 +89,12 @@ data class SniffedSong(
     val artist: String,
     val cover: String?,
     val playUrl: String?
+)
+
+/** 收藏中等待直链捕获的条目（仅在主线程访问） */
+private class PendingSave(
+    val song: SniffedSong,
+    var cont: kotlinx.coroutines.CancellableContinuation<String>? = null
 )
 
 /** 启发式解析 WebView 捕获的 API 响应体 */
@@ -271,25 +278,59 @@ private val SNIFFER_JS = """
       }
     } catch(e) {}
   }, 1500);
-  // 收藏时自动试听：在网页里找到文本匹配歌名的最小元素并模拟点击，触发真实播放以捕获直链
-  window.__playByName = function(name, artist){
+  // 收藏时自动试听：按歌名找元素模拟点击（mode=1 直接点 / mode=2 点所在行的播放按钮）
+  // 支持 iframe（同源）；补发完整指针事件链，兼容事件委托式播放器
+  window.__playByName = function(name, artist, mode){
     try {
       var norm = function(s){ return String(s || '').toLowerCase().replace(/\s+/g, ''); };
       var kw = norm(name), art = norm(artist);
-      var best = null, bestLen = 999;
-      var cands = document.querySelectorAll('a,div,span,li,p,button,td,tr,h3,h4,h5,em,strong,b,label');
-      for (var i = 0; i < cands.length; i++) {
-        var el = cands[i];
-        var t = norm(el.innerText || el.textContent || '');
-        if (!t || t.length > 120) continue;
-        var ok = kw && t.indexOf(kw) >= 0;
-        if (!ok && art && kw && t.indexOf(art) >= 0) {
-          // 文本只含歌手时，要求长度接近"歌手+歌名"组合，避免点开歌手主页
-          ok = t.length <= kw.length + art.length + 8;
+      var docs = [document];
+      try {
+        var fr = document.querySelectorAll('iframe');
+        for (var f = 0; f < fr.length; f++) {
+          try { if (fr[f].contentDocument) docs.push(fr[f].contentDocument); } catch(e) {}
         }
-        if (ok && t.length < bestLen) { best = el; bestLen = t.length; }
+      } catch(e) {}
+      for (var d = 0; d < docs.length; d++) {
+        var doc = docs[d];
+        try {
+          var best = null, bestLen = 999;
+          var cands = doc.querySelectorAll('a,div,span,li,p,button,td,tr,h3,h4,h5,em,strong,b,label');
+          for (var i = 0; i < cands.length; i++) {
+            var el = cands[i];
+            var t = norm(el.innerText || el.textContent || '');
+            if (!t || t.length > 120) continue;
+            var ok = kw && t.indexOf(kw) >= 0;
+            if (!ok && art && kw && t.indexOf(art) >= 0) {
+              ok = t.length <= kw.length + art.length + 8;
+            }
+            if (ok && t.length < bestLen) { best = el; bestLen = t.length; }
+          }
+          if (best) {
+            // mode=2：在歌名元素的行容器里找真正的播放按钮
+            var target = best;
+            if (mode == 2) {
+              var p = best;
+              for (var up = 0; up < 3 && p; up++) {
+                var pb = p.querySelector('button,[class*="play"],i[class*="play"],[onclick],[data-url]');
+                if (pb) { target = pb; break; }
+                p = p.parentElement;
+              }
+            }
+            var r = target.getBoundingClientRect();
+            var x = r.left + r.width / 2, y = r.top + r.height / 2;
+            // 补发完整事件链：部分播放器监听 pointerdown/mousedown，仅 .click() 不够
+            ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function(tn) {
+              try {
+                var Ev = (window.PointerEvent && tn.indexOf('pointer') === 0) ? PointerEvent : MouseEvent;
+                target.dispatchEvent(new Ev(tn, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+              } catch(e) {}
+            });
+            try { target.click(); } catch(e) {}
+            return '1';
+          }
+        } catch(e) {}
       }
-      if (best) { best.click(); return '1'; }
       return '0';
     } catch(e) { return 'e'; }
   };
@@ -314,6 +355,22 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
     val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+    // 待捕获的收藏：自动点播失败后挂起，用户在网页里手动点播这首歌时自动完成
+    val pendingSaves = remember { mutableListOf<PendingSave>() }
+
+    /** 音频流入池（主线程），并检查是否有等待直链的收藏 */
+    fun onAudioCaptured(url: String) {
+        audioStreamUrls.removeAll { it == url }
+        audioStreamUrls.add(0, url)
+        if (audioStreamUrls.size > 20) audioStreamUrls.removeAt(audioStreamUrls.size - 1)
+        val pending = pendingSaves.firstOrNull { audioUrlMatchesSong(it.song, url) } ?: return
+        pendingSaves.remove(pending)
+        pending.cont?.let { c ->
+            if (c.isActive) c.resume(url)
+            pending.cont = null
+        }
+    }
+
     val sniffer = remember {
         object {
             @JavascriptInterface
@@ -344,16 +401,12 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
             fun onAudio(url: String) {
                 // 网页播放器 <audio>/<video> 标签的 src（http 开头才收，blob: 无法播）
                 if (!url.startsWith("http")) return
-                mainHandler.post {
-                    audioStreamUrls.removeAll { it == url }
-                    audioStreamUrls.add(0, url)
-                    if (audioStreamUrls.size > 20) audioStreamUrls.removeAt(audioStreamUrls.size - 1)
-                }
+                mainHandler.post { onAudioCaptured(url) }
             }
         }
     }
 
-    /** 解析这首歌的可播直链：API 字段 → 池内歌名匹配 → 自动试听（让网页点播，最多两轮） */
+    /** 解析这首歌的可播直链：API 字段 → 池内歌名匹配 → 自动点播（两轮：点歌名 / 点行内播放按钮） */
     suspend fun resolvePlayUrl(song: SniffedSong): String? {
         song.playUrl?.takeIf { it.startsWith("http") }?.let { return it }
         // 池里只认"歌名匹配"的直链——池里可能混着别的歌/误捕获的链接，不能随便兜底
@@ -361,12 +414,15 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         val web = webViewRef.value ?: return null
         val jsName = JSONObject.quote(song.name)
         val jsArtist = JSONObject.quote(song.artist)
-        val js = "window.__playByName ? window.__playByName($jsName, $jsArtist) : '0'"
-        // 两轮尝试：第一轮没抓到（元素没找到/点击无效）隔 1 秒再点一次
-        repeat(2) {
+        // 两轮：mode=1 直接点歌名元素；mode=2 点所在行的播放按钮（部分播放器行内才有触发钮）
+        listOf(1, 2).forEach { mode ->
             val before = audioStreamUrls.toSet()
-            withContext(Dispatchers.Main) { web.evaluateJavascript(js, null) }
-            repeat(16) { // 每轮最多等 5.6 秒
+            withContext(Dispatchers.Main) {
+                web.evaluateJavascript(
+                    "window.__playByName ? window.__playByName($jsName, $jsArtist, $mode) : '0'", null
+                )
+            }
+            repeat(12) { // 每轮最多等 4 秒
                 kotlinx.coroutines.delay(350)
                 val fresh = audioStreamUrls.filter { it !in before }
                 if (fresh.isNotEmpty()) {
@@ -375,9 +431,20 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                     return fresh.first()
                 }
             }
-            kotlinx.coroutines.delay(1000)
         }
         return null
+    }
+
+    /** 挂起等待用户在网页里点播这首歌，捕获到歌名匹配的直链即返回；超时/取消返回 null */
+    suspend fun waitCapture(song: SniffedSong, timeoutMs: Long): String? {
+        val pending = PendingSave(song)
+        pendingSaves.add(pending)
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            kotlinx.coroutines.suspendCancellableCoroutine { c ->
+                pending.cont = c
+                c.invokeOnCancellation { pendingSaves.remove(pending) }
+            }
+        }
     }
 
     /** 收藏一首歌（含自动试听获取直链）。开始前按 key 重新取最新解析结果——播放接口回填的直链立即生效 */
@@ -388,7 +455,16 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
             onDone(false, "歌曲已不在列表中")
             return
         }
-        val url = runCatching { resolvePlayUrl(song) }.getOrNull()
+        var url = runCatching { resolvePlayUrl(song) }.getOrNull()
+        if (url == null) {
+            // 自动点播没成功：挂起等待用户在网页里点一下这首歌（60 秒内捕获即自动完成）
+            android.widget.Toast.makeText(
+                context,
+                "未能自动点播——请在网页里点一下这首歌试听，捕获直链后自动完成收藏",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            url = runCatching { waitCapture(song, 60_000) }.getOrNull()
+        }
         val id = withContext(Dispatchers.IO) {
             runCatching {
                 Repo.saveMusic(name = song.name, artist = song.artist, coverUrl = song.cover, playUrl = url)
@@ -400,8 +476,8 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         val msg = when {
             !ok -> "收藏失败，请重试"
             song.playUrl?.startsWith("http") == true -> "已收藏到主页「音乐」清单"
-            url != null -> "已收藏（自动试听获取直链）"
-            else -> "已收藏，但未获取直链——请在网页试听后重新收藏"
+            url != null -> "已收藏（捕获到试听直链）"
+            else -> "已收藏，但未获取直链——可在网页试听后重新收藏"
         }
         onDone(ok, msg)
     }
@@ -477,13 +553,7 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                     // 纯音频扩展名不要求 Range 头；无扩展名时须带 Range（流式播放特征）+ 播放接口特征
                                     val byExt = AUDIO_URL_REGEX.containsMatchIn(u)
                                     if (byExt || (hasRange && isAudioStreamUrl(u))) {
-                                        view.post {
-                                            audioStreamUrls.removeAll { it == u }
-                                            audioStreamUrls.add(0, u)
-                                            if (audioStreamUrls.size > 20) {
-                                                audioStreamUrls.removeAt(audioStreamUrls.size - 1)
-                                            }
-                                        }
+                                        view.post { onAudioCaptured(u) }
                                     }
                                     return null
                                 }

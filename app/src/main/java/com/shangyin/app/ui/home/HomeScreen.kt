@@ -41,6 +41,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.R
@@ -149,11 +150,22 @@ private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
                     ),
                 contentAlignment = Alignment.Center
             ) {
+                // 封面显示完整清单名（基本两字；过长的名单自动缩小字号）
+                val n = meta.list.name
+                val fontSize = when {
+                    n.length <= 2 -> 40.sp
+                    n.length <= 4 -> 30.sp
+                    n.length <= 6 -> 22.sp
+                    else -> 17.sp
+                }
                 Text(
-                    meta.list.name.firstOrNull()?.toString() ?: "清",
-                    style = MaterialTheme.typography.displayMedium,
+                    n,
+                    fontSize = fontSize,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.92f)
+                    color = Color.White.copy(alpha = 0.92f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 10.dp)
                 )
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
