@@ -50,7 +50,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -58,6 +57,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -257,14 +257,16 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var playPos by remember { mutableIntStateOf(0) }
     var playDur by remember { mutableIntStateOf(0) }
 
-    // ---- 音乐清单排序：0=新增在上（默认） 1=按名称；编辑模式保持手动拖拽顺序 ----
+    // ---- 音乐清单排序：0=新增在上（默认） 1=按歌手；编辑模式保持手动拖拽顺序 ----
     var musicSortOrder by rememberSaveable { mutableIntStateOf(0) }
     val isMusicRoot = list?.parentId == null && list?.name == "音乐"
     val displayItems = remember(items, musicSortOrder, isMusicRoot, isEditMode) {
         when {
             !isMusicRoot || isEditMode -> items
             musicSortOrder == 1 -> items.sortedWith(
-                compareBy(java.text.Collator.getInstance(java.util.Locale.CHINA)) { it.title }
+                compareBy<CollectionItemEntity> { it.subTitle.isNullOrBlank() } // 无歌手排最后
+                    .thenBy(java.text.Collator.getInstance(java.util.Locale.CHINA)) { it.subTitle ?: "" }
+                    .thenBy(java.text.Collator.getInstance(java.util.Locale.CHINA)) { it.title }
             )
             else -> items.sortedByDescending { it.createdAt }
         }
@@ -498,9 +500,22 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            LinearProgressIndicator(
-                                progress = { if (playDur > 0) playPos.toFloat() / playDur else 0f },
-                                modifier = Modifier.fillMaxWidth().height(3.dp)
+                            // 可拖动进度条：拖动中显示目标位置，松手 seek
+                            var scrubFraction by remember { mutableStateOf<Float?>(null) }
+                            Slider(
+                                value = scrubFraction
+                                    ?: if (playDur > 0) playPos.toFloat() / playDur else 0f,
+                                onValueChange = { scrubFraction = it },
+                                onValueChangeFinished = {
+                                    val f = scrubFraction
+                                    if (f != null && playDur > 0) {
+                                        val target = (f * playDur).toInt()
+                                        runCatching { mediaPlayer?.seekTo(target) }
+                                        playPos = target
+                                    }
+                                    scrubFraction = null
+                                },
+                                modifier = Modifier.fillMaxWidth().height(24.dp)
                             )
                         }
                     }
@@ -663,13 +678,13 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 FilterChip(
                                     selected = musicSortOrder == 0,
                                     onClick = { musicSortOrder = 0 },
-                                    label = { Text("新增在上", style = MaterialTheme.typography.labelSmall) }
+                                    label = { Text("新增", style = MaterialTheme.typography.labelSmall) }
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 FilterChip(
                                     selected = musicSortOrder == 1,
                                     onClick = { musicSortOrder = 1 },
-                                    label = { Text("按名称", style = MaterialTheme.typography.labelSmall) }
+                                    label = { Text("歌手", style = MaterialTheme.typography.labelSmall) }
                                 )
                             }
                         }

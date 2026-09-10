@@ -32,30 +32,22 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import coil.compose.AsyncImage
 import com.shangyin.app.R
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safeNavigate
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,14 +114,25 @@ private fun EmptyHomeContent(nav: NavHostController, modifier: Modifier = Modifi
     }
 }
 
-/** 分类方块：2x2 封面拼图 + 分类名 + 条目数 */
+/** 清单封面配色组（按清单名 hash 稳定取色，同一名单颜色不变） */
+private val TILE_GRADIENTS = listOf(
+    Color(0xFF5B8DEF) to Color(0xFF3E63C9), // 蓝
+    Color(0xFF7C6FF0) to Color(0xFF5A48C4), // 紫
+    Color(0xFF4FBFA1) to Color(0xFF2E9478), // 青
+    Color(0xFFF2A65A) to Color(0xFFD0762A), // 橙
+    Color(0xFFEF6F8E) to Color(0xFFCB4467), // 粉
+    Color(0xFF54B4D3) to Color(0xFF2F85A3), // 天青
+    Color(0xFF93B85A) to Color(0xFF6D903C), // 草绿
+    Color(0xFFB08BF2) to Color(0xFF8258D1)  // 淡紫
+)
+
+private fun tileGradient(name: String) =
+    TILE_GRADIENTS[kotlin.math.abs(name.hashCode()) % TILE_GRADIENTS.size]
+
+/** 分类方块：渐变底 + 清单名首字（简洁封面，不使用条目图片）+ 分类名 + 条目数 */
 @Composable
 private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
-    var covers by remember { mutableStateOf<List<String>>(emptyList()) }
-
-    LaunchedEffect(meta.list.id) {
-        covers = withContext(Dispatchers.IO) { Repo.getListCovers(meta.list.id, 4) }
-    }
+    val (c1, c2) = tileGradient(meta.list.name)
 
     Card(
         onClick = onClick,
@@ -141,19 +144,17 @@ private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
                     .fillMaxWidth()
                     .aspectRatio(1f)
                     .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.linearGradient(listOf(c1, c2))
+                    ),
+                contentAlignment = Alignment.Center
             ) {
-                if (covers.isEmpty()) {
-                    // 默认封面：清单名首字
-                    Text(
-                        meta.list.name.firstOrNull()?.toString() ?: "清",
-                        style = MaterialTheme.typography.displayMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                } else {
-                    CoverCollage(covers.take(4))
-                }
+                Text(
+                    meta.list.name.firstOrNull()?.toString() ?: "清",
+                    style = MaterialTheme.typography.displayMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White.copy(alpha = 0.92f)
+                )
             }
             Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                 Text(
@@ -171,59 +172,4 @@ private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
             }
         }
     }
-}
-
-/** 封面拼贴 */
-@Composable
-private fun CoverCollage(covers: List<String>) {
-    when (covers.size) {
-        1 -> AsyncImage(covers[0], Modifier.fillMaxSize())
-        2 -> TwoCovers(covers[0], covers[1])
-        3 -> ThreeCovers(covers[0], covers[1], covers[2])
-        else -> FourCovers(covers[0], covers[1], covers[2], covers[3])
-    }
-}
-
-@Composable
-private fun TwoCovers(u1: String, u2: String) {
-    Row(Modifier.fillMaxSize()) {
-        AsyncImage(u1, Modifier.weight(1f))
-        Box(Modifier.weight(1f).fillMaxSize()) {
-            AsyncImage(u2, Modifier.fillMaxSize())
-            Box(Modifier.fillMaxSize().background(Color(0x33000000)))
-        }
-    }
-}
-
-@Composable
-private fun ThreeCovers(u1: String, u2: String, u3: String) {
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.weight(1f).fillMaxSize()) {
-            AsyncImage(u1, Modifier.weight(1f))
-            AsyncImage(u2, Modifier.weight(1f))
-        }
-        AsyncImage(u3, Modifier.weight(1f).fillMaxWidth())
-    }
-}
-
-@Composable
-private fun FourCovers(u1: String, u2: String, u3: String, u4: String) {
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.weight(1f).fillMaxSize()) {
-            AsyncImage(u1, Modifier.weight(1f))
-            AsyncImage(u2, Modifier.weight(1f))
-        }
-        Row(Modifier.weight(1f).fillMaxSize()) {
-            AsyncImage(u3, Modifier.weight(1f))
-            AsyncImage(u4, Modifier.weight(1f))
-        }
-    }
-}
-
-@Composable
-private fun AsyncImage(url: String, modifier: Modifier = Modifier) {
-    coil.compose.AsyncImage(
-        model = url, contentDescription = null, contentScale = ContentScale.Crop,
-        modifier = modifier.fillMaxSize()
-    )
 }

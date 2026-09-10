@@ -113,6 +113,11 @@ object SnifferParser {
         when (node) {
             is JSONObject -> {
                 tryParseSongArray(node, out)
+                // 通用单曲提取：对象里有歌名字段 + 任意字段值是音频直链 → 认一首
+                // 播放接口返回的单对象/嵌套 data 结构千奇百怪，不挑 key 名
+                parseSongObj(node)?.let { song ->
+                    if (song.playUrl != null) out.putIfAbsent(keyOf(song), song)
+                }
                 node.keys().forEach { k -> walk(node.opt(k), out) }
             }
             is JSONArray -> {
@@ -143,16 +148,32 @@ object SnifferParser {
         val songs = mutableListOf<SniffedSong>()
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: return emptyList() // 必须全是对象
-            val name = firstStr(o, "name", "title", "songName", "musicName", "song_name") ?: return emptyList()
-            if (name.isBlank() || name.length > 120) return emptyList()
-            val artist = firstStr(o, "singer", "artist", "author", "userName")
-                ?: optArrJoin(o, "singers", "artists")
-                ?: ""
-            val cover = firstStr(o, "pic", "cover", "img", "picture", "albumpic", "picUrl", "coverImg")
-            val playUrl = firstAudioish(o, "url", "link", "src", "src_url", "play_url", "playUrl", "mp3", "file")
-            songs.add(SniffedSong(name, artist, cover, playUrl))
+            val song = parseSongObj(o) ?: return emptyList()   // 必须都带名称字段
+            songs.add(song)
         }
         return songs
+    }
+
+    /** 单曲解析：名称字段（必须）+ 任意 string 字段值是音频直链（不限 key 名） */
+    private fun parseSongObj(o: JSONObject): SniffedSong? {
+        val name = firstStr(o, "name", "title", "songName", "musicName", "song_name") ?: return null
+        if (name.isBlank() || name.length > 120) return null
+        val artist = firstStr(o, "singer", "artist", "author", "userName")
+            ?: optArrJoin(o, "singers", "artists")
+            ?: ""
+        val cover = firstStr(o, "pic", "cover", "img", "picture", "albumpic", "picUrl", "coverImg")
+        val playUrl = findAudioInFields(o)
+        return SniffedSong(name, artist, cover, playUrl)
+    }
+
+    /** 遍历对象所有 string 字段取第一个音频直链（接口的直链字段名五花八门，干脆不挑） */
+    private fun findAudioInFields(o: JSONObject): String? {
+        val keys = o.keys()
+        while (keys.hasNext()) {
+            val v = o.opt(keys.next())
+            if (v is String && isAudioStreamUrl(v)) return v.trim()
+        }
+        return null
     }
 
     private fun firstStr(o: JSONObject, vararg keys: String): String? {
@@ -179,15 +200,6 @@ object SnifferParser {
                 }
                 if (names.isNotEmpty()) return names.joinToString("/")
             }
-        }
-        return null
-    }
-
-    /** 只认"真的是音频直链"的 URL（音频扩展名），防止把站内页面链接当直链存库导致播放失败 */
-    private fun firstAudioish(o: JSONObject, vararg keys: String): String? {
-        for (k in keys) {
-            val v = o.opt(k)
-            if (v is String && isAudioStreamUrl(v)) return v.trim()
         }
         return null
     }
@@ -237,7 +249,13 @@ private val SNIFFER_JS = """
   XMLHttpRequest.prototype.open = function(m, u){ this.__sniffUrl = u; return xo.apply(this, arguments); };
   XMLHttpRequest.prototype.send = function(){
     this.addEventListener('load', function(){
-      try { send(this.__sniffUrl, this.responseText); } catch(e) {}
+      try {
+        // responseType='json'/'blob' 等时访问 responseText 会直接抛异常，必须按类型取
+        var rt = this.responseType;
+        var body = (!rt || rt === 'text') ? this.responseText
+                 : (rt === 'json' && this.response ? JSON.stringify(this.response) : null);
+        if (body) send(this.__sniffUrl, body);
+      } catch(e) {}
     });
     return xs.apply(this, arguments);
   };
@@ -362,9 +380,14 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         return null
     }
 
-    /** 收藏一首歌（含自动试听获取直链），返回是否成功 */
-    suspend fun saveSongNow(song: SniffedSong, key: String, onDone: (Boolean, String?) -> Unit) {
+    /** 收藏一首歌（含自动试听获取直链）。开始前按 key 重新取最新解析结果——播放接口回填的直链立即生效 */
+    suspend fun saveSongNow(key: String, onDone: (Boolean, String?) -> Unit) {
         savingKeys.add(key)
+        val song = songs.firstOrNull { "${it.name}::${it.artist}" == key } ?: run {
+            savingKeys.remove(key)
+            onDone(false, "歌曲已不在列表中")
+            return
+        }
         val url = runCatching { resolvePlayUrl(song) }.getOrNull()
         val id = withContext(Dispatchers.IO) {
             runCatching {
@@ -545,9 +568,9 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                                 tint = MaterialTheme.colorScheme.primary,
                                                 modifier = Modifier.size(22.dp).clickable {
                                                     if (!saved) {
-                                                        // 点收藏即自动试听：让网页点播这首歌，抓到直链再落库
+                                                        // 点收藏即自动获取直链（API 已有则直接用；没有则自动点播试听）
                                                         scope.launch {
-                                                            saveSongNow(song, key) { _, msg ->
+                                                            saveSongNow(key) { _, msg ->
                                                                 android.widget.Toast.makeText(
                                                                     context, msg, android.widget.Toast.LENGTH_SHORT
                                                                 ).show()
@@ -563,11 +586,11 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                             TextButton(
                                 onClick = {
                                     scope.launch {
-                                        // 逐首自动试听 + 收藏（串行：避免同时点播多首互相干扰）
+                                        // 逐首自动获取直链 + 收藏（串行：避免同时点播多首互相干扰）
                                         songs.forEach { s ->
                                             val k = "${s.name}::${s.artist}"
                                             if (k !in savedKeys) {
-                                                saveSongNow(s, k) { _, _ -> }
+                                                saveSongNow(k) { _, _ -> }
                                             }
                                         }
                                         android.widget.Toast.makeText(
