@@ -237,6 +237,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         // 分类与派生数据
         val isBook = entity.category == "图书"
         val isGame = entity.category == "游戏"
+        val isMusic = entity.category == "音乐"
         val photoUrls = photos.mapNotNull { it.largeUrl ?: it.normalUrl }
         val celebTitle = if (isBook) "作者/译者" else if (isGame) "开发商/平台" else "演职员"
         val photoTitle = if (isGame) "游戏截图" else "剧照"
@@ -254,6 +255,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             val fromCat = when (entity.category) {
                 "图书" -> "book"
                 "游戏" -> "game"
+                "音乐" -> "music"
                 else -> "film"
             }
             val encName = java.net.URLEncoder.encode(c.name, "UTF-8")
@@ -427,7 +429,11 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     }
                     if (entity.casts.isNotBlank()) {
                         Text(
-                            if (isBook) "译者: ${entity.casts}" else "主演: ${entity.casts}",
+                            when {
+                                isBook -> "译者: ${entity.casts}"
+                                isMusic -> "歌手: ${entity.casts}"
+                                else -> "主演: ${entity.casts}"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -470,6 +476,18 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                         }
                     }
                 }
+            }
+
+            // 在线试听（音乐专属：按歌手+专辑搜歌并流式播放）
+            if (isMusic) {
+                MusicPlayerSection(
+                    albumTitle = entity.title,
+                    artist = entity.directors.ifBlank {
+                        // 兜底：从头部信息行提取"表演者:"后的名字
+                        Regex("""表演者[:：]\s*([^\n/]+)""").find(entity.info)
+                            ?.groupValues?.get(1)?.trim().orEmpty()
+                    }
+                )
             }
 
             // 网友短评
