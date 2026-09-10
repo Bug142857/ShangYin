@@ -110,6 +110,38 @@ object Repo {
         else itemDao.findByDouban(r.category.label, r.doubanId)?.id ?: -1L
     }
 
+    /**
+     * 收藏嗅探到的歌曲：自动归入"音乐"根清单（不存在则创建），
+     * 同名同歌手在清单内去重。返回条目 id（-1 = 失败）。
+     */
+    suspend fun saveMusic(
+        name: String,
+        artist: String,
+        coverUrl: String?,
+        playUrl: String?
+    ): Long {
+        // 确保存在名为"音乐"的根清单
+        val allLists = listDao.observeAllLists().first()
+        val musicList = allLists.firstOrNull { it.parentId == null && it.name == "音乐" }
+            ?: run {
+                val id = createList("音乐")
+                listDao.observeList(id).first() ?: ItemListEntity(id = id, name = "音乐")
+            }
+        // 清单内查重：同名同歌手视为同一首
+        val existing = listDao.observeItemsIn(musicList.id).first()
+            .firstOrNull { it.title == name && it.subTitle == artist }
+        if (existing != null) return existing.id
+        val itemId = addManual(
+            categoryLabel = "音乐",
+            title = name,
+            subTitle = artist,
+            coverUrl = coverUrl,
+            doubanUrl = playUrl
+        )
+        if (itemId != -1L) addItemToList(musicList.id, itemId)
+        return itemId
+    }
+
     /** 手动添加（游戏等豆瓣搜索不可用时的兜底） */
     suspend fun addManual(
         categoryLabel: String,

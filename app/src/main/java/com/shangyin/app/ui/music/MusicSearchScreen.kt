@@ -26,18 +26,23 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -241,6 +246,86 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     var parsing by remember { mutableStateOf(false) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
+    // ---- 原生播放状态（点歌行播放） ----
+    var player by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var playingKey by remember { mutableStateOf<String?>(null) }
+    var playTitle by remember { mutableStateOf("") }
+    var isPlaying by remember { mutableStateOf(false) }
+    var preparing by remember { mutableStateOf(false) }
+    var playError by remember { mutableStateOf<String?>(null) }
+    var positionMs by remember { mutableIntStateOf(0) }
+    var durationMs by remember { mutableIntStateOf(0) }
+
+    fun releasePlayer() {
+        runCatching { player?.release() }
+        player = null
+        isPlaying = false
+    }
+
+    fun playSong(song: SniffedSong) {
+        val url = song.playUrl
+        if (url.isNullOrBlank()) {
+            playError = "「${song.name}」暂无直链，请在上方网页中点一次播放，App 捕获后即可播"
+            return
+        }
+        releasePlayer()
+        playError = null
+        preparing = true
+        playingKey = "${song.name}::${song.artist}"
+        playTitle = if (song.artist.isBlank()) song.name else "${song.name} - ${song.artist}"
+        val mp = android.media.MediaPlayer()
+        runCatching {
+            mp.setDataSource(url)
+            mp.setOnPreparedListener {
+                durationMs = it.duration
+                it.start()
+                isPlaying = true
+                preparing = false
+            }
+            mp.setOnCompletionListener {
+                isPlaying = false
+                positionMs = 0
+            }
+            mp.setOnErrorListener { _, what, extra ->
+                playError = "播放失败（$what/$extra），直链可能已失效"
+                isPlaying = false
+                preparing = false
+                true
+            }
+            mp.prepareAsync()
+            player = mp
+        }.onFailure {
+            preparing = false
+            playError = "无法播放：${it.message ?: "链接无效"}"
+            runCatching { mp.release() }
+        }
+    }
+
+    fun togglePlay() {
+        val mp = player ?: return
+        runCatching {
+            if (mp.isPlaying) { mp.pause(); isPlaying = false }
+            else { mp.start(); isPlaying = true }
+        }
+    }
+
+    // 退出页面释放播放器
+    DisposableEffect(Unit) {
+        onDispose { releasePlayer() }
+    }
+
+    // 播放中刷新进度
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            val mp = player
+            if (mp != null) runCatching {
+                positionMs = mp.currentPosition
+                durationMs = mp.duration
+            }
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
     val sniffer = remember {
         object {
             @JavascriptInterface
@@ -356,24 +441,65 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                             )
                         }
                         if (expanded) {
+                            // mini 播放条
+                            if (playingKey != null) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp)
+                                ) {
+                                    IconButton(onClick = { togglePlay() }, modifier = Modifier.size(34.dp)) {
+                                        if (preparing) {
+                                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                                        } else {
+                                            Icon(
+                                                if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                                contentDescription = "播放/暂停",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            playTitle,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        LinearProgressIndicator(
+                                            progress = {
+                                                if (durationMs > 0) positionMs.toFloat() / durationMs else 0f
+                                            },
+                                            modifier = Modifier.fillMaxWidth().height(3.dp)
+                                        )
+                                        Text(
+                                            "${fmtMs(positionMs)} / ${fmtMs(durationMs)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                             LazyColumn(
                                 modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp)
                             ) {
                                 items(songs) { song ->
                                     val key = "${song.name}::${song.artist}"
                                     val saved = key in savedKeys
+                                    val playing = key == playingKey
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.fillMaxWidth()
-                                            .clickable {
-                                                if (!saved) saveSong(song, key, scope, context, savedKeys)
-                                            }
+                                            .clickable { playSong(song) }  // 点歌行 = 播放
                                             .padding(horizontal = 14.dp, vertical = 6.dp)
                                     ) {
                                         Column(Modifier.weight(1f)) {
                                             Text(
                                                 song.name,
                                                 style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = if (playing) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (playing) MaterialTheme.colorScheme.primary
+                                                else MaterialTheme.colorScheme.onSurface,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis
                                             )
@@ -386,6 +512,15 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                                     overflow = TextOverflow.Ellipsis
                                                 )
                                             }
+                                        }
+                                        if (playing) {
+                                            Icon(
+                                                if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(Modifier.width(10.dp))
                                         }
                                         when {
                                             key in savingKeys -> CircularProgressIndicator(
@@ -401,7 +536,9 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                                 Icons.Rounded.Add,
                                                 contentDescription = "收藏",
                                                 tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(22.dp)
+                                                modifier = Modifier.size(22.dp).clickable {
+                                                    if (!saved) saveSong(song, key, scope, context, savedKeys)
+                                                }
                                             )
                                         }
                                     }
@@ -415,12 +552,11 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                             if (k !in savedKeys) {
                                                 withContext(Dispatchers.Main) { savingKeys.add(k) }
                                                 runCatching {
-                                                    Repo.addManual(
-                                                        categoryLabel = "音乐",
-                                                        title = s.name,
-                                                        subTitle = s.artist,
+                                                    Repo.saveMusic(
+                                                        name = s.name,
+                                                        artist = s.artist,
                                                         coverUrl = s.cover,
-                                                        doubanUrl = s.playUrl
+                                                        playUrl = s.playUrl
                                                     )
                                                 }
                                                 withContext(Dispatchers.Main) {
@@ -455,21 +591,27 @@ private fun saveSong(
 ) {
     scope.launch(Dispatchers.IO) {
         val id = runCatching {
-            Repo.addManual(
-                categoryLabel = "音乐",
-                title = song.name,
-                subTitle = song.artist,
+            Repo.saveMusic(
+                name = song.name,
+                artist = song.artist,
                 coverUrl = song.cover,
-                doubanUrl = song.playUrl
+                playUrl = song.playUrl
             )
         }.getOrDefault(-1L)
         kotlinx.coroutines.withContext(Dispatchers.Main) {
             if (id != -1L) {
                 if (!savedKeys.contains(key)) savedKeys.add(key)
-                android.widget.Toast.makeText(context, "已收藏「${song.name}」", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(
+                    context, "已收藏到主页「音乐」清单", android.widget.Toast.LENGTH_SHORT
+                ).show()
             } else {
                 android.widget.Toast.makeText(context, "收藏失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
+}
+
+private fun fmtMs(ms: Int): String {
+    if (ms <= 0) return "0:00"
+    return String.format(java.util.Locale.getDefault(), "%d:%02d", ms / 60000, (ms % 60000) / 1000)
 }

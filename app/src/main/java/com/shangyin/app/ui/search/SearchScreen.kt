@@ -193,7 +193,15 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                 listOf("影视", "图书", "游戏", "音乐", "人物").forEach { label ->
                     FilterChip(
                         selected = selectedCat == label,
-                        onClick = { selectedCat = if (selectedCat == label) "" else label },
+                        onClick = {
+                            if (label == "音乐") {
+                                // 音乐直接进泡椒音源嗅探页（网页内搜索，无需二次输入）
+                                keyboard?.hide()
+                                nav.safeNavigate("musicSearch")
+                            } else {
+                                selectedCat = if (selectedCat == label) "" else label
+                            }
+                        },
                         label = { Text(label) },
                         modifier = Modifier.padding(end = 8.dp)
                     )
