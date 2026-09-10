@@ -185,7 +185,9 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         }
     ) { pad ->
         Column(
-            Modifier.padding(pad).fillMaxSize().padding(16.dp),
+            Modifier.padding(pad).fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 用户信息区（头像可点击换，整行可改昵称）

@@ -42,7 +42,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
@@ -188,6 +191,7 @@ fun CloudSyncScreen(nav: NavHostController) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                LinkText("如何获取坚果云应用密码？（官方教程）", HELP_URL)
 
                 // 清除配置
                 TextButton(
@@ -297,6 +301,32 @@ fun CloudSyncScreen(nav: NavHostController) {
     }
 }
 
+/** 坚果云官网（含注册入口） */
+private const val HOME_URL = "https://www.jianguoyun.com/"
+
+/** 坚果云应用密码官方教程 */
+private const val HELP_URL = "https://help.jianguoyun.com/?p=2064"
+
+/** 调用系统浏览器打开链接 */
+private fun openInBrowser(context: android.content.Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    }
+}
+
+/** 可点击链接文本（跳系统浏览器） */
+@Composable
+private fun LinkText(text: String, url: String) {
+    val context = LocalContext.current
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+        textDecoration = TextDecoration.Underline,
+        modifier = Modifier.clickable { openInBrowser(context, url) }
+    )
+}
+
 /** WebDAV 配置表单（首次使用） */
 @Composable
 private fun ConfigForm(
@@ -349,10 +379,12 @@ private fun ConfigForm(
             )
 
             Text(
-                "坚果云获取应用密码：登录 nutstore.com → 账户信息 → 安全选项 → 添加应用密码（密码不是登录密码，是单独生成的）",
+                "获取应用密码：登录坚果云 → 右上角账户信息 → 安全选项 → 第三方应用管理 → 添加应用密码（生成的是专用随机密码，不是登录密码）",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            LinkText("① 打开坚果云官网（注册 / 登录）", HOME_URL)
+            LinkText("② 查看应用密码图文教程", HELP_URL)
 
             Button(
                 onClick = {
