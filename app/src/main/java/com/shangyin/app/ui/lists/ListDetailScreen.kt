@@ -37,10 +37,17 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,17 +59,21 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -226,6 +237,98 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     val currentItemIds = rememberUpdatedState(items.map { it.id })
     val currentSubIds = rememberUpdatedState(childLists.map { it.list.id })
 
+    // ---- 音乐清单：点击即播（"音乐"根清单默认列表模式） ----
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var userToggledLayout by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(list?.id, list?.name) {
+        if (!userToggledLayout && list?.parentId == null && list?.name == "音乐") {
+            layoutMode = ListLayoutMode.LIST
+        }
+    }
+    var mediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
+    var currentPlayId by remember { mutableStateOf<Long?>(null) }
+    var playTitle by remember { mutableStateOf("") }
+    var playPlaying by remember { mutableStateOf(false) }
+    var playPreparing by remember { mutableStateOf(false) }
+    var playPos by remember { mutableIntStateOf(0) }
+    var playDur by remember { mutableIntStateOf(0) }
+
+    fun releasePlayer() {
+        runCatching { mediaPlayer?.release() }
+        mediaPlayer = null
+        playPlaying = false
+    }
+    DisposableEffect(Unit) { onDispose { releasePlayer() } }
+
+    fun playMusic(item: com.shangyin.app.data.db.CollectionItemEntity) {
+        // 同一首 → 播放/暂停切换
+        if (currentPlayId == item.id) {
+            val p = mediaPlayer
+            if (p != null && playPlaying) { runCatching { p.pause() }; playPlaying = false }
+            else if (p != null) { runCatching { p.start() }; playPlaying = true }
+            return
+        }
+        val url = item.doubanUrl
+        if (url.isNullOrBlank()) {
+            android.widget.Toast.makeText(context, "该歌曲没有播放直链，请在音乐搜索重新收藏", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        releasePlayer()
+        playPreparing = true
+        playTitle = if (item.subTitle.isNullOrBlank()) item.title else "${item.title} - ${item.subTitle}"
+        val m = android.media.MediaPlayer()
+        runCatching {
+            m.setDataSource(url)
+            m.setOnPreparedListener {
+                playDur = it.duration
+                runCatching { it.start() }
+                playPlaying = true
+                playPreparing = false
+            }
+            m.setOnCompletionListener {
+                playPlaying = false
+                playPos = 0
+                // 自动下一首
+                val idx = items.indexOfFirst { it.id == item.id }
+                val next = items.getOrNull(idx + 1) ?: items.firstOrNull()
+                if (next != null && next.id != item.id) playMusic(next)
+            }
+            m.setOnErrorListener { _, what, extra ->
+                playPreparing = false
+                playPlaying = false
+                android.widget.Toast.makeText(context, "播放失败（$what/$extra），直链可能已失效", android.widget.Toast.LENGTH_SHORT).show()
+                true
+            }
+            m.prepareAsync()
+            mediaPlayer = m
+            currentPlayId = item.id
+        }.onFailure {
+            playPreparing = false
+            android.widget.Toast.makeText(context, "无法播放：${it.message ?: "链接无效"}", android.widget.Toast.LENGTH_SHORT).show()
+            runCatching { m.release() }
+        }
+    }
+
+    fun skipBy(delta: Int) {
+        val cur = currentPlayId ?: return
+        val idx = items.indexOfFirst { it.id == cur }
+        if (idx < 0) return
+        val target = items.getOrNull(idx + delta) ?: return
+        playMusic(target)
+    }
+
+    // 播放中刷新进度
+    LaunchedEffect(playPlaying) {
+        while (playPlaying) {
+            val p = mediaPlayer
+            if (p != null) runCatching {
+                playPos = p.currentPosition
+                playDur = p.duration
+            }
+            kotlinx.coroutines.delay(500)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -284,6 +387,51 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     }
                 }
             )
+        },
+        bottomBar = {
+            if (currentPlayId != null && !isEditMode) {
+                // 音乐清单 mini 播放条
+                Surface(shadowElevation = 8.dp) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        IconButton(onClick = { skipBy(-1) }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首")
+                        }
+                        IconButton(onClick = {
+                            val p = mediaPlayer
+                            if (p != null && playPlaying) { runCatching { p.pause() }; playPlaying = false }
+                            else if (p != null) { runCatching { p.start() }; playPlaying = true }
+                        }, modifier = Modifier.size(40.dp)) {
+                            if (playPreparing) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(
+                                    if (playPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = "播放/暂停",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        IconButton(onClick = { skipBy(1) }, modifier = Modifier.size(36.dp)) {
+                            Icon(Icons.Rounded.SkipNext, contentDescription = "下一首")
+                        }
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                playTitle,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            LinearProgressIndicator(
+                                progress = { if (playDur > 0) playPos.toFloat() / playDur else 0f },
+                                modifier = Modifier.fillMaxWidth().height(3.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
     ) { pad ->
         // 子清单与条目平级混排：子清单排最前
@@ -380,10 +528,15 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "scale")
+                        val isMusic = item.category == "音乐"
                         ItemRowInList(
                             item = item,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
+                            onOpenDetail = if (isMusic && !isEditMode) {
+                                { nav.safeNavigate("item/${item.id}") }
+                            } else null,
+                            isCurrentPlaying = item.id == currentPlayId && !isEditMode,
                             modifier = (if (isEditMode) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = true,
@@ -393,7 +546,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
                                 onTap = {},
                                 onLongPress = {}
-                            ) else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") })
+                            ) else Modifier.fillMaxWidth().clickable {
+                                if (isMusic) playMusic(item) else nav.safeNavigate("item/${item.id}")
+                            })
                                 .graphicsLayer {
                                     scaleX = scale; scaleY = scale
                                     shadowElevation = if (isDragging) 24f else 0f
@@ -774,7 +929,9 @@ private fun ItemRowInList(
     item: CollectionItemEntity,
     modifier: Modifier = Modifier,
     isEditMode: Boolean = false,
-    onRemove: () -> Unit = {}
+    onRemove: () -> Unit = {},
+    onOpenDetail: (() -> Unit)? = null,
+    isCurrentPlaying: Boolean = false
 ) {
     Box(modifier.fillMaxWidth()) {
         Row(
@@ -792,6 +949,8 @@ private fun ItemRowInList(
                 Text(
                     item.title,
                     style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (isCurrentPlaying) FontWeight.Bold else FontWeight.Normal,
+                    color = if (isCurrentPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -806,6 +965,19 @@ private fun ItemRowInList(
                         )
                     }
                 }
+            }
+            if (onOpenDetail != null) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.ArrowBack,
+                    contentDescription = "查看详情",
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier
+                        .align(Alignment.CenterVertically)
+                        .padding(start = 4.dp)
+                        .size(18.dp)
+                        .rotate(180f)
+                        .clickable(onClick = onOpenDetail)
+                )
             }
         }
         if (isEditMode) {
