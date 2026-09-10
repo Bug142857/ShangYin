@@ -278,7 +278,14 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         playTitle = if (item.subTitle.isNullOrBlank()) item.title else "${item.title} - ${item.subTitle}"
         val m = android.media.MediaPlayer()
         runCatching {
-            m.setDataSource(url)
+            // 带上泡椒站的 Cookie/Referer/UA，绕过防盗链
+            val headers = mutableMapOf(
+                "Referer" to "https://flac.music.hi.cn/",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+            )
+            android.webkit.CookieManager.getInstance()
+                .getCookie("https://flac.music.hi.cn/")?.let { headers["Cookie"] = it }
+            m.setDataSource(context, android.net.Uri.parse(url), headers)
             m.setOnPreparedListener {
                 playDur = it.duration
                 runCatching { it.start() }
@@ -999,113 +1006,5 @@ private fun ItemRowInList(
                 )
             }
         }
-    }
-}
-
-/** 从本地收藏里挑选条目加入清单 */
-@Composable
-private fun AddItemToAlertDialog(
-    listId: Long,
-    existingIds: Set<Long>,
-    onDismiss: () -> Unit
-) {
-    val scope = rememberCoroutineScope()
-    val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
-    var showClearOrphan by remember { mutableStateOf(false) }
-    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    // 加载所有清单里已添加的条目 ID，过滤掉不显示
-    var allListItemIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
-    LaunchedEffect(Unit) {
-        allListItemIds = withContext(Dispatchers.IO) { Repo.getAllListItemIds().toSet() }
-    }
-    val candidates = remember(allItems, query, allListItemIds) {
-        val list = if (query.isBlank()) allItems else allItems.filter {
-            it.title.contains(query, ignoreCase = true) || it.subTitle.contains(query, ignoreCase = true)
-        }
-        // 不显示任何清单里已添加的条目
-        list.filter { it.id !in allListItemIds }.take(50)
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("从收藏中添加") },
-        text = {
-            Column {
-                // 顶部工具栏：搜索 + 清理孤立收藏
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        placeholder = { Text("搜索收藏…") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    TextButton(onClick = { showClearOrphan = true }) {
-                        Text("清理", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                if (allItems.isEmpty()) {
-                    Text(
-                        "还没有收藏，先去搜索页收藏一些吧",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().height(320.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(candidates, key = { it.id }) { item ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            CoverImage(
-                                url = item.coverUrl,
-                                modifier = Modifier.width(36.dp).height(50.dp)
-                            )
-                            Text(
-                                item.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
-                            )
-                            TextButton(onClick = {
-                                scope.launch { Repo.addItemToList(listId, item.id) }
-                            }) {
-                                Text("加入")
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("完成") } }
-    )
-
-    // 清理孤立收藏确认
-    if (showClearOrphan) {
-        AlertDialog(
-            onDismissRequest = { showClearOrphan = false },
-            title = { Text("清理孤立收藏") },
-            text = { Text("删除所有不在任何清单里的收藏？（已在清单里的不会被删）") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        val n = Repo.clearOrphanItems()
-                        Toast.makeText(context, if (n > 0) "已清理 $n 条孤立收藏" else "没有需要清理的条目", Toast.LENGTH_SHORT).show()
-                        showClearOrphan = false
-                    }
-                }) { Text("清理") }
-            },
-            dismissButton = { TextButton(onClick = { showClearOrphan = false }) { Text("取消") } }
-        )
     }
 }

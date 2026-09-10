@@ -9,6 +9,7 @@ import coil.memory.MemoryCache
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.douban.DoubanClient
 import com.shangyin.app.ui.settings.SettingsStore
+import kotlinx.coroutines.launch
 import okhttp3.Cache
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -22,6 +23,10 @@ class App : Application(), ImageLoaderFactory {
         instance = this
         Repo.init(this)
         SettingsStore.init(this)
+        // 零孤儿机制：启动时静默清理历史遗留的孤立收藏（v2.4.0 起新孤儿不会再产生）
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching { Repo.pruneOrphans() }
+        }
     }
 
     /** 构建带磁盘缓存的共享 OkHttpClient，DoubanClient 和 Coil 共用 */

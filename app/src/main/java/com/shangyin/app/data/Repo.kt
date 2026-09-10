@@ -33,7 +33,10 @@ object Repo {
 
     /** 快速收藏：只落库搜索结果自带信息，不阻塞等详情网络请求（详情页打开后自动补全） */
     suspend fun saveFromDoubanFast(r: DoubanResult): Long {
-        itemDao.findByDouban(r.category.label, r.doubanId)?.let { return it.id }
+        itemDao.findByDouban(r.category.label, r.doubanId)?.let { existing ->
+            ensureItemInCategoryList(existing.id, r.category.label)
+            return existing.id
+        }
         val id = itemDao.insert(
             CollectionItemEntity(
                 category = r.category.label,
@@ -52,8 +55,37 @@ object Repo {
                 status = ""
             )
         )
-        return if (id != -1L) id
+        val finalId = if (id != -1L) id
         else itemDao.findByDouban(r.category.label, r.doubanId)?.id ?: -1L
+        if (finalId != -1L) ensureItemInCategoryList(finalId, r.category.label)
+        return finalId
+    }
+
+    /**
+     * 确保条目归属分类同名根清单（不存在则创建）。
+     * 这是"零孤儿"机制的核心：任何条目创建/收藏路径都必须落到清单里，
+     * 不在任何清单中的条目会被自动清理（pruneOrphans）。
+     */
+    suspend fun ensureItemInCategoryList(itemId: Long, categoryLabel: String) {
+        val target = listDao.observeAllLists().first()
+            .firstOrNull { it.parentId == null && it.name == categoryLabel }
+            ?: run {
+                val newId = createList(categoryLabel)
+                listDao.observeList(newId).first() ?: ItemListEntity(id = newId, name = categoryLabel)
+            }
+        // 已在清单内则忽略（insertItem 有唯一约束）
+        val already = listDao.observeItemsIn(target.id).first().any { it.id == itemId }
+        if (!already) addItemToList(target.id, itemId)
+    }
+
+    /** 删除不再属于任何清单的条目（零孤儿机制），返回删除数量 */
+    suspend fun pruneOrphans(): Int {
+        val orphanIds = listDao.getOrphanItemIds()
+        if (orphanIds.isEmpty()) return 0
+        db.withTransaction {
+            orphanIds.forEach { itemDao.deleteById(it) }
+        }
+        return orphanIds.size
     }
 
     /** 从豆瓣搜索结果收藏（自动抓取详情补全封面/评分/简介/导演/演员），返回条目 id */
@@ -111,8 +143,8 @@ object Repo {
     }
 
     /**
-     * 收藏嗅探到的歌曲：自动归入"音乐"根清单（不存在则创建），
-     * 同名同歌手在清单内去重。返回条目 id（-1 = 失败）。
+     * 收藏嗅探到的歌曲（自动归入"音乐"根清单）。
+     * 同名同歌手视为同一首：已存在时若新直链不同则刷新直链（旧直链过期后的恢复手段）。
      */
     suspend fun saveMusic(
         name: String,
@@ -120,29 +152,30 @@ object Repo {
         coverUrl: String?,
         playUrl: String?
     ): Long {
-        // 确保存在名为"音乐"的根清单
-        val allLists = listDao.observeAllLists().first()
-        val musicList = allLists.firstOrNull { it.parentId == null && it.name == "音乐" }
-            ?: run {
-                val id = createList("音乐")
-                listDao.observeList(id).first() ?: ItemListEntity(id = id, name = "音乐")
+        // 清单内查重：同名同歌手视为同一首；直链变了就刷新（"音乐"清单由 addManual 自动保证存在）
+        val musicList = listDao.observeAllLists().first()
+            .firstOrNull { it.parentId == null && it.name == "音乐" }
+        if (musicList != null) {
+            val existing = listDao.observeItemsIn(musicList.id).first()
+                .firstOrNull { it.title == name && it.subTitle == artist }
+            if (existing != null) {
+                if (!playUrl.isNullOrBlank() && playUrl != existing.doubanUrl) {
+                    itemDao.update(existing.copy(doubanUrl = playUrl, updatedAt = System.currentTimeMillis()))
+                }
+                ensureItemInCategoryList(existing.id, "音乐")
+                return existing.id
             }
-        // 清单内查重：同名同歌手视为同一首
-        val existing = listDao.observeItemsIn(musicList.id).first()
-            .firstOrNull { it.title == name && it.subTitle == artist }
-        if (existing != null) return existing.id
-        val itemId = addManual(
+        }
+        return addManual(
             categoryLabel = "音乐",
             title = name,
             subTitle = artist,
             coverUrl = coverUrl,
             doubanUrl = playUrl
         )
-        if (itemId != -1L) addItemToList(musicList.id, itemId)
-        return itemId
     }
 
-    /** 手动添加（游戏等豆瓣搜索不可用时的兜底） */
+    /** 手动添加（游戏等豆瓣搜索不可用时的兜底）；自动归入分类同名根清单 */
     suspend fun addManual(
         categoryLabel: String,
         title: String,
@@ -167,7 +200,9 @@ object Repo {
             status = ""
         )
         val id = itemDao.insert(entity)
-        return if (id != -1L) id else itemDao.findByDouban(categoryLabel, doubanId)?.id ?: -1L
+        val finalId = if (id != -1L) id else itemDao.findByDouban(categoryLabel, doubanId)?.id ?: -1L
+        if (finalId != -1L) ensureItemInCategoryList(finalId, categoryLabel)
+        return finalId
     }
 
     private fun detailDefaultUrl(r: DoubanResult): String = when (r.category) {
@@ -248,7 +283,7 @@ object Repo {
 
     suspend fun deleteList(list: ItemListEntity) = listDao.deleteList(list)
 
-    /** 删除清单并递归删除所有层级的子清单（list_items 由外键 CASCADE 自动清理） */
+    /** 删除清单并递归删除所有层级的子清单（list_items 由外键 CASCADE 自动清理），随后清理孤儿条目 */
     suspend fun deleteListTree(list: ItemListEntity) {
         db.withTransaction {
             // BFS 收集所有后代清单
@@ -265,6 +300,8 @@ object Repo {
             toDelete.forEach { listDao.deleteList(it) }
             listDao.deleteList(list)
         }
+        // 零孤儿机制：随清单删除后不再属于任何清单的条目一并清理
+        pruneOrphans()
     }
 
     /** 子清单数量（用于删除确认提示） */
@@ -284,9 +321,6 @@ object Repo {
         }
     }
 
-    /** 获取所有已加入清单的条目 ID */
-    suspend fun getAllListItemIds(): List<Long> = listDao.getAllListItemIds()
-
     /** 加入清单：若已在清单内则忽略；同时用清单首图做清单封面 */
     suspend fun addItemToList(listId: Long, itemId: Long) {
         db.withTransaction {
@@ -305,16 +339,8 @@ object Repo {
 
     suspend fun removeItemFromList(listId: Long, itemId: Long) {
         listDao.removeItem(listId, itemId)
-    }
-
-    /** 删除所有不在任何清单中的收藏条目（清理"孤立收藏"），返回删除数量 */
-    suspend fun clearOrphanItems(): Int {
-        val orphanIds = listDao.getOrphanItemIds()
-        if (orphanIds.isEmpty()) return 0
-        db.withTransaction {
-            orphanIds.forEach { itemDao.deleteById(it) }
-        }
-        return orphanIds.size
+        // 零孤儿机制：条目若不再属于任何清单则直接删除
+        pruneOrphans()
     }
 
     /** 上移/下移：delta = -1 上移，+1 下移 */

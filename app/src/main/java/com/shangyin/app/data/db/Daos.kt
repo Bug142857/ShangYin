@@ -158,10 +158,6 @@ interface ListDao {
     @Query("SELECT listId FROM list_items WHERE itemId = :itemId")
     fun observeMemberships(itemId: Long): Flow<List<Long>>
 
-    /** 查所有已加入清单的条目 ID（用于添加弹窗过滤） */
-    @Query("SELECT DISTINCT itemId FROM list_items")
-    suspend fun getAllListItemIds(): List<Long>
-
     @Query("SELECT * FROM lists")
     fun observeAllLists(): Flow<List<ItemListEntity>>
 

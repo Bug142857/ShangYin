@@ -177,10 +177,11 @@ object SnifferParser {
         return null
     }
 
+    /** 只认"真的是音频直链"的 URL（音频扩展名），防止把站内页面链接当直链存库导致播放失败 */
     private fun firstAudioish(o: JSONObject, vararg keys: String): String? {
         for (k in keys) {
             val v = o.opt(k)
-            if (v is String && v.startsWith("http")) return v.trim()
+            if (v is String && AUDIO_URL_REGEX.containsMatchIn(v)) return v.trim()
         }
         return null
     }
@@ -255,6 +256,13 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                     if (fresh.isNotEmpty()) {
                         songs.addAll(0, fresh)
                         captured += fresh.size
+                    }
+                    // 同一首歌再次出现时用新直链覆盖（网页里重新播放会拿到新链接，旧的可能已过期）
+                    parsed.forEach { p ->
+                        val idx = songs.indexOfFirst { it.name == p.name && it.artist == p.artist }
+                        if (idx >= 0 && !p.playUrl.isNullOrBlank() && p.playUrl != songs[idx].playUrl) {
+                            songs[idx] = songs[idx].copy(playUrl = p.playUrl)
+                        }
                     }
                 }
                 parsing = false

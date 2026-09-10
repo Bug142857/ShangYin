@@ -52,6 +52,7 @@ fun MusicSinglePlayer(
     var positionMs by remember { mutableIntStateOf(0) }
     var durationMs by remember { mutableIntStateOf(0) }
     var started by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     fun release() {
         runCatching { player?.release() }
@@ -65,7 +66,15 @@ fun MusicSinglePlayer(
         error = null
         val mp = android.media.MediaPlayer()
         runCatching {
-            mp.setDataSource(playUrl)
+            // 带上泡椒站的 Cookie/Referer/UA，绕过防盗链
+            val ctx = context
+            val headers = mutableMapOf(
+                "Referer" to "https://flac.music.hi.cn/",
+                "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+            )
+            android.webkit.CookieManager.getInstance()
+                .getCookie("https://flac.music.hi.cn/")?.let { headers["Cookie"] = it }
+            mp.setDataSource(ctx, android.net.Uri.parse(playUrl), headers)
             mp.setOnPreparedListener {
                 durationMs = it.duration
                 it.start()
