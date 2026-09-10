@@ -74,6 +74,14 @@ private class PendingSave(
     var cont: kotlinx.coroutines.CancellableContinuation<String>? = null
 )
 
+/** 歌名匹配（规范化后相等或互相包含）——用 API 解析结果与待收藏歌曲配对 */
+private fun songNameMatches(a: String, b: String): Boolean {
+    val x = a.lowercase().replace(" ", "")
+    val y = b.lowercase().replace(" ", "")
+    if (x.length < 2 || y.length < 2) return false
+    return x == y || x.contains(y) || y.contains(x)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
@@ -112,23 +120,53 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         object {
             @JavascriptInterface
             fun onApi(url: String, body: String) {
+                // 播放接口的 URL 本身若是音频流（fetch/XHR 发出的播放请求），当作音频捕获
+                if (isAudioStreamUrl(url)) {
+                    mainHandler.post { onAudioCaptured(url) }
+                }
+                val parsed = SnifferParser.parse(body)
+                // 挂起中的收藏优先匹配：播放 API 响应里带歌名 + 直链，不依赖直链 URL 是否含歌名。
+                // 无视 seenUrls 去重——同一首歌二次点播时 API URL 相同，会被去重挡住导致永不匹配
+                if (pendingSaves.isNotEmpty() && parsed.isNotEmpty()) {
+                    mainHandler.post {
+                        parsed.forEach { p ->
+                            val pending = pendingSaves.firstOrNull {
+                                songNameMatches(it.song.name, p.name) &&
+                                    (it.song.artist.isBlank() || p.artist.isBlank() ||
+                                        it.song.artist.contains(p.artist) ||
+                                        p.artist.contains(it.song.artist))
+                            } ?: return@forEach
+                            if (p.playUrl.isNullOrBlank()) return@forEach
+                            pendingSaves.remove(pending)
+                            // 回填列表里这首歌的直链，下次收藏直接可用
+                            val idx = songs.indexOfFirst {
+                                songNameMatches(it.name, p.name)
+                            }
+                            if (idx >= 0 && songs[idx].playUrl != p.playUrl) {
+                                songs[idx] = songs[idx].copy(playUrl = p.playUrl)
+                            }
+                            pending.cont?.let { c ->
+                                if (c.isActive) c.resume(p.playUrl)
+                                pending.cont = null
+                            }
+                        }
+                    }
+                }
                 if (url in seenUrls) return
                 seenUrls.add(url)
                 if (seenUrls.size > 200) seenUrls.clear()
+                if (parsed.isEmpty()) return
                 parsing = true
-                val parsed = SnifferParser.parse(body)
-                if (parsed.isNotEmpty()) {
-                    val fresh = parsed.filter { p -> songs.none { it.name == p.name && it.artist == p.artist } }
-                    if (fresh.isNotEmpty()) {
-                        songs.addAll(0, fresh)
-                        captured += fresh.size
-                    }
-                    // 同一首歌再次出现时用新直链覆盖（网页里重新播放会拿到新链接，旧的可能已过期）
-                    parsed.forEach { p ->
-                        val idx = songs.indexOfFirst { it.name == p.name && it.artist == p.artist }
-                        if (idx >= 0 && !p.playUrl.isNullOrBlank() && p.playUrl != songs[idx].playUrl) {
-                            songs[idx] = songs[idx].copy(playUrl = p.playUrl)
-                        }
+                val fresh = parsed.filter { p -> songs.none { it.name == p.name && it.artist == p.artist } }
+                if (fresh.isNotEmpty()) {
+                    songs.addAll(0, fresh)
+                    captured += fresh.size
+                }
+                // 同一首歌再次出现时用新直链覆盖（网页里重新播放会拿到新链接，旧的可能已过期）
+                parsed.forEach { p ->
+                    val idx = songs.indexOfFirst { it.name == p.name && it.artist == p.artist }
+                    if (idx >= 0 && !p.playUrl.isNullOrBlank() && p.playUrl != songs[idx].playUrl) {
+                        songs[idx] = songs[idx].copy(playUrl = p.playUrl)
                     }
                 }
                 parsing = false
@@ -173,10 +211,10 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         }
         var url = runCatching { resolvePlayUrl(song) }.getOrNull()
         if (url == null) {
-            // 自动点播没成功：挂起等待用户在网页里点一下这首歌（60 秒内捕获即自动完成）
+            // 挂起等待用户在网页里点一下这首歌（60 秒内捕获即自动完成）
             android.widget.Toast.makeText(
                 context,
-                "未能自动点播——请在网页里点一下这首歌试听，捕获直链后自动完成收藏",
+                "请在网页里点一下这首歌试听，捕获直链后自动完成收藏",
                 android.widget.Toast.LENGTH_LONG
             ).show()
             url = runCatching { waitCapture(song, 60_000) }.getOrNull()

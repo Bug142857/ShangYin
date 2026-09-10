@@ -33,10 +33,17 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -49,12 +56,16 @@ import com.shangyin.app.R
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.common.dragReorderModifier
 import com.shangyin.app.ui.safeNavigate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(nav: NavHostController) {
     val lists by Repo.observeRootListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
+    val scope = rememberCoroutineScope()
+    var draggingId by remember { mutableStateOf<Long?>(null) }
+    val currentIds = rememberUpdatedState(lists.map { it.list.id })
 
     Scaffold(
         topBar = {
@@ -80,7 +91,14 @@ fun HomeScreen(nav: NavHostController) {
                 modifier = Modifier.padding(pad).fillMaxSize()
             ) {
                 items(lists, key = { it.list.id }) { meta ->
-                    CategoryTile(meta) { nav.safeNavigate("list/${meta.list.id}") }
+                    CategoryTile(
+                        meta = meta,
+                        isDragging = draggingId == meta.list.id,
+                        currentIdsState = currentIds,
+                        onDragStateChange = { draggingId = it },
+                        onReorder = { from, to -> Repo.reorderRootList(from, to) },
+                        onClick = { nav.safeNavigate("list/${meta.list.id}") }
+                    )
                 }
             }
         }
@@ -129,12 +147,35 @@ private val TILE_GRADIENTS = listOf(
 private fun tileGradient(name: String) =
     TILE_GRADIENTS[kotlin.math.abs(name.hashCode()) % TILE_GRADIENTS.size]
 
-/** 清单行卡片：左侧 52dp 渐变小方块（清单名）+ 名称 + 条目数 + 箭头 */
+/** 清单行卡片：左侧 52dp 渐变小方块（清单名）+ 名称 + 条目数 + 箭头；长按拖动可调整顺序 */
 @Composable
-private fun CategoryTile(meta: ListWithMeta, onClick: () -> Unit) {
+private fun CategoryTile(
+    meta: ListWithMeta,
+    isDragging: Boolean,
+    currentIdsState: State<List<Long>>,
+    onDragStateChange: (Long?) -> Unit,
+    onReorder: suspend (fromIdx: Int, toIdx: Int) -> Unit,
+    onClick: () -> Unit
+) {
     val (c1, c2) = tileGradient(meta.list.name)
 
-    Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+            .then(if (isDragging) Modifier.shadow(24.dp, RoundedCornerShape(12.dp)) else Modifier)
+            .then(
+                dragReorderModifier(
+                    itemId = meta.list.id,
+                    isListMode = true,
+                    gridColumns = 1,
+                    currentIdsState = currentIdsState,
+                    onDragStateChange = onDragStateChange,
+                    onReorder = onReorder,
+                    onTap = onClick,
+                    onLongPress = {},
+                    itemHeightDp = 72
+                )
+            )
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)

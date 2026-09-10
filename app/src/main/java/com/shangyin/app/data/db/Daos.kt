@@ -87,9 +87,14 @@ interface ListDao {
             ") AS itemCount " +
             "FROM lists l " +
             "WHERE l.parentId IS NULL " +
-            "ORDER BY l.createdAt DESC"
+            "ORDER BY l.sortIndex ASC, l.createdAt ASC"
     )
     fun observeRootListsWithMeta(): Flow<List<ListWithMeta>>
+
+    @Query(
+        "SELECT * FROM lists WHERE parentId IS NULL ORDER BY sortIndex ASC, createdAt ASC"
+    )
+    suspend fun getRootListsOnce(): List<ItemListEntity>
 
     @Query(
         "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +

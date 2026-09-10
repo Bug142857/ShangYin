@@ -326,6 +326,20 @@ object Repo {
         }
     }
 
+    /** 主页根清单拖拽排序：把 fromIdx 移到 toIdx，重排 sortIndex */
+    suspend fun reorderRootList(fromIdx: Int, toIdx: Int) {
+        if (fromIdx == toIdx) return
+        db.withTransaction {
+            val roots = listDao.getRootListsOnce().toMutableList()
+            if (fromIdx !in roots.indices || toIdx !in roots.indices) return@withTransaction
+            val moved = roots.removeAt(fromIdx)
+            roots.add(toIdx, moved)
+            roots.forEachIndexed { i, l ->
+                if (l.sortIndex != i) listDao.updateList(l.copy(sortIndex = i))
+            }
+        }
+    }
+
     /** 加入清单：若已在清单内则忽略；同时用清单首图做清单封面 */
     suspend fun addItemToList(listId: Long, itemId: Long) {
         db.withTransaction {
