@@ -75,3 +75,9 @@ data class ListWithMeta(
     @Embedded val list: ItemListEntity,
     val itemCount: Int
 )
+
+/** 清单树搜索结果：条目 + 它所属的清单 ID（用于显示"来自哪个子清单"） */
+data class ItemWithOwnerList(
+    @Embedded val item: CollectionItemEntity,
+    val ownerListId: Long
+)

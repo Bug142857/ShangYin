@@ -133,6 +133,20 @@ interface ListDao {
     )
     fun observeItemsIn(listId: Long): Flow<List<CollectionItemEntity>>
 
+    /** 清单内搜索：递归收集该清单及所有层级后代清单里的条目，并带所属清单 ID */
+    @Query(
+        "SELECT items.*, list_items.listId AS ownerListId FROM list_items " +
+            "JOIN items ON items.id = list_items.itemId " +
+            "WHERE list_items.listId IN (" +
+            "WITH RECURSIVE descendants(id) AS (" +
+            "  SELECT id FROM lists WHERE id = :rootId " +
+            "  UNION ALL " +
+            "  SELECT child.id FROM lists child JOIN descendants d ON child.parentId = d.id " +
+            ") SELECT id FROM descendants) " +
+            "ORDER BY list_items.orderIndex ASC"
+    )
+    suspend fun searchItemsInTree(rootId: Long): List<ItemWithOwnerList>
+
     @Query("SELECT * FROM list_items WHERE listId = :listId ORDER BY orderIndex ASC")
     suspend fun getOrder(listId: Long): List<ListItemEntity>
 

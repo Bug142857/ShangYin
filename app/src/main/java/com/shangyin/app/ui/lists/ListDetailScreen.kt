@@ -33,12 +33,14 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.AlertDialog
@@ -73,7 +75,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -84,6 +85,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.State
@@ -336,21 +338,71 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         }
     }
 
+    // ---- 清单内搜索：本清单 + 所有层级子清单 ----
+    var isSearching by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<com.shangyin.app.data.db.ItemWithOwnerList>>(emptyList()) }
+    // 全部清单名映射（搜索结果显示"来自哪个子清单"）
+    val allLists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
+    val listNameById = remember(allLists) { allLists.associate { it.id to it.name } }
+    // 数据变化时若正在搜索则重查（避免结果过期）
+    LaunchedEffect(isSearching, searchQuery, items.size, childLists.size) {
+        if (!isSearching || searchQuery.isBlank()) {
+            searchResults = emptyList()
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(250)
+        val q = searchQuery.trim().lowercase()
+        searchResults = withContext(Dispatchers.IO) {
+            Repo.searchItemsInTree(listId).filter {
+                it.item.title.lowercase().contains(q) ||
+                    (it.item.subTitle ?: "").lowercase().contains(q)
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(list?.name.orEmpty(), maxLines = 1) },
+                title = {
+                    if (isSearching) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = {
+                                Text("搜索本清单及子清单", style = MaterialTheme.typography.bodyMedium)
+                            },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        Text(list?.name.orEmpty(), maxLines = 1)
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (isEditMode) isEditMode = false else nav.safePopBackStack()
+                        if (isSearching) {
+                            isSearching = false
+                            searchQuery = ""
+                        } else if (isEditMode) isEditMode = false else nav.safePopBackStack()
                     }) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                        Icon(
+                            if (isSearching) Icons.Rounded.Close else Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = if (isSearching) "退出搜索" else "返回"
+                        )
                     }
                 },
                 actions = {
                     if (isEditMode) {
                         TextButton(onClick = { isEditMode = false }) { Text("完成") }
                     } else {
+                        IconButton(onClick = { isSearching = !isSearching; if (isSearching) searchQuery = "" }) {
+                            Icon(Icons.Rounded.Search, contentDescription = "搜索")
+                        }
                         IconButton(onClick = { menuOpen = true }) {
                             Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
                         }
@@ -441,8 +493,80 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             }
         }
     ) { pad ->
-        // 子清单与条目平级混排：子清单排最前
-        if (items.isEmpty() && childLists.isEmpty()) {
+        // 搜索模式：显示本清单 + 所有子清单的匹配条目
+        if (isSearching) {
+            if (searchQuery.isBlank()) {
+                Column(Modifier.padding(pad).fillMaxSize()) {
+                    EmptyView("输入关键字搜索\n范围包含所有层级的子清单")
+                }
+            } else if (searchResults.isEmpty()) {
+                Column(Modifier.padding(pad).fillMaxSize()) {
+                    EmptyView("没有找到「$searchQuery」")
+                }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(vertical = 8.dp),
+                    modifier = Modifier.padding(pad).fillMaxSize()
+                ) {
+                    item {
+                        Text(
+                            "找到 ${searchResults.size} 个结果（含子清单）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                        )
+                    }
+                    items(searchResults, key = { "${it.item.id}_${it.ownerListId}" }) { r ->
+                        val isMusic = r.item.category == "音乐"
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable {
+                                    if (isMusic) playMusic(r.item) else nav.safeNavigate("item/${r.item.id}")
+                                }
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    r.item.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val sub = r.item.subTitle
+                                    if (!sub.isNullOrBlank()) {
+                                        Text(
+                                            sub,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    val ownerName = listNameById[r.ownerListId] ?: ""
+                                    Text(
+                                        if (ownerName == list?.name) "本清单" else "来自「$ownerName」",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                            }
+                            if (isMusic) {
+                                Icon(
+                                    if (r.item.id == currentPlayId && playPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (items.isEmpty() && childLists.isEmpty()) {
             Column(Modifier.padding(pad)) {
                 EmptyView("清单还是空的\n点右上角菜单 → 添加条目")
             }
@@ -538,11 +662,11 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         val isMusic = item.category == "音乐"
                         ItemRowInList(
                             item = item,
+                            index = idx + 1,
+                            isMusicRow = isMusic,
+                            isPlayingState = playPlaying,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            onOpenDetail = if (isMusic && !isEditMode) {
-                                { nav.safeNavigate("item/${item.id}") }
-                            } else null,
                             isCurrentPlaying = item.id == currentPlayId && !isEditMode,
                             modifier = (if (isEditMode) dragReorderModifier(
                                 itemId = item.id,
@@ -935,56 +1059,88 @@ private fun GridItemCard(
 private fun ItemRowInList(
     item: CollectionItemEntity,
     modifier: Modifier = Modifier,
+    index: Int = 0,
+    isMusicRow: Boolean = false,
+    isPlayingState: Boolean = false,
     isEditMode: Boolean = false,
     onRemove: () -> Unit = {},
-    onOpenDetail: (() -> Unit)? = null,
     isCurrentPlaying: Boolean = false
 ) {
     Box(modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.Top
-        ) {
-            CoverImage(
-                url = item.coverUrl,
-                modifier = Modifier.width(40.dp).height(56.dp)
-            )
-            Column(
-                Modifier.weight(1f).padding(start = 10.dp, top = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+        if (isMusicRow) {
+            // 播放器风格：序号/播放状态 + 歌名/歌手（无封面、无箭头，点行即播）
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    item.title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (isCurrentPlaying) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isCurrentPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    DoubanRating(item.doubanRating)
-                    if (item.status.isNotBlank()) {
-                        Spacer(Modifier.width(6.dp))
+                if (isCurrentPlaying) {
+                    Icon(
+                        if (isPlayingState) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                } else {
+                    Text(
+                        "$index",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(24.dp)
+                    )
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        item.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = if (isCurrentPlaying) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isCurrentPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!item.subTitle.isNullOrBlank()) {
                         Text(
-                            item.status,
+                            item.subTitle,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
-            if (onOpenDetail != null) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "查看详情",
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier
-                        .align(Alignment.CenterVertically)
-                        .padding(start = 4.dp)
-                        .size(18.dp)
-                        .rotate(180f)
-                        .clickable(onClick = onOpenDetail)
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                CoverImage(
+                    url = item.coverUrl,
+                    modifier = Modifier.width(40.dp).height(56.dp)
                 )
+                Column(
+                    Modifier.weight(1f).padding(start = 10.dp, top = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        item.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        DoubanRating(item.doubanRating)
+                        if (item.status.isNotBlank()) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                item.status,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         }
         if (isEditMode) {

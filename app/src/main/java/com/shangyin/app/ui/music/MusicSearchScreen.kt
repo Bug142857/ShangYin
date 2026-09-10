@@ -253,6 +253,26 @@ private val SNIFFER_JS = """
       }
     } catch(e) {}
   }, 1500);
+  // 收藏时自动试听：在网页里找到文本匹配歌名的最小元素并模拟点击，触发真实播放以捕获直链
+  window.__playByName = function(name, artist){
+    try {
+      var best = null, bestLen = 999;
+      var cands = document.querySelectorAll('a,div,span,li,p,button,td,tr,h3,h4,h5,em,strong');
+      for (var i = 0; i < cands.length; i++) {
+        var el = cands[i];
+        var t = (el.innerText || el.textContent || '').trim();
+        if (!t || t.length > 60) continue;
+        var ok = name && t.indexOf(name) >= 0;
+        if (!ok && artist && name && t.indexOf(artist) >= 0) {
+          // 文本只含歌手时，要求长度接近"歌手-歌名"组合，避免点开歌手主页
+          ok = t.length <= name.length + artist.length + 8;
+        }
+        if (ok && t.length < bestLen) { best = el; bestLen = t.length; }
+      }
+      if (best) { best.click(); return '1'; }
+      return '0';
+    } catch(e) { return 'e'; }
+  };
 })();
 """
 
@@ -313,6 +333,52 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         }
     }
 
+    /** 解析这首歌的可播直链：API 字段 → 已捕获池 → 自动试听（让网页点播这首歌，等直链入池） */
+    suspend fun resolvePlayUrl(song: SniffedSong): String? {
+        song.playUrl?.takeIf { it.startsWith("http") }?.let { return it }
+        matchAudioUrl(song, audioStreamUrls.toList())?.let { return it }
+        val web = webViewRef.value ?: return null
+        val before = audioStreamUrls.toSet()
+        val jsName = JSONObject.quote(song.name)
+        val jsArtist = JSONObject.quote(song.artist)
+        withContext(Dispatchers.Main) {
+            web.evaluateJavascript(
+                "window.__playByName ? window.__playByName($jsName, $jsArtist) : '0'", null
+            )
+        }
+        // 最多等 7 秒，抓播放触发的新直链
+        repeat(20) {
+            kotlinx.coroutines.delay(350)
+            val fresh = audioStreamUrls.filter { it !in before }
+            if (fresh.isNotEmpty()) {
+                matchAudioUrl(song, fresh)?.let { return it }
+                return fresh.first()
+            }
+        }
+        return null
+    }
+
+    /** 收藏一首歌（含自动试听获取直链），返回是否成功 */
+    suspend fun saveSongNow(song: SniffedSong, key: String, onDone: (Boolean, String?) -> Unit) {
+        savingKeys.add(key)
+        val url = runCatching { resolvePlayUrl(song) }.getOrNull()
+        val id = withContext(Dispatchers.IO) {
+            runCatching {
+                Repo.saveMusic(name = song.name, artist = song.artist, coverUrl = song.cover, playUrl = url)
+            }.getOrDefault(-1L)
+        }
+        savingKeys.remove(key)
+        val ok = id != -1L
+        if (ok && !savedKeys.contains(key)) savedKeys.add(key)
+        val msg = when {
+            !ok -> "收藏失败，请重试"
+            song.playUrl?.startsWith("http") == true -> "已收藏到主页「音乐」清单"
+            url != null -> "已收藏（自动试听获取直链）"
+            else -> "已收藏，但未获取直链——请在网页试听后重新收藏"
+        }
+        onDone(ok, msg)
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -343,7 +409,7 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
-                    "在下方网页中搜索歌曲，点试听确认能播后，再到列表点 + 收藏（收藏会用刚试听的直链）；之前收藏的歌没直链的，试听后重新收藏即可修复。收藏后到主页「音乐」清单点歌即播。",
+                    "在下方网页中搜索歌曲，点 + 收藏时会自动试听并抓取直链（需几秒）；收藏后到主页「音乐」清单点歌即播。若提示未获取直链，请在网页里手动试听那首歌后重新收藏。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.padding(10.dp)
@@ -475,9 +541,14 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                                 tint = MaterialTheme.colorScheme.primary,
                                                 modifier = Modifier.size(22.dp).clickable {
                                                     if (!saved) {
-                                                        // 主线程先取快照：池子由 WebView 回调写入
-                                                        val fallback = matchAudioUrl(song, audioStreamUrls.toList())
-                                                        saveSong(song, key, fallback, scope, context, savedKeys)
+                                                        // 点收藏即自动试听：让网页点播这首歌，抓到直链再落库
+                                                        scope.launch {
+                                                            saveSongNow(song, key) { _, msg ->
+                                                                android.widget.Toast.makeText(
+                                                                    context, msg, android.widget.Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             )
@@ -487,30 +558,17 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                             }
                             TextButton(
                                 onClick = {
-                                    scope.launch(Dispatchers.IO) {
-                                        songs.forEachIndexed { idx, s ->
+                                    scope.launch {
+                                        // 逐首自动试听 + 收藏（串行：避免同时点播多首互相干扰）
+                                        songs.forEach { s ->
                                             val k = "${s.name}::${s.artist}"
                                             if (k !in savedKeys) {
-                                                withContext(Dispatchers.Main) { savingKeys.add(k) }
-                                                runCatching {
-                                                    Repo.saveMusic(
-                                                        name = s.name,
-                                                        artist = s.artist,
-                                                        coverUrl = s.cover,
-                                                        playUrl = s.playUrl
-                                                    )
-                                                }
-                                                withContext(Dispatchers.Main) {
-                                                    savingKeys.remove(k)
-                                                    if (!savedKeys.contains(k)) savedKeys.add(k)
-                                                }
+                                                saveSongNow(s, k) { _, _ -> }
                                             }
                                         }
-                                        withContext(Dispatchers.Main) {
-                                            android.widget.Toast.makeText(
-                                                context, "全部收藏完成", android.widget.Toast.LENGTH_SHORT
-                                            ).show()
-                                        }
+                                        android.widget.Toast.makeText(
+                                            context, "全部收藏完成", android.widget.Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 },
                                 modifier = Modifier.align(Alignment.End)
@@ -539,40 +597,4 @@ private fun matchAudioUrl(song: SniffedSong, pool: List<String>): String? {
         decoded.firstOrNull { norm(it).contains(artist) }?.let { return it }
     }
     return decoded.firstOrNull()
-}
-
-private fun saveSong(
-    song: SniffedSong,
-    key: String,
-    fallbackUrl: String?,
-    scope: kotlinx.coroutines.CoroutineScope,
-    context: android.content.Context,
-    savedKeys: MutableList<String>
-) {
-    // API 字段直链必须是完整 http 链接（相对路径 MediaPlayer 播不了）；否则用 WebView 试听捕获的音频流兜底
-    val apiUrl = song.playUrl?.takeIf { it.startsWith("http") }
-    val playUrl = apiUrl ?: fallbackUrl
-    scope.launch(Dispatchers.IO) {
-        val id = runCatching {
-            Repo.saveMusic(
-                name = song.name,
-                artist = song.artist,
-                coverUrl = song.cover,
-                playUrl = playUrl
-            )
-        }.getOrDefault(-1L)
-        kotlinx.coroutines.withContext(Dispatchers.Main) {
-            if (id != -1L) {
-                if (!savedKeys.contains(key)) savedKeys.add(key)
-                val msg = when {
-                    apiUrl != null -> "已收藏到主页「音乐」清单"
-                    playUrl != null -> "已收藏（使用网页试听直链）"
-                    else -> "已收藏，但未捕获直链——请在网页试听这首歌后重新收藏"
-                }
-                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
-            } else {
-                android.widget.Toast.makeText(context, "收藏失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
 }

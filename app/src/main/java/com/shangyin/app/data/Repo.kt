@@ -5,6 +5,7 @@ import androidx.room.withTransaction
 import com.shangyin.app.data.db.AppDatabase
 import com.shangyin.app.data.db.CollectionItemEntity
 import com.shangyin.app.data.db.ItemListEntity
+import com.shangyin.app.data.db.ItemWithOwnerList
 import com.shangyin.app.data.db.ListItemEntity
 import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.data.douban.DoubanClient
@@ -306,6 +307,10 @@ object Repo {
 
     /** 子清单数量（用于删除确认提示） */
     suspend fun countSubLists(id: Long): Int = listDao.countSubLists(id)
+
+    /** 清单内搜索：本清单 + 所有层级子清单的条目（关键字过滤由调用方做，便于显示所属清单名） */
+    suspend fun searchItemsInTree(rootId: Long): List<ItemWithOwnerList> =
+        listDao.searchItemsInTree(rootId)
 
     /** 子清单拖拽排序：把 fromIdx 的子清单移到 toIdx，重排 sortIndex */
     suspend fun reorderSubList(parentId: Long, fromIdx: Int, toIdx: Int) {
