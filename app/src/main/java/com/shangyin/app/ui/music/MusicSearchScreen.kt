@@ -3,6 +3,7 @@ package com.shangyin.app.ui.music
 import android.annotation.SuppressLint
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.clickable
@@ -75,6 +76,12 @@ import org.json.JSONObject
  */
 private const val MUSIC_SITE = "https://flac.music.hi.cn/"
 
+/** 音频直链识别（文件级，WebView 拦截与解析共用） */
+private val AUDIO_URL_REGEX = Regex(
+    """https?://[^\s"'<>\\]+?\.(?:mp3|flac|m4a|aac|wav|ogg|ape)(?:\?[^\s"'<>\\]*)?""",
+    RegexOption.IGNORE_CASE
+)
+
 /** 嗅探到的单曲 */
 data class SniffedSong(
     val name: String,
@@ -85,11 +92,6 @@ data class SniffedSong(
 
 /** 启发式解析 WebView 捕获的 API 响应体 */
 object SnifferParser {
-
-    private val AUDIO_URL_REGEX = Regex(
-        """https?://[^\s"'<>\\]+?\.(?:mp3|flac|m4a|aac|wav|ogg|ape)(?:\?[^\s"'<>\\]*)?""",
-        RegexOption.IGNORE_CASE
-    )
 
     fun parse(body: String): List<SniffedSong> {
         if (body.length > 3_000_000) return emptyList()
@@ -114,10 +116,14 @@ object SnifferParser {
                 node.keys().forEach { k -> walk(node.opt(k), out) }
             }
             is JSONArray -> {
-                // 只有"对象数组且长度>=2"才尝试按歌曲列表解析
+                // 对象数组：>=2 直接按歌曲列表解析；长度1（单曲播放接口）要求带直链才收，避免误判
                 if (node.length() >= 2) {
                     val parsed = parseSongArray(node)
                     parsed.forEach { out.putIfAbsent(keyOf(it), it) }
+                } else if (node.length() == 1) {
+                    parseSongArray(node).firstOrNull { it.playUrl != null }?.let {
+                        out.putIfAbsent(keyOf(it), it)
+                    }
                 }
                 for (i in 0 until node.length()) walk(node.opt(i), out)
             }
@@ -181,7 +187,7 @@ object SnifferParser {
     private fun firstAudioish(o: JSONObject, vararg keys: String): String? {
         for (k in keys) {
             val v = o.opt(k)
-            if (v is String && AUDIO_URL_REGEX.containsMatchIn(v)) return v.trim()
+            if (v is String && isAudioStreamUrl(v)) return v.trim()
         }
         return null
     }
@@ -189,6 +195,17 @@ object SnifferParser {
     /** 兜底：从任意文本里抓音频直链 */
     fun extractAudioUrls(body: String): List<String> =
         AUDIO_URL_REGEX.findAll(body).map { it.value }.distinct().toList()
+}
+
+/** 音频流判定：音频扩展名，或带播放接口特征（stream/play/audio/media/type=mp3 等）且不是网页 */
+internal fun isAudioStreamUrl(u: String): Boolean {
+    if (AUDIO_URL_REGEX.containsMatchIn(u)) return true
+    val lower = u.lowercase()
+    if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".shtml")) return false
+    return listOf(
+        "stream", "/play?", "/play/", "play.mp3", "playaudio", "audio", "media",
+        "type=mp3", "type=flac", "format=mp3", "format=flac", ".mp3?", ".flac?"
+    ).any { it in lower }
 }
 
 /** 注入 WebView 的嗅探脚本：包装 fetch / XHR，把响应回传原生层 */
@@ -224,6 +241,18 @@ private val SNIFFER_JS = """
     });
     return xs.apply(this, arguments);
   };
+  // 定时扫描播放器 <audio>/<video> 标签的 src，直接回传真实音频地址（兜底 fetch/XHR hook 覆盖不到的场景）
+  setInterval(function(){
+    try {
+      var els = document.querySelectorAll('audio,video');
+      for (var i = 0; i < els.length; i++) {
+        var s = els[i].currentSrc || els[i].src;
+        if (s && s.indexOf('http') === 0) {
+          window.MusicSniffer && window.MusicSniffer.onAudio(String(s));
+        }
+      }
+    } catch(e) {}
+  }, 1500);
 })();
 """
 
@@ -234,6 +263,8 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     val scope = rememberCoroutineScope()
 
     val songs = remember { mutableStateListOf<SniffedSong>() }
+    // WebView 播放音频时真实发出的音频流请求（最新在前）——比解析 API 字段更可靠的直链来源
+    val audioStreamUrls = remember { mutableListOf<String>() }
     val seenUrls = remember { mutableStateListOf<String>() }
     var expanded by rememberSaveable { mutableStateOf(true) }
     var captured by remember { mutableIntStateOf(0) }
@@ -242,6 +273,7 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     var parsing by remember { mutableStateOf(false) }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     val sniffer = remember {
         object {
             @JavascriptInterface
@@ -266,6 +298,17 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                     }
                 }
                 parsing = false
+            }
+
+            @JavascriptInterface
+            fun onAudio(url: String) {
+                // 网页播放器 <audio>/<video> 标签的 src（http 开头才收，blob: 无法播）
+                if (!url.startsWith("http")) return
+                mainHandler.post {
+                    audioStreamUrls.removeAll { it == url }
+                    audioStreamUrls.add(0, url)
+                    if (audioStreamUrls.size > 20) audioStreamUrls.removeAt(audioStreamUrls.size - 1)
+                }
             }
         }
     }
@@ -300,7 +343,7 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
             ) {
                 Text(
-                    "在下方网页中完成人机验证后直接试听；想收藏的歌点右侧 + ，收藏后到主页「音乐」清单点歌即播。",
+                    "在下方网页中搜索歌曲，点试听确认能播后，再到列表点 + 收藏（收藏会用刚试听的直链）；之前收藏的歌没直链的，试听后重新收藏即可修复。收藏后到主页「音乐」清单点歌即播。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                     modifier = Modifier.padding(10.dp)
@@ -327,6 +370,30 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                 override fun shouldOverrideUrlLoading(
                                     view: WebView?, request: WebResourceRequest?
                                 ): Boolean = false // 全部站内跳转留在 WebView
+
+                                override fun shouldInterceptRequest(
+                                    view: WebView, request: WebResourceRequest
+                                ): WebResourceResponse? {
+                                    // 用户在网页里点播放时，WebView 会真实发出音频流请求。
+                                    // 这个 URL 就是当前能播的直链（WebView 已过 WAF，Cookie 全局共享），
+                                    // 抓下来存池，收藏时填充——不依赖站内 API 字段格式。
+                                    val u = request.url.toString()
+                                    val hasRange = request.requestHeaders.keys.any {
+                                        it.equals("Range", ignoreCase = true)
+                                    }
+                                    // 纯音频扩展名不要求 Range 头；无扩展名时须带 Range（流式播放特征）+ 播放接口特征
+                                    val byExt = AUDIO_URL_REGEX.containsMatchIn(u)
+                                    if (byExt || (hasRange && isAudioStreamUrl(u))) {
+                                        view.post {
+                                            audioStreamUrls.removeAll { it == u }
+                                            audioStreamUrls.add(0, u)
+                                            if (audioStreamUrls.size > 20) {
+                                                audioStreamUrls.removeAt(audioStreamUrls.size - 1)
+                                            }
+                                        }
+                                    }
+                                    return null
+                                }
 
                                 override fun onPageFinished(v: WebView?, url: String?) {
                                     v?.evaluateJavascript(SNIFFER_JS, null)
@@ -407,7 +474,11 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                                                 contentDescription = "收藏",
                                                 tint = MaterialTheme.colorScheme.primary,
                                                 modifier = Modifier.size(22.dp).clickable {
-                                                    if (!saved) saveSong(song, key, scope, context, savedKeys)
+                                                    if (!saved) {
+                                                        // 主线程先取快照：池子由 WebView 回调写入
+                                                        val fallback = matchAudioUrl(song, audioStreamUrls.toList())
+                                                        saveSong(song, key, fallback, scope, context, savedKeys)
+                                                    }
                                                 }
                                             )
                                         }
@@ -452,28 +523,53 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     }
 }
 
+/** 从捕获的音频流池里为这首歌挑直链：优先 URL（解码后）含歌名/歌手，否则用最新一条（用户多半刚试听过这首歌） */
+private fun matchAudioUrl(song: SniffedSong, pool: List<String>): String? {
+    if (pool.isEmpty()) return null
+    fun norm(s: String) = s.lowercase().replace(" ", "")
+    val decoded = pool.map { u ->
+        runCatching { java.net.URLDecoder.decode(u, "UTF-8") }.getOrDefault(u)
+    }
+    val name = norm(song.name)
+    if (name.length >= 2) {
+        decoded.firstOrNull { norm(it).contains(name) }?.let { return it }
+    }
+    val artist = norm(song.artist)
+    if (artist.length >= 2) {
+        decoded.firstOrNull { norm(it).contains(artist) }?.let { return it }
+    }
+    return decoded.firstOrNull()
+}
+
 private fun saveSong(
     song: SniffedSong,
     key: String,
+    fallbackUrl: String?,
     scope: kotlinx.coroutines.CoroutineScope,
     context: android.content.Context,
     savedKeys: MutableList<String>
 ) {
+    // API 字段直链必须是完整 http 链接（相对路径 MediaPlayer 播不了）；否则用 WebView 试听捕获的音频流兜底
+    val apiUrl = song.playUrl?.takeIf { it.startsWith("http") }
+    val playUrl = apiUrl ?: fallbackUrl
     scope.launch(Dispatchers.IO) {
         val id = runCatching {
             Repo.saveMusic(
                 name = song.name,
                 artist = song.artist,
                 coverUrl = song.cover,
-                playUrl = song.playUrl
+                playUrl = playUrl
             )
         }.getOrDefault(-1L)
         kotlinx.coroutines.withContext(Dispatchers.Main) {
             if (id != -1L) {
                 if (!savedKeys.contains(key)) savedKeys.add(key)
-                android.widget.Toast.makeText(
-                    context, "已收藏到主页「音乐」清单", android.widget.Toast.LENGTH_SHORT
-                ).show()
+                val msg = when {
+                    apiUrl != null -> "已收藏到主页「音乐」清单"
+                    playUrl != null -> "已收藏（使用网页试听直链）"
+                    else -> "已收藏，但未捕获直链——请在网页试听这首歌后重新收藏"
+                }
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             } else {
                 android.widget.Toast.makeText(context, "收藏失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
             }
