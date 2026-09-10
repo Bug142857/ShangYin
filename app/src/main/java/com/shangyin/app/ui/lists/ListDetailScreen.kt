@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -48,6 +49,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -255,6 +257,19 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var playPos by remember { mutableIntStateOf(0) }
     var playDur by remember { mutableIntStateOf(0) }
 
+    // ---- 音乐清单排序：0=新增在上（默认） 1=按名称；编辑模式保持手动拖拽顺序 ----
+    var musicSortOrder by rememberSaveable { mutableIntStateOf(0) }
+    val isMusicRoot = list?.parentId == null && list?.name == "音乐"
+    val displayItems = remember(items, musicSortOrder, isMusicRoot, isEditMode) {
+        when {
+            !isMusicRoot || isEditMode -> items
+            musicSortOrder == 1 -> items.sortedWith(
+                compareBy(java.text.Collator.getInstance(java.util.Locale.CHINA)) { it.title }
+            )
+            else -> items.sortedByDescending { it.createdAt }
+        }
+    }
+
     fun releasePlayer() {
         runCatching { mediaPlayer?.release() }
         mediaPlayer = null
@@ -297,9 +312,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             m.setOnCompletionListener {
                 playPlaying = false
                 playPos = 0
-                // 自动下一首
-                val idx = items.indexOfFirst { it.id == item.id }
-                val next = items.getOrNull(idx + 1) ?: items.firstOrNull()
+                // 自动下一首（跟随当前显示顺序）
+                val idx = displayItems.indexOfFirst { it.id == item.id }
+                val next = displayItems.getOrNull(idx + 1) ?: displayItems.firstOrNull()
                 if (next != null && next.id != item.id) playMusic(next)
             }
             m.setOnErrorListener { _, what, extra ->
@@ -320,9 +335,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
 
     fun skipBy(delta: Int) {
         val cur = currentPlayId ?: return
-        val idx = items.indexOfFirst { it.id == cur }
+        val idx = displayItems.indexOfFirst { it.id == cur }
         if (idx < 0) return
-        val target = items.getOrNull(idx + delta) ?: return
+        val target = displayItems.getOrNull(idx + delta) ?: return
         playMusic(target)
     }
 
@@ -449,8 +464,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         },
         bottomBar = {
             if (currentPlayId != null && !isEditMode) {
-                // 音乐清单 mini 播放条
-                Surface(shadowElevation = 8.dp) {
+                // 音乐清单 mini 播放条（navigationBarsPadding：避免被三键导航栏盖住）
+                Surface(shadowElevation = 8.dp, modifier = Modifier.navigationBarsPadding()) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
@@ -632,6 +647,33 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
+                    // 音乐清单排序切换（编辑模式保持手动顺序，不显示）
+                    if (isMusicRoot && !isEditMode) {
+                        item(key = "music_sort") {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "排序",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.width(10.dp))
+                                FilterChip(
+                                    selected = musicSortOrder == 0,
+                                    onClick = { musicSortOrder = 0 },
+                                    label = { Text("新增在上", style = MaterialTheme.typography.labelSmall) }
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                FilterChip(
+                                    selected = musicSortOrder == 1,
+                                    onClick = { musicSortOrder = 1 },
+                                    label = { Text("按名称", style = MaterialTheme.typography.labelSmall) }
+                                )
+                            }
+                        }
+                    }
                     items(childLists, key = { "child_${it.list.id}" }) { meta ->
                         val isDragging = draggingSubListId == meta.list.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "subScale")
@@ -656,7 +698,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             onClick = { nav.safeNavigate("list/${meta.list.id}") }
                         )
                     }
-                    itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
+                    itemsIndexed(displayItems, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "scale")
                         val isMusic = item.category == "音乐"

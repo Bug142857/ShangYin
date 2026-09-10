@@ -256,16 +256,18 @@ private val SNIFFER_JS = """
   // 收藏时自动试听：在网页里找到文本匹配歌名的最小元素并模拟点击，触发真实播放以捕获直链
   window.__playByName = function(name, artist){
     try {
+      var norm = function(s){ return String(s || '').toLowerCase().replace(/\s+/g, ''); };
+      var kw = norm(name), art = norm(artist);
       var best = null, bestLen = 999;
-      var cands = document.querySelectorAll('a,div,span,li,p,button,td,tr,h3,h4,h5,em,strong');
+      var cands = document.querySelectorAll('a,div,span,li,p,button,td,tr,h3,h4,h5,em,strong,b,label');
       for (var i = 0; i < cands.length; i++) {
         var el = cands[i];
-        var t = (el.innerText || el.textContent || '').trim();
-        if (!t || t.length > 60) continue;
-        var ok = name && t.indexOf(name) >= 0;
-        if (!ok && artist && name && t.indexOf(artist) >= 0) {
-          // 文本只含歌手时，要求长度接近"歌手-歌名"组合，避免点开歌手主页
-          ok = t.length <= name.length + artist.length + 8;
+        var t = norm(el.innerText || el.textContent || '');
+        if (!t || t.length > 120) continue;
+        var ok = kw && t.indexOf(kw) >= 0;
+        if (!ok && art && kw && t.indexOf(art) >= 0) {
+          // 文本只含歌手时，要求长度接近"歌手+歌名"组合，避免点开歌手主页
+          ok = t.length <= kw.length + art.length + 8;
         }
         if (ok && t.length < bestLen) { best = el; bestLen = t.length; }
       }
@@ -333,27 +335,29 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         }
     }
 
-    /** 解析这首歌的可播直链：API 字段 → 已捕获池 → 自动试听（让网页点播这首歌，等直链入池） */
+    /** 解析这首歌的可播直链：API 字段 → 池内歌名匹配 → 自动试听（让网页点播，最多两轮） */
     suspend fun resolvePlayUrl(song: SniffedSong): String? {
         song.playUrl?.takeIf { it.startsWith("http") }?.let { return it }
-        matchAudioUrl(song, audioStreamUrls.toList())?.let { return it }
+        // 池里只认"歌名匹配"的直链——池里可能混着别的歌/误捕获的链接，不能随便兜底
+        audioStreamUrls.firstOrNull { audioUrlMatchesSong(song, it) }?.let { return it }
         val web = webViewRef.value ?: return null
-        val before = audioStreamUrls.toSet()
         val jsName = JSONObject.quote(song.name)
         val jsArtist = JSONObject.quote(song.artist)
-        withContext(Dispatchers.Main) {
-            web.evaluateJavascript(
-                "window.__playByName ? window.__playByName($jsName, $jsArtist) : '0'", null
-            )
-        }
-        // 最多等 7 秒，抓播放触发的新直链
-        repeat(20) {
-            kotlinx.coroutines.delay(350)
-            val fresh = audioStreamUrls.filter { it !in before }
-            if (fresh.isNotEmpty()) {
-                matchAudioUrl(song, fresh)?.let { return it }
-                return fresh.first()
+        val js = "window.__playByName ? window.__playByName($jsName, $jsArtist) : '0'"
+        // 两轮尝试：第一轮没抓到（元素没找到/点击无效）隔 1 秒再点一次
+        repeat(2) {
+            val before = audioStreamUrls.toSet()
+            withContext(Dispatchers.Main) { web.evaluateJavascript(js, null) }
+            repeat(16) { // 每轮最多等 5.6 秒
+                kotlinx.coroutines.delay(350)
+                val fresh = audioStreamUrls.filter { it !in before }
+                if (fresh.isNotEmpty()) {
+                    fresh.firstOrNull { audioUrlMatchesSong(song, it) }?.let { return it }
+                    // 点播触发的新请求，即使 URL 不含歌名也基本是这首歌
+                    return fresh.first()
+                }
             }
+            kotlinx.coroutines.delay(1000)
         }
         return null
     }
@@ -581,20 +585,10 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     }
 }
 
-/** 从捕获的音频流池里为这首歌挑直链：优先 URL（解码后）含歌名/歌手，否则用最新一条（用户多半刚试听过这首歌） */
-private fun matchAudioUrl(song: SniffedSong, pool: List<String>): String? {
-    if (pool.isEmpty()) return null
-    fun norm(s: String) = s.lowercase().replace(" ", "")
-    val decoded = pool.map { u ->
-        runCatching { java.net.URLDecoder.decode(u, "UTF-8") }.getOrDefault(u)
-    }
-    val name = norm(song.name)
-    if (name.length >= 2) {
-        decoded.firstOrNull { norm(it).contains(name) }?.let { return it }
-    }
-    val artist = norm(song.artist)
-    if (artist.length >= 2) {
-        decoded.firstOrNull { norm(it).contains(artist) }?.let { return it }
-    }
-    return decoded.firstOrNull()
+/** URL（解码、去空格、小写）包含歌名才算这首歌的直链；防止把池里别的歌/误捕获链接错配 */
+private fun audioUrlMatchesSong(song: SniffedSong, url: String): Boolean {
+    val name = song.name.lowercase().replace(" ", "")
+    if (name.length < 2) return false
+    val decoded = runCatching { java.net.URLDecoder.decode(url, "UTF-8") }.getOrDefault(url)
+    return decoded.lowercase().replace(" ", "").contains(name)
 }
