@@ -116,7 +116,7 @@ import kotlin.math.abs
 /** 清单内容布局 */
 private enum class ListLayoutMode { GRID, LIST }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ListDetailScreen(nav: NavHostController, listId: Long) {
     val scope = rememberCoroutineScope()
@@ -134,6 +134,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var draggingItemId by remember { mutableStateOf<Long?>(null) }
     var draggingSubListId by remember { mutableStateOf<Long?>(null) }
     var deleteSubTarget by remember { mutableStateOf<ListWithMeta?>(null) }
+    // 长按移除：搜索结果行（跨清单）/ 音乐清单行
+    var deleteSearchTarget by remember { mutableStateOf<com.shangyin.app.data.db.ItemWithOwnerList?>(null) }
+    var deleteMusicTarget by remember { mutableStateOf<CollectionItemEntity?>(null) }
     val currentItemIds = rememberUpdatedState(items.map { it.id })
     val currentSubIds = rememberUpdatedState(childLists.map { it.list.id })
 
@@ -597,9 +600,13 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
-                                .clickable {
-                                    if (isMusic) playMusic(r.item) else nav.safeNavigate("item/${r.item.id}")
-                                }
+                                .combinedClickable(
+                                    onClick = {
+                                        if (isMusic) playMusic(r.item) else nav.safeNavigate("item/${r.item.id}")
+                                    },
+                                    // 长按 → 从所属清单移除（有时就是搜出来删的）
+                                    onLongClick = { deleteSearchTarget = r }
+                                )
                                 .padding(horizontal = 16.dp, vertical = 10.dp)
                         ) {
                             Column(Modifier.weight(1f)) {
@@ -780,9 +787,15 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
                                 onTap = {},
                                 onLongPress = {}
-                            ) else Modifier.fillMaxWidth().clickable {
-                                if (isMusic) playMusic(item) else nav.safeNavigate("item/${item.id}")
-                            })
+                            ) else Modifier.fillMaxWidth().combinedClickable(
+                                onClick = {
+                                    if (isMusic) playMusic(item) else nav.safeNavigate("item/${item.id}")
+                                },
+                                // 音乐清单行长按 → 从清单移除（非编辑模式下也生效）
+                                onLongClick = {
+                                    if (isMusic) deleteMusicTarget = item
+                                }
+                            ))
                                 .graphicsLayer {
                                     scaleX = scale; scaleY = scale
                                     shadowElevation = if (isDragging) 24f else 0f
@@ -860,6 +873,61 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 }) { Text("删除") }
             },
             dismissButton = { TextButton(onClick = { deleteSubTarget = null }) { Text("取消") } }
+        )
+    }
+
+    // 搜索结果移除（长按触发）：从条目所属清单移出
+    deleteSearchTarget?.let { r ->
+        AlertDialog(
+            onDismissRequest = { deleteSearchTarget = null },
+            title = { Text("移出条目") },
+            text = {
+                Text(
+                    buildString {
+                        val ownerName = listNameById[r.ownerListId] ?: "清单"
+                        append("将「${r.item.title}」从「$ownerName」中移除？")
+                        append("\n不会删除收藏的条目本身。")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { Repo.removeItemFromList(r.ownerListId, r.item.id) }
+                    searchResults = searchResults.filterNot {
+                        it.item.id == r.item.id && it.ownerListId == r.ownerListId
+                    }
+                    deleteSearchTarget = null
+                }) { Text("移除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deleteSearchTarget = null }) { Text("取消") } }
+        )
+    }
+
+    // 音乐清单移除（长按触发）：从音乐清单移出，正在播放则先停
+    deleteMusicTarget?.let { item ->
+        AlertDialog(
+            onDismissRequest = { deleteMusicTarget = null },
+            title = { Text("移出歌曲") },
+            text = {
+                Text(
+                    buildString {
+                        append("将「${item.title}」从音乐清单中移除？")
+                        append("\n不会删除收藏的条目本身。")
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (item.id == currentPlayId) {
+                        releasePlayer()
+                        currentPlayId = null
+                        playPlaying = false
+                    }
+                    scope.launch { Repo.removeItemFromList(listId, item.id) }
+                    deleteMusicTarget = null
+                }) { Text("移除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deleteMusicTarget = null }) { Text("取消") } }
         )
     }
 
