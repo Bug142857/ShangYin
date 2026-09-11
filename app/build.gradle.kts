@@ -14,8 +14,8 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 62
-        versionName = "2.7.2"
+        versionCode = 63
+        versionName = "2.7.3"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）

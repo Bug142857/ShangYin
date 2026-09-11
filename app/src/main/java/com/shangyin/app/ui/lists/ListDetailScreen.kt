@@ -156,6 +156,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var playLyrics by remember { mutableStateOf<String?>(null) }
     var showLyrics by remember { mutableStateOf(false) }
     var playArtist by remember { mutableStateOf("") }
+    // 直链保鲜（主动续期）：播放成功的歌若直链落库已超过 2 天，后台静默点播续期
+    var renewingSong by remember { mutableStateOf<com.shangyin.app.data.db.CollectionItemEntity?>(null) }
+    val renewedThisSession = remember { mutableStateOf(setOf<Long>()) }
 
     // ---- 音乐清单排序：0=新增在上（默认） 1=按歌手；编辑模式保持手动拖拽顺序 ----
     var musicSortOrder by rememberSaveable { mutableIntStateOf(0) }
@@ -191,7 +194,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         }
         val url = item.doubanUrl
         if (url.isNullOrBlank()) {
-            android.widget.Toast.makeText(context, "该歌曲没有播放直链，请在音乐搜索重新收藏", android.widget.Toast.LENGTH_SHORT).show()
+            // 没有直链 → 自动离屏补链（抓到即存库并自动续播），无需手动重新收藏
+            android.widget.Toast.makeText(context, "正在自动获取播放链接…", android.widget.Toast.LENGTH_SHORT).show()
+            refreshSong = item
             return
         }
         releasePlayer()
@@ -227,6 +232,14 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 runCatching { it.start() }
                 playPlaying = true
                 playPreparing = false
+                // 保鲜检查：直链落库超过 2 天 → 本会话内未续期过 → 后台静默续期
+                if (System.currentTimeMillis() - item.updatedAt > 2 * 24 * 3_600_000L &&
+                    item.id !in renewedThisSession.value &&
+                    refreshSong == null && renewingSong == null
+                ) {
+                    renewedThisSession.value = renewedThisSession.value + item.id
+                    renewingSong = item
+                }
             }
             m.setOnCompletionListener {
                 playPlaying = false
@@ -274,11 +287,60 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         }
     }
 
+    // ---- 直链保鲜（主动续期）：后台静默点播续期（静音、不打断播放），让常听的歌直链始终保持新鲜 ----
+
     // ---- 直链过期自动刷新：离屏 WebView 重新嗅探该歌直链并续播（顺带抓歌词入缓存） ----
+    // 超时自动重试一轮（key 变化强制重挂），两轮都失败才提示手动
+    var refreshRetry by remember { mutableStateOf(0) }
     refreshSong?.let { song ->
+        androidx.compose.runtime.key(refreshRetry) {
+            MusicRefresher(
+                songName = song.title,
+                artist = song.subTitle ?: "",
+                onCaptured = { newUrl, lyrics ->
+                    lyrics?.let {
+                        com.shangyin.app.ui.music.MusicLyricsCache.map[
+                            com.shangyin.app.ui.music.MusicLyricsCache.key(song.title, song.subTitle ?: "")
+                        ] = it
+                    }
+                    refreshRetry = 0
+                    scope.launch {
+                        // 同名同歌手条目会被 Repo.saveMusic 原位更新直链
+                        runCatching {
+                            Repo.saveMusic(
+                                name = song.title,
+                                artist = song.subTitle ?: "",
+                                coverUrl = song.coverUrl,
+                                playUrl = newUrl
+                            )
+                        }
+                        refreshSong = null
+                        playMusic(song.copy(doubanUrl = newUrl))
+                    }
+                },
+                onTimeout = {
+                    if (refreshRetry < 1) {
+                        refreshRetry++
+                    } else {
+                        refreshRetry = 0
+                        android.widget.Toast.makeText(
+                            context,
+                            "自动刷新失败——到「搜索 → 音乐」重新试听一次即可",
+                            android.widget.Toast.LENGTH_LONG
+                        ).show()
+                        refreshSong = null
+                    }
+                }
+            )
+        }
+    }
+
+    // ---- 静默续期：后台点播抓新直链只入库（不打断当前播放），失败静默下次再试 ----
+    renewingSong?.let { song ->
         MusicRefresher(
             songName = song.title,
             artist = song.subTitle ?: "",
+            muteAudio = true,
             onCaptured = { newUrl, lyrics ->
                 lyrics?.let {
                     com.shangyin.app.ui.music.MusicLyricsCache.map[
@@ -286,7 +348,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     ] = it
                 }
                 scope.launch {
-                    // 同名同歌手条目会被 Repo.saveMusic 原位更新直链
                     runCatching {
                         Repo.saveMusic(
                             name = song.title,
@@ -295,18 +356,10 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             playUrl = newUrl
                         )
                     }
-                    refreshSong = null
-                    playMusic(song.copy(doubanUrl = newUrl))
                 }
+                renewingSong = null
             },
-            onTimeout = {
-                android.widget.Toast.makeText(
-                    context,
-                    "自动刷新失败——到「搜索 → 音乐」重新试听一次即可",
-                    android.widget.Toast.LENGTH_LONG
-                ).show()
-                refreshSong = null
-            }
+            onTimeout = { renewingSong = null }
         )
     }
 
