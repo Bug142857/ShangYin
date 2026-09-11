@@ -158,6 +158,8 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                     mainHandler.post { onAudioCaptured(url) }
                 }
                 val parsed = SnifferParser.parse(body)
+                // 学习站内接口：搜索/播放接口 URL 入库，直链刷新器靠重放它们免 DOM 拿直链
+                MusicApiLearn.record(url, parsed)
                 // 挂起中的收藏优先匹配：无视 seenUrls 去重——同一首歌二次点播时 API URL 相同会被挡住
                 if (pendingSaves.isNotEmpty() && (parsed.isNotEmpty() || AUDIO_URL_REGEX.containsMatchIn(body))) {
                     mainHandler.post {

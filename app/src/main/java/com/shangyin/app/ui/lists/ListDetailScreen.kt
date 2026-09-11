@@ -325,10 +325,11 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         refreshRetry = 0
                         android.widget.Toast.makeText(
                             context,
-                            "自动刷新失败——到「搜索 → 音乐」重新试听一次即可",
+                            "自动刷新失败——已打开音乐搜索，搜到后点播放即可修复直链",
                             android.widget.Toast.LENGTH_LONG
                         ).show()
                         refreshSong = null
+                        runCatching { nav.navigate("musicSearch") }
                     }
                 }
             )

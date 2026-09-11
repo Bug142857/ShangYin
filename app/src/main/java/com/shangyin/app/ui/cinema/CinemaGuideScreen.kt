@@ -3,9 +3,6 @@ package com.shangyin.app.ui.cinema
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
-import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.clickable
@@ -46,6 +43,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -55,9 +53,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavHostController
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.net.URLEncoder
@@ -78,8 +78,10 @@ data class CinemaGroup(val name: String, val halls: List<CinemaHall>)
 
 /**
  * 影厅指南：特效影厅（IMAX/CINITY/杜比等）按城市查询。
- * 数据来自 cinema.gaoliang.me（影迷社区维护）；非默认城市为客户端渲染，
- * 用离屏 WebView 渲染后注入 JS 提取 DOM 数据，结果磁盘缓存 24 小时。
+ * 数据来自 cinema.gaoliang.me（影迷社区维护）。该站点有 Vercel 人机挑战 + 严格限流 +
+ * 非默认城市客户端渲染，纯 HTTP / 离屏 WebView 都不可靠——
+ * 方案 = 内嵌可见 WebView 直接打开城市页（真人浏览环境自动过挑战），
+ * 注入 JS 提取影厅卡片；提取成功回原生列表（缓存 24h），失败保留网页模式可手动浏览。
  * 城市默认 IP 定位，可手动切换。
  */
 
@@ -93,6 +95,7 @@ val CINEMA_CITIES = listOf(
 
 private const val SITE = "https://cinema.gaoliang.me"
 
+@SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CinemaGuideScreen(nav: NavHostController) {
@@ -100,11 +103,13 @@ fun CinemaGuideScreen(nav: NavHostController) {
     var city by remember { mutableStateOf<String?>(null) }          // 当前城市（定位或手选）
     var showCityPicker by remember { mutableStateOf(false) }
     var locating by remember { mutableStateOf(true) }
-    var loading by remember { mutableStateOf(false) }
     var groups by remember { mutableStateOf<List<CinemaGroup>?>(null) }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
     var detailHall by remember { mutableStateOf<CinemaHall?>(null) }
-    var reloadKey by remember { mutableStateOf(0) }                 // 手动刷新
+    var reloadKey by remember { mutableStateOf(0) }                 // 手动刷新（强制走网页取新数据）
+    var webActive by remember { mutableStateOf(false) }             // 可见 WebView 加载/提取中
+    var extractFail by remember { mutableStateOf(false) }           // 提取失败 → 保留网页模式
+    var extractAttempt by remember { mutableStateOf(0) }            // "重新提取"轮次
+    val webViewRef = remember { java.util.concurrent.atomic.AtomicReference<WebView?>(null) }
 
     // 首次进入：IP 定位城市
     LaunchedEffect(Unit) {
@@ -113,30 +118,49 @@ fun CinemaGuideScreen(nav: NavHostController) {
         locating = false
     }
 
-    // 城市变化/刷新 → 加载该城市数据
+    // 城市变化/刷新 → 缓存优先；无缓存走可见 WebView
     LaunchedEffect(city, reloadKey) {
         val c = city ?: return@LaunchedEffect
         if (locating) return@LaunchedEffect
         groups = null
-        errorMsg = null
-        loading = true
-        // 1) 磁盘缓存（24h）
-        val cached = withContext(Dispatchers.IO) { readCache(context, c) }
-        if (cached != null) {
-            groups = cached
-            loading = false
-            return@LaunchedEffect
+        extractFail = false
+        if (reloadKey == 0) {
+            val cached = withContext(Dispatchers.IO) { readCache(context, c) }
+            if (cached != null) {
+                groups = cached
+                webActive = false
+                return@LaunchedEffect
+            }
         }
-        // 2) 离屏 WebView 渲染提取（等待在 IO 线程，WebView 操作在主线程）
-        val fetched = withContext(Dispatchers.IO) { fetchCityViaWebView(c) }
-        loading = false
-        if (fetched != null && fetched.sumOf { it.halls.size } > 0) {
-            groups = fetched
-            withContext(Dispatchers.IO) { writeCache(context, c, fetched) }
-        } else {
-            errorMsg = if (fetched == null) "数据加载失败——站点可能限流，请稍后重试"
-            else "暂未收录「$c」的特效厅数据"
+        webActive = true
+    }
+
+    // 提取轮询：等 CSR 渲染出影厅卡片（可见 WebView 里人机挑战自动过、rAF 正常跑）
+    LaunchedEffect(webActive, city, reloadKey, extractAttempt) {
+        if (!webActive) return@LaunchedEffect
+        delay(1200) // 等 WebView 创建并开始加载
+        repeat(40) {
+            val w = webViewRef.get()
+            if (w != null) {
+                val raw = w.evalJs(EXTRACT_JS)
+                val parsed = raw?.let { r ->
+                    val cleaned = r.trim().removeSurrounding("\"")
+                        .replace("\\\"", "\"").replace("\\\\", "\\")
+                    parseExtracted(cleaned)
+                }.orEmpty()
+                if (parsed.sumOf { it.halls.size } >= 3) {
+                    groups = parsed
+                    val c = city
+                    if (c != null) withContext(Dispatchers.IO) { writeCache(context, c, parsed) }
+                    webActive = false
+                    extractFail = false
+                    return@LaunchedEffect
+                }
+            }
+            delay(1000)
         }
+        // 一轮没提到数据：挑战/限流/结构变化都可能——保留网页给用户手动浏览
+        if (webActive) extractFail = true
     }
 
     Scaffold(
@@ -186,29 +210,65 @@ fun CinemaGuideScreen(nav: NavHostController) {
     ) { pad ->
         Box(Modifier.padding(pad).fillMaxSize()) {
             when {
-                locating || loading -> Column(
+                locating -> Column(
                     Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
                     CircularProgressIndicator(Modifier.size(26.dp), strokeWidth = 2.5.dp)
                     Text(
-                        if (locating) "正在定位城市…" else "正在获取 $city 的影厅数据…",
+                        "正在定位城市…",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 10.dp)
                     )
                 }
-                errorMsg != null -> Column(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(errorMsg ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(Modifier.padding(top = 14.dp)) {
-                        OutlinedButton(onClick = { reloadKey++ }) { Text("重试") }
-                        Spacer(Modifier.width(12.dp))
-                        OutlinedButton(onClick = { showCityPicker = true }) { Text("切换城市") }
+                webActive -> Box(Modifier.fillMaxSize()) {
+                    // 可见 WebView：key 换城/刷新时重建加载
+                    key(city, reloadKey) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    webViewClient = WebViewClient() // 站内跳转留在 WebView
+                                    webViewRef.set(this)
+                                    loadUrl("$SITE/city/${URLEncoder.encode(city ?: "", "UTF-8")}")
+                                }
+                            },
+                            onRelease = { w ->
+                                if (webViewRef.compareAndSet(w, null)) {
+                                    runCatching { w.stopLoading() }
+                                    runCatching { w.destroy() }
+                                }
+                            },
+                            update = { },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    if (extractFail) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+                            tonalElevation = 3.dp,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                            ) {
+                                Text(
+                                    "已切换网页模式：可直接在页面里浏览",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = { extractFail = false; extractAttempt++ }) {
+                                    Text("重新提取")
+                                }
+                            }
+                        }
                     }
                 }
                 groups != null -> CinemaList(groups ?: emptyList(), onHallClick = { detailHall = it })
@@ -383,7 +443,7 @@ private fun cacheFile(context: android.content.Context, city: String) =
 
 private fun readCache(context: android.content.Context, city: String): List<CinemaGroup>? = runCatching {
     val f = cacheFile(context, city)
-    if (!f.exists() || System.currentTimeMillis() - f.lastModified() > 7 * 24 * 3_600_000L) return null
+    if (!f.exists() || System.currentTimeMillis() - f.lastModified() > 24 * 3_600_000L) return null
     val groups = parseGroupsJson(f.readText())
     if (groups.isEmpty()) null else groups
 }.getOrNull()
@@ -425,71 +485,17 @@ private fun parseGroupsJson(json: String): List<CinemaGroup> = runCatching {
     }
 }.getOrDefault(emptyList())
 
-// ---------- 离屏 WebView 渲染提取（WebView 操作在主线程，await 在调用方 IO 线程） ----------
-private fun fetchCityViaWebView(city: String): List<CinemaGroup>? {
-    val url = "$SITE/city/${URLEncoder.encode(city, "UTF-8")}"
-    var webView: WebView? = null
-    var parsed: List<CinemaGroup>? = null
-    try {
-        val latch = java.util.concurrent.CountDownLatch(1)
-        var resultJson: String? = null
-        val handler = Handler(Looper.getMainLooper())
-        handler.post {
-            runCatching {
-                webView = WebView(android.app.Application())
-                webView?.settings?.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    blockNetworkImage = true          // 不加载图片，提速
-                    userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-                }
-                webView?.webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView, u: String) {
-                        // 轮询提取：等 CSR 渲染出影厅卡片（最多 25 次 × 0.8s）；
-                        // 首访可能触发 Vercel 人机挑战（JS 自动通过），一轮没数据自动 reload 再试
-                        var tries = 0
-                        var reloaded = false
-                        val poll = object : Runnable {
-                            override fun run() {
-                                tries++
-                                view.evaluateJavascript(EXTRACT_JS) { json ->
-                                    val hasData = runCatching {
-                                        val cleaned = json?.trim()?.removeSurrounding("\"")
-                                            ?.replace("\\\"", "\"")?.replace("\\\\", "\\") ?: "[]"
-                                        val arr = JSONArray(cleaned)
-                                        var count = 0
-                                        for (i in 0 until arr.length()) count += arr.optJSONObject(i)?.optJSONArray("halls")?.length() ?: 0
-                                        count >= 3
-                                    }.getOrDefault(false)
-                                    when {
-                                        hasData -> { resultJson = json; latch.countDown() }
-                                        tries < 25 -> handler.postDelayed(this, 800)
-                                        !reloaded -> { reloaded = true; tries = 0; view.reload() }
-                                        else -> latch.countDown()
-                                    }
-                                }
-                            }
-                        }
-                        handler.postDelayed(poll, 800)
-                    }
-                }
-                webView?.loadUrl(url)
-            }.onFailure { latch.countDown() }
-        }
-        latch.await(60, TimeUnit.SECONDS)
-        parsed = resultJson?.let { raw ->
-            val cleaned = raw.trim().removeSurrounding("\"")
-                .replace("\\\"", "\"").replace("\\\\", "\\")
-            parseExtracted(cleaned)
-        }
-    } finally {
-        webView?.let { w ->
-            Handler(Looper.getMainLooper()).post { runCatching { w.destroy() } }
+/** evaluateJavascript 的挂起封装（回调 → 协程） */
+private suspend fun WebView.evalJs(js: String): String? =
+    kotlinx.coroutines.suspendCancellableCoroutine { c ->
+        runCatching {
+            evaluateJavascript(js) { r ->
+                if (c.isActive) c.resumeWith(Result.success(r))
+            }
+        }.onFailure {
+            if (c.isActive) c.resumeWith(Result.success(null))
         }
     }
-    return parsed
-}
-
 /** 注入站点页面的提取脚本：遍历规格标题 h3 与影厅链接，聚合成组 */
 private const val EXTRACT_JS = """
 (function() {

@@ -305,6 +305,160 @@ object SnifferParser {
     fun keyOf(s: SniffedSong): String = "${s.name}::${s.artist}"
 }
 
+/**
+ * 站内 API 学习器：用户正常使用搜索页时，把"返回多首歌曲"的接口（搜索/列表类）
+ * 和"返回带直链单曲"的接口（播放/详情类）的完整 URL 记到本地。
+ * 直链刷新器重放这些 URL（把关键词参数替换成目标歌名），在页面上下文里直接
+ * fetch 拿数据——完全不依赖 DOM 搜索框和播放按钮，是直链刷新最可靠的路径。
+ */
+object MusicApiLearn {
+    private const val SP = "music_api_learn"
+    private const val KEY_SEARCH = "search_urls"
+    private const val KEY_PLAY = "play_urls"
+    private const val MAX = 8
+
+    private fun sp() = com.shangyin.app.App.instance
+        .getSharedPreferences(SP, android.content.Context.MODE_PRIVATE)
+
+    /** 模板签名：路径 + 参数名集合（关键词每次不同，按签名去重） */
+    private fun signature(url: String): String = runCatching {
+        val u = java.net.URL(url)
+        val names = u.query?.split('&')
+            ?.mapNotNull { p -> p.substringBefore('=').takeIf { it.isNotBlank() } }
+            ?.sorted().orEmpty()
+        u.path + "?" + names.joinToString(",")
+    }.getOrDefault(url)
+
+    private fun read(key: String): List<String> = runCatching {
+        val a = JSONArray(sp().getString(key, "[]"))
+        (0 until a.length()).mapNotNull { i -> a.optString(i).takeIf { it.startsWith("http") } }
+    }.getOrDefault(emptyList())
+
+    @Synchronized
+    private fun put(key: String, url: String) {
+        val sig = signature(url)
+        val cur = read(key).toMutableList()
+        cur.removeAll { signature(it) == sig }
+        cur.add(0, url)
+        while (cur.size > MAX) cur.removeAt(cur.size - 1)
+        sp().edit().putString(key, JSONArray(cur).toString()).apply()
+    }
+
+    /** 记录一次 API 命中：多首 → 搜索类；单曲带直链 → 播放类 */
+    @Synchronized
+    fun record(url: String, parsed: List<SniffedSong>) {
+        if (!url.startsWith("http") || parsed.isEmpty()) return
+        if (parsed.size >= 2) {
+            put(KEY_SEARCH, url)
+        } else if (parsed.any { !it.playUrl.isNullOrBlank() }) {
+            put(KEY_PLAY, url)
+        }
+    }
+
+    /** 搜索重放变体：模板里每个"非数字"参数值分别替换为目标歌名（另试路径末段） */
+    fun searchVariants(kw: String): List<String> {
+        val out = LinkedHashSet<String>()
+        val enc = runCatching { java.net.URLEncoder.encode(kw, "UTF-8") }.getOrDefault(kw)
+        for (tpl in read(KEY_SEARCH)) {
+            val qIdx = tpl.indexOf('?')
+            val base = if (qIdx >= 0) tpl.substring(0, qIdx) else tpl
+            val query = if (qIdx >= 0) tpl.substring(qIdx + 1) else ""
+            val pairs = if (query.isEmpty()) emptyList() else query.split('&')
+            pairs.forEachIndexed { i, p ->
+                val eq = p.indexOf('=')
+                if (eq <= 0) return@forEachIndexed
+                val raw = p.substring(eq + 1)
+                val v = runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrDefault(raw)
+                // 纯数字/超长值是分页、签名类参数，不是关键词
+                if (v.isEmpty() || v.length > 64 || v.toDoubleOrNull() != null) return@forEachIndexed
+                val nl = pairs.toMutableList()
+                    .also { it[i] = p.substring(0, eq + 1) + enc }.joinToString("&")
+                out.add("$base?$nl")
+            }
+            // 路径末段替换（/search/关键词、/so/关键词）
+            val segs = base.trimEnd('/').split('/')
+            val last = segs.lastOrNull() ?: ""
+            if (segs.size > 3 && last.isNotEmpty() && !last.contains('.') && last.toDoubleOrNull() == null) {
+                val nb = segs.dropLast(1).joinToString("/") + "/" + enc
+                out.add(if (query.isEmpty()) nb else "$nb?$query")
+            }
+        }
+        return out.take(6).toList()
+    }
+
+    /** 播放重放变体：把模板中 id/歌名类参数替换为搜索结果里目标歌的候选值 */
+    fun playVariants(values: List<String>): List<String> {
+        if (values.isEmpty()) return emptyList()
+        val out = LinkedHashSet<String>()
+        for (tpl in read(KEY_PLAY)) {
+            val qIdx = tpl.indexOf('?')
+            if (qIdx <= 0) continue
+            val base = tpl.substring(0, qIdx)
+            val pairs = tpl.substring(qIdx + 1).split('&')
+            // 可替换参数：参数名像主键；没有像的就用第一个带值参数
+            val idxs = pairs.indices.filter { i ->
+                val p = pairs[i]
+                p.contains('=') && listOf("id", "hash", "mid", "name", "kw", "q", "key", "song", "title")
+                    .any { p.substringBefore('=').lowercase().contains(it) }
+            }.ifEmpty { pairs.indices.filter { pairs[it].contains('=') }.take(1) }
+            for (v in values.take(4)) {
+                val enc = runCatching { java.net.URLEncoder.encode(v, "UTF-8") }.getOrDefault(v)
+                for (i in idxs) {
+                    val p = pairs[i]
+                    val np = p.substring(0, p.indexOf('=') + 1) + enc
+                    out.add("$base?" + pairs.toMutableList().also { it[i] = np }.joinToString("&"))
+                }
+            }
+        }
+        return out.take(8).toList()
+    }
+
+    /** 从搜索响应 JSON 里找目标歌的条目，提取可作播放接口参数的候选值（id/hash/歌名等） */
+    fun extractCandidates(body: String, songName: String): List<String> {
+        if (body.length > 3_000_000) return emptyList()
+        val trimmed = body.trim()
+        if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return emptyList()
+        val root = runCatching {
+            if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed)
+        }.getOrNull() ?: return emptyList()
+        val out = LinkedHashSet<String>()
+        val norm = songName.replace(" ", "").lowercase()
+        fun walk(node: Any?) {
+            when (node) {
+                is JSONObject -> {
+                    val nm = firstStrField(node) ?: ""
+                    if (nm.replace(" ", "").lowercase().contains(norm) && norm.length >= 2) {
+                        node.keys().forEach { k ->
+                            val lk = k.lowercase()
+                            if (listOf("id", "hash", "mid").any { lk.contains(it) }) {
+                                val v = node.opt(k)
+                                val s = when (v) {
+                                    is String -> v
+                                    is Number -> v.toString()
+                                    else -> null
+                                }
+                                if (!s.isNullOrBlank() && s.length <= 64) out.add(s)
+                            }
+                        }
+                    }
+                    node.keys().forEach { k -> walk(node.opt(k)) }
+                }
+                is JSONArray -> for (i in 0 until node.length()) walk(node.opt(i))
+            }
+        }
+        walk(root)
+        return out.toList().take(5)
+    }
+
+    private fun firstStrField(o: JSONObject): String? {
+        for (k in listOf("name", "title", "songName", "musicName", "song_name")) {
+            val v = o.opt(k)
+            if (v is String && v.isNotBlank()) return v.trim()
+        }
+        return null
+    }
+}
+
 /** 注入 WebView 的嗅探脚本：包装 fetch / XHR + 音频标签扫描 + 按歌名自动点播（mode=1 点元素 / mode=2 点行内播放按钮） */
 val SNIFFER_JS = """
 (function(){
@@ -343,6 +497,25 @@ val SNIFFER_JS = """
       } catch(e) {}
     });
     return xs.apply(this, arguments);
+  };
+
+  // 重放学到的站内接口：在页面上下文里直接 fetch（带 Cookie，能过 WAF），
+  // 响应回传原生走通用解析——不依赖页面 DOM，是直链刷新最可靠的路径
+  window.__replayFetch = function(urls){
+    try {
+      (urls || []).forEach(function(u){
+        try {
+          fetch(u, { credentials: 'include' }).then(function(r){
+            try {
+              r.text().then(function(t){
+                if (t && t.length < 3000000) window.MusicSniffer && window.MusicSniffer.onApi(u, t);
+              }).catch(function(){});
+            } catch(e) {}
+          }).catch(function(){});
+        } catch(e) {}
+      });
+      return '1';
+    } catch(e) { return 'e'; }
   };
 
   // 自动点播：按歌名找元素模拟点击（mode=1 直接点 / mode=2 点所在行的播放按钮）
@@ -399,6 +572,73 @@ val SNIFFER_JS = """
         } catch(e) {}
       }
       return '0';
+    } catch(e) { return 'e'; }
+  };
+
+  // 自动搜索：把关键词填进页面搜索框并触发搜索（MPA 跳转或 SPA 原地渲染均可）
+  window.__searchPlay = function(kw){
+    try {
+      var vis = function(el){ return el.offsetWidth > 0 && el.offsetHeight > 0; };
+      var inputs = document.querySelectorAll('input, textarea');
+      var box = null;
+      // 优先：类型或属性带搜索特征的可见输入框
+      for (var i = 0; i < inputs.length; i++) {
+        var el = inputs[i];
+        var typ = (el.type || '').toLowerCase();
+        var sig = ((el.name || '') + ' ' + (el.id || '') + ' ' + (el.className || '') + ' ' + (el.placeholder || '')).toLowerCase();
+        if (vis(el) && (typ === 'search' || /search|keyword|kw|\bq\b/.test(sig))) { box = el; break; }
+      }
+      // 兜底：任何可见文本输入框
+      if (!box) for (var j = 0; j < inputs.length; j++) {
+        var t2 = (inputs[j].type || 'text').toLowerCase();
+        if (vis(inputs[j]) && (t2 === 'text' || t2 === '')) { box = inputs[j]; break; }
+      }
+      if (!box) return 'noinput';
+      box.focus();
+      var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value') ||
+                   Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value');
+      if (setter && setter.set) setter.set.call(box, kw); else box.value = kw;
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      ['keydown', 'keypress', 'keyup'].forEach(function(tn) {
+        try {
+          box.dispatchEvent(new KeyboardEvent(tn, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }));
+        } catch(e) {}
+      });
+      // Enter 不生效的站点很多：补点搜索按钮（form 的提交按钮 / 输入框附近的按钮或放大镜图标）
+      var fire = function(el){
+        if (!el) return;
+        var r = el.getBoundingClientRect();
+        var x = r.left + r.width / 2, y = r.top + r.height / 2;
+        ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function(tn) {
+          try {
+            var Ev = (window.PointerEvent && tn.indexOf('pointer') === 0) ? PointerEvent : MouseEvent;
+            el.dispatchEvent(new Ev(tn, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y }));
+          } catch(e) {}
+        });
+        try { el.click(); } catch(e) {}
+      };
+      var form = box.closest ? box.closest('form') : null;
+      if (form) {
+        var sb = form.querySelector('button[type="submit"], button, input[type="submit"], [role="button"]');
+        fire(sb);
+        try { form.submit(); } catch(e) {}
+      } else {
+        // 无 form：在输入框的父级链上找带 search 特征的可见按钮/图标
+        var root = box.parentElement, btn = null;
+        for (var k = 0; k < 3 && root && !btn; k++) {
+          var bts = root.querySelectorAll('button, [role="button"], [class*="search"], [id*="search"], svg');
+          for (var b = 0; b < bts.length; b++) {
+            var be = bts[b];
+            if (!vis(be) || be === box) continue;
+            var sig2 = ((be.id || '') + ' ' + (be.className && be.className.baseVal !== undefined ? be.className.baseVal : be.className || '')).toLowerCase();
+            if (/search|submit|icon|btn|button/.test(sig2) || be.tagName === 'BUTTON') { btn = be; break; }
+          }
+          root = root.parentElement;
+        }
+        fire(btn);
+      }
+      return 'typed';
     } catch(e) { return 'e'; }
   };
 
