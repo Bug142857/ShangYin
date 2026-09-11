@@ -67,10 +67,91 @@ fun parseLrc(lrc: String): List<LyricLine> {
     return out.sortedBy { if (it.timeMs < 0) Long.MAX_VALUE else it.timeMs }
 }
 
-/** 歌词会话缓存（清单页播放时避免重复离屏抓取） */
+/** 歌词会话缓存（清单页播放时避免重复抓取） */
 object MusicLyricsCache {
     val map = java.util.concurrent.ConcurrentHashMap<String, String>()
     fun key(name: String, artist: String) = "$name::$artist"
+}
+
+/**
+ * 歌词抓取器：公开歌词源（网易云公共接口，OkHttp 直连，1-2 秒）。
+ * 搜索歌曲 → 按歌名+歌手匹配 → 拉 LRC。与音源无关，只要歌能匹配上就行。
+ */
+object MusicLyricsFetcher {
+    private val client = okhttp3.OkHttpClient.Builder()
+        .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+    private const val UA =
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+
+    suspend fun fetch(name: String, artist: String): String? =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                // 1) 搜索歌曲（关键词=歌名+歌手）
+                val kw = if (artist.isBlank()) name else "$name $artist"
+                val form = okhttp3.FormBody.Builder()
+                    .add("s", kw).add("type", "1").add("limit", "8").add("offset", "0")
+                    .build()
+                val searchReq = okhttp3.Request.Builder()
+                    .url("https://music.163.com/api/search/get/web")
+                    .header("Referer", "https://music.163.com")
+                    .header("User-Agent", UA)
+                    .post(form).build()
+                val searchJson = client.newCall(searchReq).execute().use { r ->
+                    r.body?.string() ?: return@runCatching null
+                }
+                val songs = JSONObject(searchJson)
+                    .optJSONObject("result")?.optJSONArray("songs")
+                    ?: return@runCatching null
+
+                // 2) 匹配优先级：歌名相同且歌手对上 > 歌名相同 > 歌名互相包含
+                fun norm(s: String) = s.replace(" ", "").lowercase()
+                var exactWithArtist = -1L
+                var exact = -1L
+                var contains = -1L
+                for (i in 0 until songs.length()) {
+                    val so = songs.optJSONObject(i) ?: continue
+                    val id = so.optLong("id", -1)
+                    if (id <= 0) continue
+                    val sname = so.optString("name")
+                    val arr = so.optJSONArray("artists")
+                    val sartists = (0 until (arr?.length() ?: 0))
+                        .mapNotNull { arr?.optJSONObject(it)?.optString("name") }
+                        .joinToString("/")
+                    if (exact < 0 && norm(sname) == norm(name)) {
+                        exact = id
+                        if (artist.isBlank() || sartists.contains(artist, ignoreCase = true)) {
+                            exactWithArtist = id
+                            break
+                        }
+                    } else if (contains < 0 && norm(sname).isNotEmpty() &&
+                        (norm(sname).contains(norm(name)) || norm(name).contains(norm(sname)))
+                    ) {
+                        contains = id
+                    }
+                }
+                val finalId = when {
+                    exactWithArtist > 0 -> exactWithArtist
+                    exact > 0 -> exact
+                    else -> contains
+                }
+                if (finalId <= 0) return@runCatching null
+
+                // 3) 拉 LRC 歌词
+                val lyricReq = okhttp3.Request.Builder()
+                    .url("https://music.163.com/api/song/lyric?id=$finalId&lv=1&tv=-1")
+                    .header("Referer", "https://music.163.com")
+                    .header("User-Agent", UA)
+                    .get().build()
+                client.newCall(lyricReq).execute().use { r ->
+                    val json = JSONObject(r.body?.string() ?: return@runCatching null)
+                    val lyric = json.optJSONObject("lrc")?.optString("lyric")?.trim().orEmpty()
+                    if (lyric.length > 20) lyric else null
+                }
+            }.getOrNull()
+        }
 }
 
 /** 音频流判定：音频扩展名，或带播放接口特征（stream/play/audio/media/type=mp3 等）且不是网页 */
