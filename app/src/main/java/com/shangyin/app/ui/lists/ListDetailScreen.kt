@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
@@ -149,6 +152,10 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var playPreparing by remember { mutableStateOf(false) }
     var playPos by remember { mutableIntStateOf(0) }
     var playDur by remember { mutableIntStateOf(0) }
+    // 歌词面板：当前歌的 LRC 原文 + 面板开合 + 正在后台抓歌词的歌（歌名 to 歌手）
+    var playLyrics by remember { mutableStateOf<String?>(null) }
+    var showLyrics by remember { mutableStateOf(false) }
+    var lyricsFetcher by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     // ---- 音乐清单排序：0=新增在上（默认） 1=按歌手；编辑模式保持手动拖拽顺序 ----
     var musicSortOrder by rememberSaveable { mutableIntStateOf(0) }
@@ -190,6 +197,12 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         releasePlayer()
         playPreparing = true
         playTitle = if (item.subTitle.isNullOrBlank()) item.title else "${item.title} - ${item.subTitle}"
+        // 歌词：缓存优先；没有则后台离屏抓取（正在刷新直链时不重复开抓取器，刷新本身会带歌词）
+        val lKey = com.shangyin.app.ui.music.MusicLyricsCache.key(item.title, item.subTitle ?: "")
+        playLyrics = com.shangyin.app.ui.music.MusicLyricsCache.map[lKey]
+        if (playLyrics == null && refreshSong == null) {
+            lyricsFetcher = item.title to (item.subTitle ?: "")
+        }
         val m = android.media.MediaPlayer()
         runCatching {
             // 带上泡椒站的 Cookie/Referer/UA，绕过防盗链
@@ -252,12 +265,17 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         }
     }
 
-    // ---- 直链过期自动刷新：离屏 WebView 重新嗅探该歌直链并续播 ----
+    // ---- 直链过期自动刷新：离屏 WebView 重新嗅探该歌直链并续播（顺带抓歌词入缓存） ----
     refreshSong?.let { song ->
         MusicRefresher(
             songName = song.title,
             artist = song.subTitle ?: "",
-            onCaptured = { newUrl ->
+            onCaptured = { newUrl, lyrics ->
+                lyrics?.let {
+                    com.shangyin.app.ui.music.MusicLyricsCache.map[
+                        com.shangyin.app.ui.music.MusicLyricsCache.key(song.title, song.subTitle ?: "")
+                    ] = it
+                }
                 scope.launch {
                     // 同名同歌手条目会被 Repo.saveMusic 原位更新直链
                     runCatching {
@@ -280,6 +298,26 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 ).show()
                 refreshSong = null
             }
+        )
+    }
+
+    // ---- 歌词抓取：当前播放的歌缓存里没有歌词时，后台离屏点播一次（静音）抓 LRC ----
+    lyricsFetcher?.let { (n, a) ->
+        MusicRefresher(
+            songName = n,
+            artist = a,
+            muteAudio = true,
+            onCaptured = { _, lyrics ->
+                if (!lyrics.isNullOrBlank()) {
+                    val key = com.shangyin.app.ui.music.MusicLyricsCache.key(n, a)
+                    com.shangyin.app.ui.music.MusicLyricsCache.map[key] = lyrics
+                    // 若抓的正是当前播放的这首歌 → 立即显示
+                    val cur = displayItems.firstOrNull { it.id == currentPlayId }
+                    if (cur != null && cur.title == n) playLyrics = lyrics
+                }
+                lyricsFetcher = null
+            },
+            onTimeout = { lyricsFetcher = null }
         )
     }
 
@@ -395,7 +433,24 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         bottomBar = {
             if (currentPlayId != null && !isEditMode) {
                 // 音乐清单 mini 播放条（navigationBarsPadding：避免被三键导航栏盖住）
-                Surface(shadowElevation = 8.dp, modifier = Modifier.navigationBarsPadding()) {
+                Column(Modifier.navigationBarsPadding()) {
+                    // 歌词面板：点击播放条歌名从播放器上方拉出
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = showLyrics,
+                        enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
+                        exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+                    ) {
+                        LyricsPanel(
+                            title = playTitle,
+                            loading = playLyrics == null,
+                            lines = remember(playLyrics) {
+                                com.shangyin.app.ui.music.parseLrc(playLyrics.orEmpty())
+                            },
+                            positionMs = playPos.toLong(),
+                            onClose = { showLyrics = false }
+                        )
+                    }
+                    Surface(shadowElevation = 8.dp) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
@@ -418,34 +473,55 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 )
                             }
                         }
-                        IconButton(onClick = { skipBy(1) }, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Rounded.SkipNext, contentDescription = "下一首")
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                playTitle,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            // 可拖动进度条：拖动中显示目标位置，松手 seek
+                        Column(
+                            Modifier.weight(1f).clickable { showLyrics = !showLyrics }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    playTitle,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Icon(
+                                    if (showLyrics) Icons.Rounded.ExpandLess else Icons.Rounded.Lyrics,
+                                    contentDescription = if (showLyrics) "收起歌词" else "展开歌词",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(start = 4.dp).size(14.dp)
+                                )
+                            }
+                            // 可拖动进度条 + 时间轴：拖动中显示目标位置，松手 seek
                             var scrubFraction by remember { mutableStateOf<Float?>(null) }
-                            Slider(
-                                value = scrubFraction
-                                    ?: if (playDur > 0) playPos.toFloat() / playDur else 0f,
-                                onValueChange = { scrubFraction = it },
-                                onValueChangeFinished = {
-                                    val f = scrubFraction
-                                    if (f != null && playDur > 0) {
-                                        val target = (f * playDur).toInt()
-                                        runCatching { mediaPlayer?.seekTo(target) }
-                                        playPos = target
-                                    }
-                                    scrubFraction = null
-                                },
-                                modifier = Modifier.fillMaxWidth().height(24.dp)
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    formatMs(scrubFraction?.let { (it * playDur).toInt() } ?: playPos),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Slider(
+                                    value = scrubFraction
+                                        ?: if (playDur > 0) playPos.toFloat() / playDur else 0f,
+                                    onValueChange = { scrubFraction = it },
+                                    onValueChangeFinished = {
+                                        val f = scrubFraction
+                                        if (f != null && playDur > 0) {
+                                            val target = (f * playDur).toInt()
+                                            runCatching { mediaPlayer?.seekTo(target) }
+                                            playPos = target
+                                        }
+                                        scrubFraction = null
+                                    },
+                                    modifier = Modifier.weight(1f).padding(horizontal = 6.dp).height(22.dp)
+                                )
+                                Text(
+                                    formatMs(playDur),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
+                    }
                     }
                 }
             }
@@ -1145,6 +1221,103 @@ private fun ItemRowInList(
                     tint = Color.White,
                     modifier = Modifier.size(16.dp)
                 )
+            }
+        }
+    }
+}
+
+/** 毫秒 → m:ss */
+private fun formatMs(ms: Int): String {
+    if (ms <= 0) return "0:00"
+    return "%d:%02d".format(ms / 60000, (ms / 1000) % 60)
+}
+
+/**
+ * 歌词面板：从 mini 播放条上方拉出。
+ * 带时间轴的歌词按播放进度高亮当前行并自动滚动；纯文本歌词仅顺序展示。
+ */
+@Composable
+private fun LyricsPanel(
+    title: String,
+    loading: Boolean,
+    lines: List<com.shangyin.app.ui.music.LyricLine>,
+    positionMs: Long,
+    onClose: () -> Unit
+) {
+    val listState = rememberLazyListState()
+    // 当前行：最后一个时间 <= 进度的行（无时间轴的行 timeMs=-1 不参与）
+    val activeIndex = lines.indexOfLast { it.timeMs in 0..positionMs }
+    LaunchedEffect(activeIndex, lines.size) {
+        if (activeIndex >= 0 && lines.isNotEmpty()) {
+            listState.animateScrollToItem((activeIndex - 3).coerceAtLeast(0))
+        }
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.97f),
+        tonalElevation = 2.dp
+    ) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 6.dp, top = 4.dp)
+            ) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(
+                        Icons.Rounded.ExpandLess,
+                        contentDescription = "收起歌词",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            when {
+                loading -> Box(
+                    Modifier.fillMaxWidth().height(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                        Text(
+                            "正在从音源获取歌词…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+                }
+                lines.isEmpty() -> Box(
+                    Modifier.fillMaxWidth().height(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "没有歌词",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                else -> LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    modifier = Modifier.fillMaxWidth().height(240.dp)
+                ) {
+                    itemsIndexed(lines) { i, line ->
+                        Text(
+                            line.text.ifBlank { "···" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (i == activeIndex) FontWeight.Bold else FontWeight.Normal,
+                            color = if (i == activeIndex) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                        )
+                    }
+                }
             }
         }
     }

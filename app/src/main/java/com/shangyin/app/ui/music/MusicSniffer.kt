@@ -25,8 +25,53 @@ data class SniffedSong(
     val name: String,
     val artist: String,
     val cover: String?,
-    val playUrl: String?
+    val playUrl: String?,
+    val lyrics: String? = null
 )
+
+/** LRC 时间轴标签特征 */
+val LRC_REGEX = Regex("""\[\d{1,2}:\d{2}""")
+
+/** 一行歌词 */
+data class LyricLine(val timeMs: Long, val text: String)
+
+/** 解析 LRC 歌词 → (时间, 文本) 列表；纯文本歌词（无时间轴）时间记 -1，仅顺序显示 */
+fun parseLrc(lrc: String): List<LyricLine> {
+    if (lrc.isBlank()) return emptyList()
+    val tag = Regex("""\[(\d{1,2}):(\d{1,2})(?:[.:](\d{1,3}))?]""")
+    val out = mutableListOf<LyricLine>()
+    lrc.lines().forEach { raw ->
+        val line = raw.trim()
+        if (line.isEmpty()) return@forEach
+        val times = tag.findAll(line).toList()
+        val text = line.replace(tag, "").trim()
+        if (text.isEmpty() && times.isEmpty()) return@forEach
+        if (times.isEmpty()) {
+            // 无时间标签的文本行（或元信息标签行）
+            if (!line.startsWith("[") && text.isNotEmpty()) out.add(LyricLine(-1, text))
+        } else {
+            times.forEach { m ->
+                val min = m.groupValues[1].toLong()
+                val sec = m.groupValues[2].toLong()
+                val fracStr = m.groupValues[3]
+                val frac = when (fracStr.length) {
+                    0 -> 0L
+                    1 -> fracStr.toLong() * 100
+                    2 -> fracStr.toLong() * 10
+                    else -> fracStr.take(3).toLong()
+                }
+                out.add(LyricLine(min * 60_000 + sec * 1000 + frac, text))
+            }
+        }
+    }
+    return out.sortedBy { if (it.timeMs < 0) Long.MAX_VALUE else it.timeMs }
+}
+
+/** 歌词会话缓存（清单页播放时避免重复离屏抓取） */
+object MusicLyricsCache {
+    val map = java.util.concurrent.ConcurrentHashMap<String, String>()
+    fun key(name: String, artist: String) = "$name::$artist"
+}
 
 /** 音频流判定：音频扩展名，或带播放接口特征（stream/play/audio/media/type=mp3 等）且不是网页 */
 fun isAudioStreamUrl(u: String): Boolean {
@@ -109,7 +154,7 @@ object SnifferParser {
         return songs
     }
 
-    /** 单曲解析：名称字段（必须）+ 任意 string 字段值是音频直链（不限 key 名） */
+    /** 单曲解析：名称字段（必须）+ 任意 string 字段值是音频直链（不限 key 名）+ 歌词字段（可选） */
     private fun parseSongObj(o: JSONObject): SniffedSong? {
         val name = firstStr(o, "name", "title", "songName", "musicName", "song_name") ?: return null
         if (name.isBlank() || name.length > 120) return null
@@ -118,7 +163,20 @@ object SnifferParser {
             ?: ""
         val cover = firstStr(o, "pic", "cover", "img", "picture", "albumpic", "picUrl", "coverImg")
         val playUrl = findAudioInFields(o)
-        return SniffedSong(name, artist, cover, playUrl)
+        val lyrics = findLyricsInFields(o)
+        return SniffedSong(name, artist, cover, playUrl, lyrics)
+    }
+
+    /** 遍历 string 字段找歌词：内容含 LRC 时间轴（或超长多行文本）视为歌词 */
+    private fun findLyricsInFields(o: JSONObject): String? {
+        val keys = o.keys()
+        while (keys.hasNext()) {
+            val v = o.opt(keys.next())
+            if (v is String && v.length > 20) {
+                if (LRC_REGEX.containsMatchIn(v)) return v.trim()
+            }
+        }
+        return null
     }
 
     /** 遍历对象所有 string 字段取第一个音频直链（接口的直链字段名五花八门，干脆不挑） */

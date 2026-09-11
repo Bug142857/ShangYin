@@ -140,7 +140,7 @@ fun MusicSinglePlayer(
         MusicRefresher(
             songName = title,
             artist = artist,
-            onCaptured = { newUrl ->
+            onCaptured = { newUrl, _ ->
                 onNewUrl(newUrl)
                 currentUrl = newUrl
                 refreshing = false
