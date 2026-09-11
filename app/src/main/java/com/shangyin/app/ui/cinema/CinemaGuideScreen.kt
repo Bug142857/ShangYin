@@ -383,7 +383,7 @@ private fun cacheFile(context: android.content.Context, city: String) =
 
 private fun readCache(context: android.content.Context, city: String): List<CinemaGroup>? = runCatching {
     val f = cacheFile(context, city)
-    if (!f.exists() || System.currentTimeMillis() - f.lastModified() > 24 * 3_600_000L) return null
+    if (!f.exists() || System.currentTimeMillis() - f.lastModified() > 7 * 24 * 3_600_000L) return null
     val groups = parseGroupsJson(f.readText())
     if (groups.isEmpty()) null else groups
 }.getOrNull()
@@ -445,8 +445,10 @@ private fun fetchCityViaWebView(city: String): List<CinemaGroup>? {
                 }
                 webView?.webViewClient = object : WebViewClient() {
                     override fun onPageFinished(view: WebView, u: String) {
-                        // 轮询提取：等 CSR 渲染出影厅卡片（最多 15 次 × 0.8s）
+                        // 轮询提取：等 CSR 渲染出影厅卡片（最多 25 次 × 0.8s）；
+                        // 首访可能触发 Vercel 人机挑战（JS 自动通过），一轮没数据自动 reload 再试
                         var tries = 0
+                        var reloaded = false
                         val poll = object : Runnable {
                             override fun run() {
                                 tries++
@@ -459,13 +461,11 @@ private fun fetchCityViaWebView(city: String): List<CinemaGroup>? {
                                         for (i in 0 until arr.length()) count += arr.optJSONObject(i)?.optJSONArray("halls")?.length() ?: 0
                                         count >= 3
                                     }.getOrDefault(false)
-                                    if (hasData) {
-                                        resultJson = json
-                                        latch.countDown()
-                                    } else if (tries < 15) {
-                                        handler.postDelayed(this, 800)
-                                    } else {
-                                        latch.countDown()
+                                    when {
+                                        hasData -> { resultJson = json; latch.countDown() }
+                                        tries < 25 -> handler.postDelayed(this, 800)
+                                        !reloaded -> { reloaded = true; tries = 0; view.reload() }
+                                        else -> latch.countDown()
                                     }
                                 }
                             }
@@ -476,7 +476,7 @@ private fun fetchCityViaWebView(city: String): List<CinemaGroup>? {
                 webView?.loadUrl(url)
             }.onFailure { latch.countDown() }
         }
-        latch.await(30, TimeUnit.SECONDS)
+        latch.await(60, TimeUnit.SECONDS)
         parsed = resultJson?.let { raw ->
             val cleaned = raw.trim().removeSurrounding("\"")
                 .replace("\\\"", "\"").replace("\\\\", "\\")

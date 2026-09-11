@@ -43,6 +43,9 @@ fun MusicRefresher(
     val found = remember { AtomicReference<String?>(null) }
     val lyricsFound = remember { AtomicReference<String?>(null) }
     var delivered by remember { mutableStateOf(false) }
+    // 点播窗口：点播发出后 20 秒内的音频流请求，即使 URL/解析器匹配不上歌名也认作目标直链
+    // （防站点改版导致解析器失效 / 歌手字段写法不一致）
+    val playWindowAt = remember { java.util.concurrent.atomic.AtomicLong(0L) }
 
     val sniffer = remember {
         object {
@@ -58,10 +61,9 @@ fun MusicRefresher(
                     }
                     if (found.get() != null) return@forEach
                     if (s.playUrl.isNullOrBlank()) return@forEach
+                    // 歌名匹配即可：refresher 一次只服务一首歌（歌手字段写法差异不再作为硬条件）
                     val nameOk = s.name == songName || s.name.replace(" ", "") == songName.replace(" ", "")
-                    val artistOk = artist.isBlank() ||
-                        s.artist.contains(artist) || artist.contains(s.artist)
-                    if (nameOk && artistOk) found.compareAndSet(null, s.playUrl)
+                    if (nameOk) found.compareAndSet(null, s.playUrl)
                 }
             }
 
@@ -69,7 +71,15 @@ fun MusicRefresher(
             fun onAudio(url: String) {
                 if (!url.startsWith("http") || found.get() != null) return
                 val probe = SniffedSong(songName, artist, null, null)
-                if (audioUrlMatchesSong(probe, url)) found.compareAndSet(null, url)
+                if (audioUrlMatchesSong(probe, url)) {
+                    found.compareAndSet(null, url)
+                    return
+                }
+                // 点播窗口兜底：窗口内出现的音频流 = 刚被点播的那首（网络层直接采信）
+                val inWindow = System.currentTimeMillis() - playWindowAt.get() in 0..20_000
+                if (inWindow && (AUDIO_URL_REGEX.containsMatchIn(url) || isAudioStreamUrl(url))) {
+                    found.compareAndSet(null, url)
+                }
             }
         }
     }
@@ -124,18 +134,21 @@ fun MusicRefresher(
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         view?.evaluateJavascript(SNIFFER_JS, null)
-                        // 页面数据渲染需要时间：3 秒后点歌名元素，9 秒后试行内播放按钮
+                        // 页面数据渲染需要时间：3 秒后点歌名元素，9 秒后试行内播放按钮；
+                        // 每轮点播后开启 20 秒捕获窗口（onAudio 网络层兜底）
                         val n = JSONObject.quote(songName)
                         val a = JSONObject.quote(artist)
                         view?.postDelayed({
                             view.evaluateJavascript(
                                 "window.__playByName && window.__playByName($n, $a, 1)", null
                             )
+                            playWindowAt.set(System.currentTimeMillis())
                         }, 3000)
                         view?.postDelayed({
                             view.evaluateJavascript(
                                 "window.__playByName && window.__playByName($n, $a, 2)", null
                             )
+                            playWindowAt.set(System.currentTimeMillis())
                         }, 9000)
                         // 抓歌词场景：点播后把页面音频元素静音（直链/歌词请求照发，只是不出声）
                         if (muteAudio && view != null) {
