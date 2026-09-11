@@ -457,9 +457,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        IconButton(onClick = { skipBy(-1) }, modifier = Modifier.size(36.dp)) {
-                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首")
-                        }
                         IconButton(onClick = {
                             val p = mediaPlayer
                             if (p != null && playPlaying) { runCatching { p.pause() }; playPlaying = false }

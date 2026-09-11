@@ -106,11 +106,16 @@ object MusicLyricsFetcher {
                     .optJSONObject("result")?.optJSONArray("songs")
                     ?: return@runCatching null
 
-                // 2) 匹配优先级：歌名相同且歌手对上 > 歌名相同 > 歌名互相包含
+                // 2) 匹配：剥离歌名尾部后缀（"(Live)"、"（周深版）"等）后比较，
+                //    候选按优先级收集：歌名+歌手都对 > 仅歌名对 > 歌名互相包含
                 fun norm(s: String) = s.replace(" ", "").lowercase()
-                var exactWithArtist = -1L
-                var exact = -1L
-                var contains = -1L
+                fun stripSuffix(s: String) = s
+                    .replace(Regex("""\s*[(（][^)）]*[)）]\s*$"""), "")
+                    .replace(Regex("""\s*[-–]\s*(live|cover|翻唱).*$""", RegexOption.IGNORE_CASE), "")
+                    .trim()
+                val withArtist = mutableListOf<Long>()
+                val nameOnly = mutableListOf<Long>()
+                val partial = mutableListOf<Long>()
                 for (i in 0 until songs.length()) {
                     val so = songs.optJSONObject(i) ?: continue
                     val id = so.optLong("id", -1)
@@ -120,36 +125,35 @@ object MusicLyricsFetcher {
                     val sartists = (0 until (arr?.length() ?: 0))
                         .mapNotNull { arr?.optJSONObject(it)?.optString("name") }
                         .joinToString("/")
-                    if (exact < 0 && norm(sname) == norm(name)) {
-                        exact = id
-                        if (artist.isBlank() || sartists.contains(artist, ignoreCase = true)) {
-                            exactWithArtist = id
-                            break
-                        }
-                    } else if (contains < 0 && norm(sname).isNotEmpty() &&
-                        (norm(sname).contains(norm(name)) || norm(name).contains(norm(sname)))
-                    ) {
-                        contains = id
+                    val artistOk = artist.isBlank() || sartists.contains(artist, ignoreCase = true)
+                    when {
+                        norm(stripSuffix(sname)) == norm(name) ->
+                            (if (artistOk) withArtist else nameOnly).add(id)
+                        norm(sname).isNotEmpty() &&
+                            (norm(sname).contains(norm(name)) || norm(name).contains(norm(sname))) ->
+                            partial.add(id)
                     }
                 }
-                val finalId = when {
-                    exactWithArtist > 0 -> exactWithArtist
-                    exact > 0 -> exact
-                    else -> contains
-                }
-                if (finalId <= 0) return@runCatching null
+                val candidates = (withArtist + nameOnly + partial).take(3)
+                if (candidates.isEmpty()) return@runCatching null
 
-                // 3) 拉 LRC 歌词
-                val lyricReq = okhttp3.Request.Builder()
-                    .url("https://music.163.com/api/song/lyric?id=$finalId&lv=1&tv=-1")
-                    .header("Referer", "https://music.163.com")
-                    .header("User-Agent", UA)
-                    .get().build()
-                client.newCall(lyricReq).execute().use { r ->
-                    val json = JSONObject(r.body?.string() ?: return@runCatching null)
-                    val lyric = json.optJSONObject("lrc")?.optString("lyric")?.trim().orEmpty()
-                    if (lyric.length > 20) lyric else null
+                // 3) 按优先级逐个拉歌词（匹配版本歌词可能为空，如 VOCALOID 原版），
+                //    拿到非空 LRC 即返回
+                for (cid in candidates) {
+                    val lyricReq = okhttp3.Request.Builder()
+                        .url("https://music.163.com/api/song/lyric?id=$cid&lv=1&tv=-1")
+                        .header("Referer", "https://music.163.com")
+                        .header("User-Agent", UA)
+                        .get().build()
+                    val lyric = runCatching {
+                        client.newCall(lyricReq).execute().use { r ->
+                            val json = JSONObject(r.body?.string() ?: return@runCatching null)
+                            json.optJSONObject("lrc")?.optString("lyric")?.trim().orEmpty()
+                        }
+                    }.getOrNull().orEmpty()
+                    if (lyric.length > 20) return@runCatching lyric
                 }
+                null
             }.getOrNull()
         }
 }
