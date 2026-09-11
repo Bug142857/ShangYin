@@ -186,6 +186,9 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                 }
                 if (parsed.isEmpty()) return
                 parsing = true
+                // 搜索/列表响应（多首）到达 = 用户在浏览新内容：之前点播捕获的直链不再算"新鲜"，
+                // 防止"播 A → 搜 B → 点 B 收藏"错配到 A 的直链
+                if (parsed.size >= 2) mainHandler.post { audioStreamTimes.clear() }
                 val overlap = parsed.count { p -> songs.any { it.name == p.name && it.artist == p.artist } }
                 if (parsed.size >= 3 && overlap == 0 && songs.size >= 3) {
                     // 一批全新结果且与旧列表几乎无交集 → 用户搜了新歌：清掉旧列表，避免新旧混淆
