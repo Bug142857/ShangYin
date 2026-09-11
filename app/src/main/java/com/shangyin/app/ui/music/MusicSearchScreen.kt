@@ -102,7 +102,8 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     val songs = remember { mutableStateListOf<SniffedSong>() }
     // WebView 播放音频时真实发出的音频流请求（最新在前）——比解析 API 字段更可靠的直链来源
     val audioStreamUrls = remember { mutableListOf<String>() }
-    val seenUrls = remember { mutableStateListOf<String>() }
+    // 各直链的捕获时间（先播后收场景：60 秒内的新鲜直链 = 用户刚点播的那首）
+    val audioStreamTimes = remember { mutableMapOf<String, Long>() }
     var expanded by rememberSaveable { mutableStateOf(true) }
     var captured by remember { mutableIntStateOf(0) }
     val savingKeys = remember { mutableStateListOf<String>() }
@@ -137,7 +138,10 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
     fun onAudioCaptured(url: String) {
         audioStreamUrls.removeAll { it == url }
         audioStreamUrls.add(0, url)
-        if (audioStreamUrls.size > 20) audioStreamUrls.removeAt(audioStreamUrls.size - 1)
+        audioStreamTimes[url] = System.currentTimeMillis()
+        if (audioStreamUrls.size > 20) {
+            audioStreamUrls.removeAt(audioStreamUrls.size - 1)
+        }
         // 歌名精确匹配优先（多首等待时必须）；匹配不上且只有一首在等 → 挂起后新出现的流就是用户点播的那首
         val pending = pendingSaves.firstOrNull { audioUrlMatchesSong(it.song, url) }
             ?: pendingSaves.singleOrNull()?.takeIf { url !in it.seenAtStart }
@@ -180,15 +184,20 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
                         }
                     }
                 }
-                if (url in seenUrls) return
-                seenUrls.add(url)
-                if (seenUrls.size > 200) seenUrls.clear()
                 if (parsed.isEmpty()) return
                 parsing = true
-                val fresh = parsed.filter { p -> songs.none { it.name == p.name && it.artist == p.artist } }
-                if (fresh.isNotEmpty()) {
-                    songs.addAll(0, fresh)
-                    captured += fresh.size
+                val overlap = parsed.count { p -> songs.any { it.name == p.name && it.artist == p.artist } }
+                if (parsed.size >= 3 && overlap == 0 && songs.size >= 3) {
+                    // 一批全新结果且与旧列表几乎无交集 → 用户搜了新歌：清掉旧列表，避免新旧混淆
+                    songs.clear()
+                    songs.addAll(parsed)
+                    captured = parsed.size
+                } else {
+                    val fresh = parsed.filter { p -> songs.none { it.name == p.name && it.artist == p.artist } }
+                    if (fresh.isNotEmpty()) {
+                        songs.addAll(0, fresh)
+                        captured += fresh.size
+                    }
                 }
                 // 同一首歌再次出现时用新直链覆盖（网页里重新播放会拿到新链接，旧的可能已过期）
                 parsed.forEach { p ->
@@ -209,11 +218,14 @@ fun MusicSearchScreen(nav: androidx.navigation.NavHostController) {
         }
     }
 
-    /** 解析这首歌的可播直链：API 字段 → 池内歌名匹配（不做模拟点播，没有就交给挂起等待） */
+    /** 解析这首歌的可播直链：API 字段 → 池内歌名匹配 → 60 秒内的新鲜直链（先播后收：刚点播的就是它） */
     suspend fun resolvePlayUrl(song: SniffedSong): String? {
         song.playUrl?.takeIf { it.startsWith("http") }?.let { return it }
-        // 池里只认"歌名匹配"的直链——池里可能混着别的歌/误捕获的链接，不能随便兜底
+        // 池里先认"歌名匹配"的直链——池里可能混着别的歌/误捕获的链接
         audioStreamUrls.firstOrNull { audioUrlMatchesSong(song, it) }?.let { return it }
+        // 先播后收：用户刚点播过（60 秒内捕获），点 + 的就是刚播的那首
+        val freshDeadline = System.currentTimeMillis() - 60_000
+        audioStreamUrls.firstOrNull { (audioStreamTimes[it] ?: 0L) > freshDeadline }?.let { return it }
         return null
     }
 
