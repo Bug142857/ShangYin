@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.Theaters
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -186,6 +187,34 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                         Text("分类管理", style = MaterialTheme.typography.titleSmall)
                         Text(
                             "管理主页展示的自定义分类",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
+            // 影厅指南
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable { nav.navigate("cinema") }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Theaters, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("影厅指南", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "查询本地特效影厅（IMAX / CINITY / 杜比）",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

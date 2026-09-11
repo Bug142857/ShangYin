@@ -131,6 +131,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             }
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
             composable("cloudsync") { CloudSyncScreen(nav) }
+            composable("cinema") { com.shangyin.app.ui.cinema.CinemaGuideScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })
