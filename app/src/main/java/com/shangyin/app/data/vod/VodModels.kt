@@ -14,6 +14,8 @@ data class VodSource(
     val enabled: Boolean = true,
     /** 所属目录：cn=国内可访问（默认）/ proxy=需外网环境 */
     val region: String = "cn",
+    /** 是否手动设置过目录（手动设置后测试不再自动归组） */
+    val regionManual: Boolean = false,
     /** 链接测试：null 未测 / ok 可用 / dead 已失效 / proxy 需外网 */
     val testStatus: String? = null,
     /** 测试结果描述，如"可用 · 共 123 部" */

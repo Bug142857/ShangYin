@@ -367,7 +367,7 @@ fun VodSourceScreen(nav: NavHostController) {
         SourceEditDialog(
             initial = initial,
             onDismiss = { showAdd = false; editing = null },
-            onConfirm = { name, url, region ->
+            onConfirm = { name, url, region, regionManual ->
                 val normalized = VodClient.normalizeBaseUrl(url)
                 if (name.isBlank() || !normalized.startsWith("http")) {
                     Toast.makeText(context, "请填写名称和有效的接口地址", Toast.LENGTH_SHORT).show()
@@ -384,12 +384,22 @@ fun VodSourceScreen(nav: NavHostController) {
                         id = UUID.randomUUID().toString().take(12),
                         name = name.trim(),
                         baseUrl = normalized,
-                        region = region
+                        region = region,
+                        regionManual = regionManual
                     ))
                 } else {
                     persist(sources.map {
                         if (it.id == initial.id) {
-                            it.copy(name = name.trim(), baseUrl = normalized, region = region)
+                            // 名称/地址/目录变更后旧测试结果不可信，一并清空待重测
+                            it.copy(
+                                name = name.trim(),
+                                baseUrl = normalized,
+                                region = region,
+                                regionManual = regionManual,
+                                testStatus = null,
+                                testMsg = null,
+                                testAt = 0L
+                            )
                         } else it
                     })
                 }
@@ -495,13 +505,14 @@ private fun SourceCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                val manualTag = if (src.regionManual) " · 手动分组" else ""
                 Text(
                     when {
                         testing -> "测试中…"
-                        src.testStatus == "ok" -> src.testMsg ?: "可用"
-                        src.testStatus == "dead" -> src.testMsg ?: "已失效"
-                        src.testStatus == "proxy" -> src.testMsg ?: "需外网"
-                        else -> "未测试 · 点卡片测试"
+                        src.testStatus == "ok" -> (src.testMsg ?: "可用") + manualTag
+                        src.testStatus == "dead" -> (src.testMsg ?: "已失效") + manualTag
+                        src.testStatus == "proxy" -> (src.testMsg ?: "需外网") + manualTag
+                        else -> "未测试 · 点卡片测试" + manualTag
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = when {
@@ -539,7 +550,7 @@ private fun SourceCard(
 private fun SourceEditDialog(
     initial: VodSource?,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String, region: String) -> Unit
+    onConfirm: (name: String, url: String, region: String, regionManual: Boolean) -> Unit
 ) {
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var url by remember {
@@ -548,6 +559,8 @@ private fun SourceEditDialog(
     var region by remember {
         mutableStateOf(if (initial?.region == "proxy") "proxy" else "cn")
     }
+    // 用户在对话框里主动点过目录 chip → 视为手动分组（测试不再自动归组）
+    var regionTouched by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (initial == null) "添加片源" else "编辑片源") },
@@ -571,7 +584,7 @@ private fun SourceEditDialog(
                 )
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "所属目录",
+                    "所属目录" + if (regionTouched) "（已手动选择，测试不再自动归组）" else "",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -579,20 +592,22 @@ private fun SourceEditDialog(
                 Row {
                     FilterChip(
                         selected = region != "proxy",
-                        onClick = { region = "cn" },
+                        onClick = { region = "cn"; regionTouched = true },
                         label = { Text("国内可访问") },
                         modifier = Modifier.padding(end = 8.dp)
                     )
                     FilterChip(
                         selected = region == "proxy",
-                        onClick = { region = "proxy" },
+                        onClick = { region = "proxy"; regionTouched = true },
                         label = { Text("需要外网") }
                     )
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(name, url, region) }) { Text("保存") }
+            TextButton(onClick = {
+                onConfirm(name, url, region, regionTouched || (initial?.regionManual ?: false))
+            }) { Text("保存") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }

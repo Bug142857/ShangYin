@@ -141,8 +141,10 @@ object VodClient {
         base.copy(
             testStatus = result.first,
             testMsg = result.second,
-            // 测试后自动归目录：需外网 → 外网目录；可用/失效 → 国内目录
-            region = if (result.first == "proxy") "proxy" else "cn"
+            // 测试后自动归目录：需外网 → 外网目录；可用/失效 → 国内目录。
+            // 用户在编辑里手动设置过目录（regionManual）的源不覆盖，尊重手动选择
+            region = if (src.regionManual) src.region
+            else if (result.first == "proxy") "proxy" else "cn"
         )
     }
 
