@@ -32,6 +32,7 @@ import com.shangyin.app.ui.player.PlayerScreen
 import com.shangyin.app.ui.search.H1SearchScreen
 import com.shangyin.app.ui.search.SearchScreen
 import com.shangyin.app.ui.settings.CloudSyncScreen
+import com.shangyin.app.ui.settings.DataManageScreen
 import com.shangyin.app.ui.settings.SettingsScreen
 import com.shangyin.app.ui.settings.VodSourceScreen
 
@@ -133,6 +134,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             }
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
             composable("cloudsync") { CloudSyncScreen(nav) }
+            composable("dataManage") { DataManageScreen(nav) }
             composable("vodSources") { VodSourceScreen(nav) }
             composable("player") { PlayerScreen(nav) }
             composable(

@@ -1,6 +1,10 @@
 package com.shangyin.app.ui.settings
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,6 +23,7 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.AlertDialog
@@ -85,6 +90,38 @@ fun VodSourceScreen(nav: NavHostController) {
     val testingIds = remember { mutableStateListOf<String>() }
     val testLock = remember { Any() }
 
+    // 待导出的片源 JSON（选好目录后落盘）
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+
+    // 导出目录选择器（与数据导出一致：先选目录再写入）
+    val exportDirPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { rootUri: Uri? ->
+        rootUri?.let { tree ->
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (_: Exception) {}
+            val json = pendingExportJson ?: return@let
+            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+                .format(java.util.Date())
+            val fileName = "vod_sources_$ts.json"
+            runCatching {
+                val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, tree)
+                val newFile = docFile?.createFile("application/json", fileName)
+                    ?: throw Exception("无法创建文件")
+                context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
+                    os.write(json.toByteArray())
+                }
+                Toast.makeText(context, "已导出到 $fileName", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
+            }
+            pendingExportJson = null
+        }
+    }
+
     fun persist(list: List<VodSource>) {
         sources = list
         SettingsStore.setVodSources(list)
@@ -140,26 +177,61 @@ fun VodSourceScreen(nav: NavHostController) {
         }
     }
 
-    /** 单独导出片源配置到 Download/老郑分享/（JSON 数组，可直接再导入） */
+    /** 导出片源配置：先选目录（与数据导出一致），写入 vod_sources_时间.json（JSON 数组，可直接再导入） */
     fun exportSources() {
         val list = sources
         if (list.isEmpty()) return
+        pendingExportJson = kotlinx.serialization.json.Json.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(VodSource.serializer()),
+            list
+        )
+        exportDirPicker.launch(null)
+    }
+
+    /** 从文本导入片源（导出文件 JSON / 订阅 JSON / 一行一个地址），host 去重合并 */
+    fun importSourcesFromText(text: String) {
         scope.launch {
-            val fileName = withContext(Dispatchers.IO) {
-                val json = kotlinx.serialization.json.Json.encodeToString(
-                    kotlinx.serialization.builtins.ListSerializer(VodSource.serializer()),
-                    list
-                )
-                val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
-                    .format(java.util.Date())
-                val name = "vod_sources_$stamp.json"
-                if (writeToDownloads(context, name, json)) name else null
+            val (list, err) = withContext(Dispatchers.IO) { VodClient.parseImport(text) }
+            if (err != null || list.isEmpty()) {
+                Toast.makeText(context, "导入失败：${err ?: "未识别到有效源"}", Toast.LENGTH_LONG).show()
+                return@launch
             }
-            Toast.makeText(
-                context,
-                if (fileName != null) "已导出到 Download/老郑分享/$fileName" else "导出失败（需 Android 10+）",
-                Toast.LENGTH_LONG
-            ).show()
+            val existHosts = sources.map { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) }.toSet()
+            val added = list.filter { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) !in existHosts }
+            when {
+                added.isEmpty() -> Toast.makeText(context, "导入的源均已存在，未新增", Toast.LENGTH_SHORT).show()
+                added.size < list.size -> {
+                    persist(sources + added)
+                    Toast.makeText(
+                        context,
+                        "已导入 ${added.size} 个源（${list.size - added.size} 个已存在被跳过）",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                else -> {
+                    persist(sources + added)
+                    Toast.makeText(context, "已导入 ${added.size} 个源", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // 导入文件选择器（用导出的 vod_sources_*.json 文件导入）
+    val importFilePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val text = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                }.getOrNull()
+            }
+            if (text.isNullOrBlank()) {
+                Toast.makeText(context, "读取文件失败", Toast.LENGTH_SHORT).show()
+            } else {
+                importSourcesFromText(text)
+            }
         }
     }
 
@@ -175,6 +247,9 @@ fun VodSourceScreen(nav: NavHostController) {
                 actions = {
                     IconButton(onClick = { testAll() }, enabled = !testing) {
                         Icon(Icons.Rounded.NetworkCheck, contentDescription = "测试全部")
+                    }
+                    IconButton(onClick = { importFilePicker.launch("*/*") }) {
+                        Icon(Icons.Rounded.FileUpload, contentDescription = "导入片源文件")
                     }
                     IconButton(onClick = { exportSources() }, enabled = sources.isNotEmpty()) {
                         Icon(Icons.Rounded.FileDownload, contentDescription = "导出片源")
@@ -457,26 +532,6 @@ private fun SourceCard(
             Switch(checked = src.enabled, onCheckedChange = onToggle)
         }
     }
-}
-
-/** 写文本文件到 Download/老郑分享/（MediaStore，仅 Android 10+） */
-private fun writeToDownloads(context: android.content.Context, name: String, content: String): Boolean {
-    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return false
-    return runCatching {
-        val values = android.content.ContentValues().apply {
-            put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
-            put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/json")
-            put(
-                android.provider.MediaStore.Downloads.RELATIVE_PATH,
-                android.os.Environment.DIRECTORY_DOWNLOADS + "/老郑分享"
-            )
-        }
-        val uri = context.contentResolver.insert(
-            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
-        ) ?: return@runCatching false
-        context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
-        true
-    }.getOrDefault(false)
 }
 
 /** 单条添加/编辑对话框 */

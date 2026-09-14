@@ -1,7 +1,6 @@
 package com.shangyin.app.ui.settings
 
 import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +31,7 @@ import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.SaveAlt
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -65,16 +65,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.shangyin.app.data.Repo
-import com.shangyin.app.data.buildExportJson
-import com.shangyin.app.data.parseExportJson
 import com.shangyin.app.data.db.ItemListEntity
 import com.shangyin.app.ui.lists.NameListDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -88,8 +83,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     var showListManager by remember { mutableStateOf(false) }
     var showThemePicker by remember { mutableStateOf(false) }
     var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
-    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
-    var pendingExportJson by remember { mutableStateOf<String?>(null) }
     var showClearCache by remember { mutableStateOf(false) }
     var cacheSize by remember { mutableStateOf("计算中…") }
     var showDoubanLogout by remember { mutableStateOf(false) }
@@ -119,41 +112,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         }.getOrDefault("未知")
     }
 
-    // 导入选择器
-    val importPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri: Uri? ->
-        uri?.let { pendingImportUri = it }
-    }
-
-    // 导出目录选择器
-    val exportDirPicker = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { rootUri: Uri? ->
-        rootUri?.let { tree ->
-            try {
-                context.contentResolver.takePersistableUriPermission(
-                    tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (_: Exception) {}
-            val json = pendingExportJson ?: return@let
-            val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val fileName = "老郑分享_$ts.json"
-            runCatching {
-                val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, tree)
-                val newFile = docFile?.createFile("application/json", fileName)
-                if (newFile == null) throw Exception("无法创建文件")
-                context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
-                    os.write(json.toByteArray())
-                }
-                Toast.makeText(context, "已导出到 $fileName", Toast.LENGTH_SHORT).show()
-            }.onFailure { e ->
-                Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
-            }
-            pendingExportJson = null
-        }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -172,7 +130,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 分类管理
+            // 清单管理
             Card {
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable { showListManager = true }.padding(16.dp),
@@ -184,9 +142,9 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("分类管理", style = MaterialTheme.typography.titleSmall)
+                        Text("清单管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "管理主页展示的自定义分类",
+                            "管理主页展示的自定义清单",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -212,7 +170,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("主题", style = MaterialTheme.typography.titleSmall)
+                        Text("主题切换", style = MaterialTheme.typography.titleSmall)
                         Text(
                             themeLabel(currentTheme),
                             style = MaterialTheme.typography.bodySmall,
@@ -281,7 +239,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("云同步", style = MaterialTheme.typography.titleSmall)
+                        Text("云端同步", style = MaterialTheme.typography.titleSmall)
                         Text(
                             if (SettingsStore.isWebdavConfigured) {
                                 val t = SettingsStore.lastCloudSync
@@ -334,61 +292,23 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
-            // 导出
+            // 数据管理（导出/导入合并入口）
             Card {
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable {
-                        scope.launch {
-                            runCatching {
-                                val data = Repo.exportAll()
-                                buildExportJson(data)
-                            }.onSuccess { json ->
-                                pendingExportJson = json
-                                exportDirPicker.launch(null)
-                            }.onFailure { e ->
-                                Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
-                            }
-                        }
+                        nav.safeNavigate("dataManage")
                     }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Rounded.Add, contentDescription = null,
+                        Icons.Rounded.SaveAlt, contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("导出数据", style = MaterialTheme.typography.titleSmall)
+                        Text("数据管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "把收藏的内容导出为 JSON 文件",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp).rotate(180f),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
-
-            // 导入
-            Card {
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable { importPicker.launch("*/*") }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Rounded.Edit, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("导入数据", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "从 JSON 文件恢复（会清空当前数据）",
+                            "导出/导入备份文件（收藏、清单、片源配置）",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -432,35 +352,9 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         }
     }
 
-    // 分类管理
+    // 清单管理
     if (showListManager) {
         ListManagerDialog(onDismiss = { showListManager = false })
-    }
-
-    // 导入确认
-    pendingImportUri?.let { uri ->
-        AlertDialog(
-            onDismissRequest = { pendingImportUri = null },
-            title = { Text("确认导入") },
-            text = { Text("导入会清空当前所有数据后替换，确定继续？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        runCatching {
-                            val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { br -> br.readText() }
-                                ?: return@runCatching
-                            val data = parseExportJson(json)
-                            Repo.importAll(data)
-                            Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
-                        }.onFailure { e ->
-                            Toast.makeText(context, "导入失败：${e.message}", Toast.LENGTH_LONG).show()
-                        }
-                        pendingImportUri = null
-                    }
-                }) { Text("确认导入", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { pendingImportUri = null }) { Text("取消") } }
-        )
     }
 
     // 清理缓存确认
@@ -537,7 +431,7 @@ private fun themeLabel(theme: String): String = when (theme) {
 
 // JSON 序列化（buildExportJson / parseExportJson）已抽到 data/ExportJson.kt，与云同步共用
 
-// ---------- 分类管理对话框 ----------
+// ---------- 清单管理对话框 ----------
 
 @Composable
 private fun ListManagerDialog(
@@ -564,12 +458,12 @@ private fun ListManagerDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("分类管理") },
+        title = { Text("清单管理") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (lists.isEmpty()) {
                     Text(
-                        "还没有分类，点 + 创建一个",
+                        "还没有清单，点 + 创建一个",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -592,7 +486,7 @@ private fun ListManagerDialog(
             TextButton(onClick = { showCreate = true }) {
                 Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("新建分类")
+                Text("新建清单")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
@@ -600,7 +494,7 @@ private fun ListManagerDialog(
 
     if (showCreate) {
         NameListDialog(
-            title = "新建分类",
+            title = "新建清单",
             confirmLabel = "创建",
             onConfirm = { name ->
                 scope.launch { Repo.createList(name) }
@@ -612,7 +506,7 @@ private fun ListManagerDialog(
 
     renameTarget?.let { target ->
         NameListDialog(
-            title = "重命名分类",
+            title = "重命名清单",
             initialName = target.name,
             onConfirm = { name ->
                 scope.launch { Repo.renameList(target, name) }
@@ -626,13 +520,13 @@ private fun ListManagerDialog(
         val childCount = lists.count { it.list.parentId == meta.list.id }
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("删除分类") },
+            title = { Text("删除清单") },
             text = {
                 Text(
                     buildString {
-                        append("确定删除分类「${meta.list.name}」吗？\n")
+                        append("确定删除清单「${meta.list.name}」吗？\n")
                         if (childCount > 0) append("⚠️ 其下 $childCount 个子清单也会一并删除！\n")
-                        append("⚠️ 该分类下的 ${meta.itemCount} 件条目也会被一并删除！")
+                        append("⚠️ 该清单下的 ${meta.itemCount} 件条目也会被一并删除！")
                     }
                 )
             },
@@ -659,7 +553,7 @@ private fun ListManagerDialog(
     }
 }
 
-/** 分类管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨 */
+/** 清单管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨 */
 @Composable
 private fun ListManagerRow(
     name: String,
