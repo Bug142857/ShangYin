@@ -87,7 +87,8 @@ fun VodSearchSheet(
     fun doSearch(q: String) {
         val kw = q.trim()
         if (kw.isEmpty() || searching) return
-        val srcs = SettingsStore.getVodSources().filter { it.enabled }
+        // 详情页在线观看只搜「国内可访问」目录的源；外网源走搜索页 H1 分类
+        val srcs = SettingsStore.getVodSources().filter { it.enabled && it.region != "proxy" }
         noSources = srcs.isEmpty()
         if (srcs.isEmpty()) return
         results.clear()
@@ -183,7 +184,7 @@ fun VodSearchSheet(
                 noSources -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "还没有配置片源，先去设置里添加",
+                            "国内可访问目录还没有片源，先去设置里添加或测试归组",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f)

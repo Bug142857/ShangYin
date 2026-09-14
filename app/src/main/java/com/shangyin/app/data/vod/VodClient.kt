@@ -94,8 +94,8 @@ object VodClient {
         }
     }
 
-    /** 按 ids 拉详情 */
-    private suspend fun fetchDetail(src: VodSource, vodId: Long): VodItem = withContext(Dispatchers.IO) {
+    /** 按 ids 拉详情（公开：H1 搜索点击播放时补剧集地址） */
+    suspend fun fetchDetail(src: VodSource, vodId: Long): VodItem = withContext(Dispatchers.IO) {
         val body = httpGet(buildUrl(src.baseUrl, "ac=videolist&ids=$vodId"))
             ?: return@withContext VodItem(vod_id = vodId)
         val resp = parseResp(body) ?: return@withContext VodItem(vod_id = vodId)
@@ -138,7 +138,12 @@ object VodClient {
                 else -> "dead" to "已失效 · 连接失败"
             }
         }
-        base.copy(testStatus = result.first, testMsg = result.second)
+        base.copy(
+            testStatus = result.first,
+            testMsg = result.second,
+            // 测试后自动归目录：需外网 → 外网目录；可用/失效 → 国内目录
+            region = if (result.first == "proxy") "proxy" else "cn"
+        )
     }
 
     private fun parseResp(body: String): VodResp? = runCatching {
@@ -250,7 +255,9 @@ object VodClient {
         val name: String = "",
         val baseUrl: String = "",
         val url: String = "",
-        val enabled: Boolean = true
+        val enabled: Boolean = true,
+        /** 所属目录：cn=国内可访问（默认）/ proxy=需外网环境 */
+        val region: String = "cn"
     ) {
         fun toVodSource(): VodSource {
             val b = baseUrl.ifBlank { url }
@@ -258,7 +265,8 @@ object VodClient {
                 id = id.ifBlank { genId(b) },
                 name = name.ifBlank { hostOf(b) },
                 baseUrl = b,
-                enabled = enabled
+                enabled = enabled,
+                region = if (region == "proxy") "proxy" else "cn"
             )
         }
     }

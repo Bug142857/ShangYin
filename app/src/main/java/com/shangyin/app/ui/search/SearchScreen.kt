@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -111,6 +112,18 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
             Toast.makeText(context, "请先选择要搜索的分类", Toast.LENGTH_SHORT).show()
             return
         }
+        // H2 分类预留（待开发）
+        if (selectedCat == "H2") {
+            Toast.makeText(context, "H2 分类开发中，敬请期待", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // H1 = 外网片源目录搜索：跳转独立页，按源分组展示，点击直接播放
+        if (selectedCat == "H1") {
+            keyboard?.hide()
+            query = ""
+            nav.safeNavigate("h1search/" + java.net.URLEncoder.encode(q, "UTF-8"))
+            return
+        }
         keyboard?.hide()  // 搜索后自动收起键盘
         query = ""  // 搜索后自动清空输入框
         scope.launch {
@@ -183,9 +196,12 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
             // 分类筛选（必选）
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                listOf("影视", "图书", "游戏", "人物").forEach { label ->
+                listOf("影视", "图书", "游戏", "人物", "H1", "H2").forEach { label ->
                     FilterChip(
                         selected = selectedCat == label,
                         onClick = {
@@ -203,7 +219,16 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    placeholder = { Text(if (selectedCat.isEmpty()) "先选分类，再输入关键词" else "在${selectedCat}中搜索…") },
+                    placeholder = {
+                        Text(
+                            when {
+                                selectedCat.isEmpty() -> "先选分类，再输入关键词"
+                                selectedCat == "H1" -> "搜索外网片源（需外网环境）…"
+                                selectedCat == "H2" -> "H2 分类开发中"
+                                else -> "在${selectedCat}中搜索…"
+                            }
+                        )
+                    },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { doSearch() }),

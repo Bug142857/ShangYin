@@ -29,6 +29,7 @@ import com.shangyin.app.ui.home.HomeScreen
 import com.shangyin.app.ui.item.ItemDetailScreen
 import com.shangyin.app.ui.lists.ListDetailScreen
 import com.shangyin.app.ui.player.PlayerScreen
+import com.shangyin.app.ui.search.H1SearchScreen
 import com.shangyin.app.ui.search.SearchScreen
 import com.shangyin.app.ui.settings.CloudSyncScreen
 import com.shangyin.app.ui.settings.SettingsScreen
@@ -134,6 +135,12 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("cloudsync") { CloudSyncScreen(nav) }
             composable("vodSources") { VodSourceScreen(nav) }
             composable("player") { PlayerScreen(nav) }
+            composable(
+                route = "h1search/{kw}",
+                arguments = listOf(navArgument("kw") { type = NavType.StringType })
+            ) { entry ->
+                H1SearchScreen(nav, entry.arguments?.getString("kw").orEmpty())
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

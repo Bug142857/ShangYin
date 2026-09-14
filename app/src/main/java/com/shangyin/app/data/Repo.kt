@@ -10,6 +10,7 @@ import com.shangyin.app.data.db.ListItemEntity
 import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.data.douban.DoubanClient
 import com.shangyin.app.data.douban.DoubanResult
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.util.UUID
@@ -358,11 +359,12 @@ object Repo {
 
     // ---------- 导入导出 ----------
 
-    /** 导出全部数据 */
+    /** 导出全部数据（含片源配置） */
     suspend fun exportAll(): ExportData = ExportData(
         items = itemDao.getAllSync(),
         lists = listDao.getAllListsSync(),
-        listItems = listDao.getAllListItemsSync()
+        listItems = listDao.getAllListItemsSync(),
+        vodSources = SettingsStore.getVodSources()
     )
 
     /**
@@ -382,7 +384,7 @@ object Repo {
         }
     }
 
-    /** 导入全部数据（清空后全量替换） */
+    /** 导入全部数据（清空后全量替换；备份带片源时同步替换片源配置） */
     suspend fun importAll(data: ExportData) {
         db.withTransaction {
             itemDao.deleteAll()
@@ -391,6 +393,10 @@ object Repo {
             listDao.insertAllLists(data.lists)
             listDao.insertAllListItems(data.listItems)
         }
+        // 片源配置在 SP，不参与 DB 事务；旧备份无此字段时保留现有配置
+        if (data.vodSources.isNotEmpty()) {
+            SettingsStore.setVodSources(data.vodSources)
+        }
     }
 }
 
@@ -398,5 +404,6 @@ object Repo {
 data class ExportData(
     val items: List<com.shangyin.app.data.db.CollectionItemEntity>,
     val lists: List<com.shangyin.app.data.db.ItemListEntity>,
-    val listItems: List<com.shangyin.app.data.db.ListItemEntity>
+    val listItems: List<com.shangyin.app.data.db.ListItemEntity>,
+    val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList()
 )

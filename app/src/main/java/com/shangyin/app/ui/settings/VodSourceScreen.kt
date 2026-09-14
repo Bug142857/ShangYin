@@ -18,11 +18,13 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -138,6 +140,29 @@ fun VodSourceScreen(nav: NavHostController) {
         }
     }
 
+    /** 单独导出片源配置到 Download/老郑分享/（JSON 数组，可直接再导入） */
+    fun exportSources() {
+        val list = sources
+        if (list.isEmpty()) return
+        scope.launch {
+            val fileName = withContext(Dispatchers.IO) {
+                val json = kotlinx.serialization.json.Json.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(VodSource.serializer()),
+                    list
+                )
+                val stamp = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+                val name = "vod_sources_$stamp.json"
+                if (writeToDownloads(context, name, json)) name else null
+            }
+            Toast.makeText(
+                context,
+                if (fileName != null) "已导出到 Download/老郑分享/$fileName" else "导出失败（需 Android 10+）",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -150,6 +175,9 @@ fun VodSourceScreen(nav: NavHostController) {
                 actions = {
                     IconButton(onClick = { testAll() }, enabled = !testing) {
                         Icon(Icons.Rounded.NetworkCheck, contentDescription = "测试全部")
+                    }
+                    IconButton(onClick = { exportSources() }, enabled = sources.isNotEmpty()) {
+                        Icon(Icons.Rounded.FileDownload, contentDescription = "导出片源")
                     }
                     IconButton(onClick = { showImport = true }) {
                         Icon(Icons.Rounded.CloudDownload, contentDescription = "批量导入")
@@ -169,7 +197,7 @@ fun VodSourceScreen(nav: NavHostController) {
         ) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "配置影视采集源（苹果CMS V10 接口），影视详情页即可在线观看。可粘贴订阅 JSON 或一行一个接口地址批量导入。",
+                "配置影视采集源（苹果CMS V10）。测试后自动归目录：需外网的源进「需要外网」目录（搜索页 H1 分类专用），详情页在线观看只用「国内可访问」源。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -212,73 +240,46 @@ fun VodSourceScreen(nav: NavHostController) {
                 }
             }
 
+            // 按目录分组展示：国内可访问在前，需要外网在后
+            val cnList = sources.filter { it.region != "proxy" }
+            val pxList = sources.filter { it.region == "proxy" }
+
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
-                items(sources, key = { it.id }) { src ->
-                    Card(onClick = { testOne(src) }) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                                Text(
-                                    src.name + if (src.enabled) "" else "（已停用）",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = if (src.enabled) MaterialTheme.colorScheme.onSurface
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    VodClient.normalizeBaseUrl(src.baseUrl),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    when {
-                                        testingIds.contains(src.id) -> "测试中…"
-                                        src.testStatus == "ok" -> src.testMsg ?: "可用"
-                                        src.testStatus == "dead" -> src.testMsg ?: "已失效"
-                                        src.testStatus == "proxy" -> src.testMsg ?: "需外网"
-                                        else -> "未测试 · 点卡片测试"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = when {
-                                        testingIds.contains(src.id) -> MaterialTheme.colorScheme.primary
-                                        src.testStatus == "ok" -> Color(0xFF2E7D32)
-                                        src.testStatus == "dead" -> MaterialTheme.colorScheme.error
-                                        src.testStatus == "proxy" -> Color(0xFFEF6C00)
-                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                if (cnList.isNotEmpty()) {
+                    item(key = "hdr_cn") { SectionHeader("国内可访问", cnList.size) }
+                    items(cnList, key = { "cn_" + it.id }) { src ->
+                        SourceCard(
+                            src = src,
+                            testing = testingIds.contains(src.id),
+                            onTest = { testOne(src) },
+                            onEdit = { editing = src },
+                            onDelete = { deleting = src },
+                            onToggle = { on ->
+                                persist(sources.map {
+                                    if (it.id == src.id) it.copy(enabled = on) else it
+                                })
                             }
-                            IconButton(onClick = { editing = src }) {
-                                Icon(
-                                    Icons.Rounded.DriveFileRenameOutline,
-                                    contentDescription = "编辑",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                        )
+                    }
+                }
+                if (pxList.isNotEmpty()) {
+                    item(key = "hdr_px") { SectionHeader("需要外网环境", pxList.size) }
+                    items(pxList, key = { "px_" + it.id }) { src ->
+                        SourceCard(
+                            src = src,
+                            testing = testingIds.contains(src.id),
+                            onTest = { testOne(src) },
+                            onEdit = { editing = src },
+                            onDelete = { deleting = src },
+                            onToggle = { on ->
+                                persist(sources.map {
+                                    if (it.id == src.id) it.copy(enabled = on) else it
+                                })
                             }
-                            IconButton(onClick = { deleting = src }) {
-                                Icon(
-                                    Icons.Rounded.Delete,
-                                    contentDescription = "删除",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = src.enabled,
-                                onCheckedChange = { on ->
-                                    persist(sources.map {
-                                        if (it.id == src.id) it.copy(enabled = on) else it
-                                    })
-                                }
-                            )
-                        }
+                        )
                     }
                 }
             }
@@ -291,7 +292,7 @@ fun VodSourceScreen(nav: NavHostController) {
         SourceEditDialog(
             initial = initial,
             onDismiss = { showAdd = false; editing = null },
-            onConfirm = { name, url ->
+            onConfirm = { name, url, region ->
                 val normalized = VodClient.normalizeBaseUrl(url)
                 if (name.isBlank() || !normalized.startsWith("http")) {
                     Toast.makeText(context, "请填写名称和有效的接口地址", Toast.LENGTH_SHORT).show()
@@ -307,11 +308,14 @@ fun VodSourceScreen(nav: NavHostController) {
                     persist(sources + VodSource(
                         id = UUID.randomUUID().toString().take(12),
                         name = name.trim(),
-                        baseUrl = normalized
+                        baseUrl = normalized,
+                        region = region
                     ))
                 } else {
                     persist(sources.map {
-                        if (it.id == initial.id) it.copy(name = name.trim(), baseUrl = normalized) else it
+                        if (it.id == initial.id) {
+                            it.copy(name = name.trim(), baseUrl = normalized, region = region)
+                        } else it
                     })
                 }
                 showAdd = false
@@ -376,16 +380,118 @@ private fun hostOf(url: String): String = runCatching {
     java.net.URI(url).host ?: url
 }.getOrDefault(url)
 
+/** 目录分组标题 */
+@Composable
+private fun SectionHeader(title: String, count: Int) {
+    Text(
+        "$title · $count",
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 4.dp)
+    )
+}
+
+/** 单个片源卡片（点卡片 = 测试链接） */
+@Composable
+private fun SourceCard(
+    src: VodSource,
+    testing: Boolean,
+    onTest: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onToggle: (Boolean) -> Unit
+) {
+    Card(onClick = onTest) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                Text(
+                    src.name + if (src.enabled) "" else "（已停用）",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = if (src.enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    VodClient.normalizeBaseUrl(src.baseUrl),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    when {
+                        testing -> "测试中…"
+                        src.testStatus == "ok" -> src.testMsg ?: "可用"
+                        src.testStatus == "dead" -> src.testMsg ?: "已失效"
+                        src.testStatus == "proxy" -> src.testMsg ?: "需外网"
+                        else -> "未测试 · 点卡片测试"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when {
+                        testing -> MaterialTheme.colorScheme.primary
+                        src.testStatus == "ok" -> Color(0xFF2E7D32)
+                        src.testStatus == "dead" -> MaterialTheme.colorScheme.error
+                        src.testStatus == "proxy" -> Color(0xFFEF6C00)
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = onEdit) {
+                Icon(
+                    Icons.Rounded.DriveFileRenameOutline,
+                    contentDescription = "编辑",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Rounded.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = src.enabled, onCheckedChange = onToggle)
+        }
+    }
+}
+
+/** 写文本文件到 Download/老郑分享/（MediaStore，仅 Android 10+） */
+private fun writeToDownloads(context: android.content.Context, name: String, content: String): Boolean {
+    if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return false
+    return runCatching {
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.Downloads.DISPLAY_NAME, name)
+            put(android.provider.MediaStore.Downloads.MIME_TYPE, "application/json")
+            put(
+                android.provider.MediaStore.Downloads.RELATIVE_PATH,
+                android.os.Environment.DIRECTORY_DOWNLOADS + "/老郑分享"
+            )
+        }
+        val uri = context.contentResolver.insert(
+            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+        ) ?: return@runCatching false
+        context.contentResolver.openOutputStream(uri)?.use { it.write(content.toByteArray()) }
+        true
+    }.getOrDefault(false)
+}
+
 /** 单条添加/编辑对话框 */
 @Composable
 private fun SourceEditDialog(
     initial: VodSource?,
     onDismiss: () -> Unit,
-    onConfirm: (name: String, url: String) -> Unit
+    onConfirm: (name: String, url: String, region: String) -> Unit
 ) {
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var url by remember {
         mutableStateOf(initial?.let { VodClient.normalizeBaseUrl(it.baseUrl) }.orEmpty())
+    }
+    var region by remember {
+        mutableStateOf(if (initial?.region == "proxy") "proxy" else "cn")
     }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -408,10 +514,30 @@ private fun SourceEditDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "所属目录",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                Row {
+                    FilterChip(
+                        selected = region != "proxy",
+                        onClick = { region = "cn" },
+                        label = { Text("国内可访问") },
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    FilterChip(
+                        selected = region == "proxy",
+                        onClick = { region = "proxy" },
+                        label = { Text("需要外网") }
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(name, url) }) { Text("保存") }
+            TextButton(onClick = { onConfirm(name, url, region) }) { Text("保存") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("取消") }
