@@ -10,6 +10,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -330,27 +333,53 @@ fun PlayerScreen(nav: NavHostController) {
                         }
                     }
 
-                    // 横屏浮层：跟随控制器显隐，提供线路/集数切换
+                    // 横屏右侧面板：标题 + 线路 + 选集网格（跟随控制器显隐，
+                    // 底部留出控制条高度，不再遮挡进度条）
                     if (isLandscape && groups.isNotEmpty()) {
                         androidx.compose.animation.AnimatedVisibility(
                             visible = controlsVisible,
-                            enter = fadeIn(),
-                            exit = fadeOut(),
-                            modifier = Modifier
-                                .align(Alignment.BottomStart)
-                                .padding(bottom = 56.dp)
+                            enter = fadeIn() + slideInHorizontally { it },
+                            exit = fadeOut() + slideOutHorizontally { it },
+                            modifier = Modifier.align(Alignment.CenterEnd)
                         ) {
+                            val epsR = groups.getOrNull(groupIndex)?.episodes.orEmpty()
                             Column(
                                 Modifier
-                                    .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.55f))
-                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                                    .fillMaxHeight()
+                                    .width(300.dp)
+                                    .background(Color.Black.copy(alpha = 0.72f))
+                                    .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 72.dp)
                             ) {
+                                Text(
+                                    PlayerSession.title,
+                                    color = Color.White,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    "共 ${epsR.size} 集",
+                                    color = Color.White.copy(alpha = 0.55f),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                                Spacer(Modifier.height(12.dp))
+
+                                // 线路（多线路才显示）
                                 if (groups.size > 1) {
+                                    Text(
+                                        "线路",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    Spacer(Modifier.height(6.dp))
                                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         items(groups.size) { gi ->
-                                            FilterChip(
-                                                selected = gi == groupIndex,
+                                            val sel = gi == groupIndex
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = if (sel) MaterialTheme.colorScheme.primary
+                                                else Color.White.copy(alpha = 0.12f),
                                                 onClick = {
                                                     if (gi != groupIndex) {
                                                         saveProgress()
@@ -360,18 +389,45 @@ fun PlayerScreen(nav: NavHostController) {
                                                         groupIndex = gi
                                                     }
                                                 },
-                                                label = { Text(groups[gi].name, color = Color.White) }
-                                            )
+                                                modifier = Modifier.height(32.dp)
+                                            ) {
+                                                Box(
+                                                    contentAlignment = Alignment.Center,
+                                                    modifier = Modifier.padding(horizontal = 12.dp)
+                                                ) {
+                                                    Text(
+                                                        groups[gi].name,
+                                                        color = Color.White,
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
-                                    Spacer(Modifier.height(6.dp))
+                                    Spacer(Modifier.height(12.dp))
                                 }
-                                val epsL = groups.getOrNull(groupIndex)?.episodes.orEmpty()
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(epsL.size) { idx ->
-                                        val selected = idx == currentEp
-                                        FilterChip(
-                                            selected = selected,
+
+                                Text(
+                                    "选集",
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                // 集数网格（占满面板剩余高度，可滚动）
+                                LazyVerticalGrid(
+                                    columns = GridCells.Fixed(3),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    items(epsR.size) { idx ->
+                                        val sel = idx == currentEp
+                                        Surface(
+                                            shape = RoundedCornerShape(8.dp),
+                                            color = if (sel) MaterialTheme.colorScheme.primary
+                                            else Color.White.copy(alpha = 0.12f),
                                             onClick = {
                                                 if (idx != currentEp) {
                                                     player.seekTo(idx, 0L)
@@ -379,14 +435,20 @@ fun PlayerScreen(nav: NavHostController) {
                                                     currentEp = idx
                                                 }
                                             },
-                                            label = {
+                                            modifier = Modifier.height(34.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
                                                 Text(
-                                                    epsL[idx].name,
-                                                    color = if (selected) Color.White
-                                                    else Color.White.copy(alpha = 0.7f)
+                                                    epsR[idx].name,
+                                                    color = if (sel) MaterialTheme.colorScheme.onPrimary
+                                                    else Color.White.copy(alpha = 0.85f),
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.padding(horizontal = 4.dp)
                                                 )
                                             }
-                                        )
+                                        }
                                     }
                                 }
                             }
