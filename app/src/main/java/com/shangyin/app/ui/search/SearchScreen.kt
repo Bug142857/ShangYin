@@ -113,11 +113,6 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
         }
         keyboard?.hide()  // 搜索后自动收起键盘
         query = ""  // 搜索后自动清空输入框
-        if (selectedCat == "音乐") {
-            // 音乐 = 泡椒音源（flac.music.hi.cn），走 WebView 嗅探页
-            nav.safeNavigate("musicSearch")
-            return
-        }
         scope.launch {
             searching = true
             searched = true
@@ -190,17 +185,11 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                listOf("影视", "图书", "游戏", "音乐", "人物").forEach { label ->
+                listOf("影视", "图书", "游戏", "人物").forEach { label ->
                     FilterChip(
                         selected = selectedCat == label,
                         onClick = {
-                            if (label == "音乐") {
-                                // 音乐直接进泡椒音源嗅探页（网页内搜索，无需二次输入）
-                                keyboard?.hide()
-                                nav.safeNavigate("musicSearch")
-                            } else {
-                                selectedCat = if (selectedCat == label) "" else label
-                            }
+                            selectedCat = if (selectedCat == label) "" else label
                         },
                         label = { Text(label) },
                         modifier = Modifier.padding(end = 8.dp)

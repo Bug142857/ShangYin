@@ -143,39 +143,6 @@ object Repo {
         else itemDao.findByDouban(r.category.label, r.doubanId)?.id ?: -1L
     }
 
-    /**
-     * 收藏嗅探到的歌曲（自动归入"音乐"根清单）。
-     * 同名同歌手视为同一首：已存在时若新直链不同则刷新直链（旧直链过期后的恢复手段）。
-     */
-    suspend fun saveMusic(
-        name: String,
-        artist: String,
-        coverUrl: String?,
-        playUrl: String?
-    ): Long {
-        // 清单内查重：同名同歌手视为同一首；直链变了就刷新（"音乐"清单由 addManual 自动保证存在）
-        val musicList = listDao.observeAllLists().first()
-            .firstOrNull { it.parentId == null && it.name == "音乐" }
-        if (musicList != null) {
-            val existing = listDao.observeItemsIn(musicList.id).first()
-                .firstOrNull { it.title == name && it.subTitle == artist }
-            if (existing != null) {
-                if (!playUrl.isNullOrBlank() && playUrl != existing.doubanUrl) {
-                    itemDao.update(existing.copy(doubanUrl = playUrl, updatedAt = System.currentTimeMillis()))
-                }
-                ensureItemInCategoryList(existing.id, "音乐")
-                return existing.id
-            }
-        }
-        return addManual(
-            categoryLabel = "音乐",
-            title = name,
-            subTitle = artist,
-            coverUrl = coverUrl,
-            doubanUrl = playUrl
-        )
-    }
-
     /** 手动添加（游戏等豆瓣搜索不可用时的兜底）；自动归入分类同名根清单 */
     suspend fun addManual(
         categoryLabel: String,
@@ -401,6 +368,23 @@ object Repo {
         lists = listDao.getAllListsSync(),
         listItems = listDao.getAllListItemsSync()
     )
+
+    /**
+     * 音乐功能已整体移除（v2.9.0，用户要求）：
+     * 启动时清理音乐条目、音乐清单及其子清单树（幂等，清理后无音乐数据残留）。
+     * 注意：非音乐条目即使挂在音乐清单下也保留（只解除清单归属，可在"清理孤立收藏"中处理）。
+     */
+    suspend fun purgeMusicData() {
+        db.withTransaction {
+            val musicListIds = listDao.musicListTreeIds()
+            if (musicListIds.isNotEmpty()) {
+                listDao.deleteLinksInLists(musicListIds)
+                listDao.deleteListsIn(musicListIds)
+            }
+            itemDao.deleteMusicItemLinks()
+            itemDao.deleteMusicItems()
+        }
+    }
 
     /** 导入全部数据（清空后全量替换） */
     suspend fun importAll(data: ExportData) {

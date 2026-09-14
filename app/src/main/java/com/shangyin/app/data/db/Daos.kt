@@ -54,6 +54,13 @@ interface ItemDao {
     /** 导入用：批量插入（保留原始 ID） */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<CollectionItemEntity>)
+
+    /** 音乐功能移除（v2.9.0）：清理音乐条目及其清单关联 */
+    @Query("DELETE FROM list_items WHERE itemId IN (SELECT id FROM items WHERE category = '音乐')")
+    suspend fun deleteMusicItemLinks()
+
+    @Query("DELETE FROM items WHERE category = '音乐'")
+    suspend fun deleteMusicItems()
 }
 
 @Dao
@@ -202,4 +209,19 @@ interface ListDao {
     /** 获取不在任何清单中的条目 ID（清理孤立收藏） */
     @Query("SELECT i.id FROM items i WHERE i.id NOT IN (SELECT itemId FROM list_items)")
     suspend fun getOrphanItemIds(): List<Long>
+
+    /** 音乐功能移除（v2.9.0）：音乐根清单整棵树（含各层级子清单） */
+    @Query(
+        "WITH RECURSIVE tree AS ( " +
+            "SELECT id FROM lists WHERE name = '音乐' AND parentId IS NULL " +
+            "UNION ALL SELECT l.id FROM lists l JOIN tree t ON l.parentId = t.id " +
+            ") SELECT id FROM tree"
+    )
+    suspend fun musicListTreeIds(): List<Long>
+
+    @Query("DELETE FROM list_items WHERE listId IN (:ids)")
+    suspend fun deleteLinksInLists(ids: List<Long>)
+
+    @Query("DELETE FROM lists WHERE id IN (:ids)")
+    suspend fun deleteListsIn(ids: List<Long>)
 }

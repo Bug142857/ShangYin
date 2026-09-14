@@ -8,9 +8,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
 import com.shangyin.app.ui.AppNav
 import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.theme.ShangYinTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -22,6 +24,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         SettingsStore.registerListener(spListener)
         enableEdgeToEdge()
+        // 音乐功能已移除（v2.9.0）：启动时清理音乐条目与音乐清单（幂等）
+        lifecycleScope.launch {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching { com.shangyin.app.data.Repo.purgeMusicData() }
+            }
+        }
         setContent {
             val forceDark = SettingsStore.isDark ?: isSystemInDarkTheme()
 

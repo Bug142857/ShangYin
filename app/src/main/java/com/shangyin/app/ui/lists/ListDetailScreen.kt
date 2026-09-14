@@ -103,7 +103,6 @@ import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.common.dragReorderModifier
-import com.shangyin.app.ui.music.MusicRefresher
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
@@ -134,238 +133,10 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var draggingItemId by remember { mutableStateOf<Long?>(null) }
     var draggingSubListId by remember { mutableStateOf<Long?>(null) }
     var deleteSubTarget by remember { mutableStateOf<ListWithMeta?>(null) }
-    // 长按移除：搜索结果行（跨清单）/ 音乐清单行
+    // 长按移除：搜索结果行（跨清单，有时就是搜出来删的）
     var deleteSearchTarget by remember { mutableStateOf<com.shangyin.app.data.db.ItemWithOwnerList?>(null) }
-    var deleteMusicTarget by remember { mutableStateOf<CollectionItemEntity?>(null) }
     val currentItemIds = rememberUpdatedState(items.map { it.id })
     val currentSubIds = rememberUpdatedState(childLists.map { it.list.id })
-
-    // ---- 音乐清单：点击即播（"音乐"根清单默认列表模式） ----
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var userToggledLayout by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(list?.id, list?.name) {
-        if (!userToggledLayout && list?.parentId == null && list?.name == "音乐") {
-            layoutMode = ListLayoutMode.LIST
-        }
-    }
-    var mediaPlayer by remember { mutableStateOf<android.media.MediaPlayer?>(null) }
-    var currentPlayId by remember { mutableStateOf<Long?>(null) }
-    var playTitle by remember { mutableStateOf("") }
-    var playPlaying by remember { mutableStateOf(false) }
-    var playPreparing by remember { mutableStateOf(false) }
-    var playPos by remember { mutableIntStateOf(0) }
-    var playDur by remember { mutableIntStateOf(0) }
-    // 歌词面板：当前歌的 LRC 原文 + 面板开合（向上拖播放条拉起）
-    var playLyrics by remember { mutableStateOf<String?>(null) }
-    var showLyrics by remember { mutableStateOf(false) }
-    var playArtist by remember { mutableStateOf("") }
-    // 直链保鲜（主动续期）：播放成功的歌若直链落库已超过 2 天，后台静默点播续期
-    var renewingSong by remember { mutableStateOf<com.shangyin.app.data.db.CollectionItemEntity?>(null) }
-    val renewedThisSession = remember { mutableStateOf(setOf<Long>()) }
-
-    // ---- 音乐清单排序：0=新增在上（默认） 1=按歌手；编辑模式保持手动拖拽顺序 ----
-    var musicSortOrder by rememberSaveable { mutableIntStateOf(0) }
-    val isMusicRoot = list?.parentId == null && list?.name == "音乐"
-    // 直链过期自动刷新：正在重新嗅探直链的歌曲
-    var refreshSong by remember { mutableStateOf<CollectionItemEntity?>(null) }
-    val displayItems = remember(items, musicSortOrder, isMusicRoot, isEditMode) {
-        when {
-            !isMusicRoot || isEditMode -> items
-            musicSortOrder == 1 -> items.sortedWith(
-                compareBy<CollectionItemEntity> { it.subTitle.isNullOrBlank() } // 无歌手排最后
-                    .thenBy(java.text.Collator.getInstance(java.util.Locale.CHINA)) { it.subTitle ?: "" }
-                    .thenBy(java.text.Collator.getInstance(java.util.Locale.CHINA)) { it.title }
-            )
-            else -> items.sortedByDescending { it.createdAt }
-        }
-    }
-
-    fun releasePlayer() {
-        runCatching { mediaPlayer?.release() }
-        mediaPlayer = null
-        playPlaying = false
-    }
-    DisposableEffect(Unit) { onDispose { releasePlayer() } }
-
-    fun playMusic(item: com.shangyin.app.data.db.CollectionItemEntity) {
-        // 同一首 → 播放/暂停切换
-        if (currentPlayId == item.id) {
-            val p = mediaPlayer
-            if (p != null && playPlaying) { runCatching { p.pause() }; playPlaying = false }
-            else if (p != null) { runCatching { p.start() }; playPlaying = true }
-            return
-        }
-        val url = item.doubanUrl
-        if (url.isNullOrBlank()) {
-            // 没有直链 → 自动离屏补链（抓到即存库并自动续播），无需手动重新收藏
-            android.widget.Toast.makeText(context, "正在自动获取播放链接…", android.widget.Toast.LENGTH_SHORT).show()
-            refreshSong = item
-            return
-        }
-        releasePlayer()
-        playPreparing = true
-        playArtist = item.subTitle ?: ""
-        playTitle = if (playArtist.isBlank()) item.title else "${item.title} - $playArtist"
-        // 歌词：缓存优先；没有则从公开歌词源抓（网易云接口，1-2 秒），与音源无关
-        val lKey = com.shangyin.app.ui.music.MusicLyricsCache.key(item.title, playArtist)
-        playLyrics = com.shangyin.app.ui.music.MusicLyricsCache.map[lKey]
-        if (playLyrics == null) {
-            val songId = item.id
-            val songName = item.title
-            scope.launch {
-                val lrc = com.shangyin.app.ui.music.MusicLyricsFetcher.fetch(songName, playArtist)
-                if (!lrc.isNullOrBlank()) {
-                    com.shangyin.app.ui.music.MusicLyricsCache.map[lKey] = lrc
-                    if (currentPlayId == songId) playLyrics = lrc
-                }
-            }
-        }
-        val m = android.media.MediaPlayer()
-        runCatching {
-            // 带上泡椒站的 Cookie/Referer/UA，绕过防盗链
-            val headers = mutableMapOf(
-                "Referer" to "https://flac.music.hi.cn/",
-                "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-            )
-            android.webkit.CookieManager.getInstance()
-                .getCookie("https://flac.music.hi.cn/")?.let { headers["Cookie"] = it }
-            m.setDataSource(context, android.net.Uri.parse(url), headers)
-            m.setOnPreparedListener {
-                playDur = it.duration
-                runCatching { it.start() }
-                playPlaying = true
-                playPreparing = false
-                // 保鲜检查：直链落库超过 2 天 → 本会话内未续期过 → 后台静默续期
-                if (System.currentTimeMillis() - item.updatedAt > 2 * 24 * 3_600_000L &&
-                    item.id !in renewedThisSession.value &&
-                    refreshSong == null && renewingSong == null
-                ) {
-                    renewedThisSession.value = renewedThisSession.value + item.id
-                    renewingSong = item
-                }
-            }
-            m.setOnCompletionListener {
-                playPlaying = false
-                playPos = 0
-                // 自动下一首（跟随当前显示顺序）
-                val idx = displayItems.indexOfFirst { it.id == item.id }
-                val next = displayItems.getOrNull(idx + 1) ?: displayItems.firstOrNull()
-                if (next != null && next.id != item.id) playMusic(next)
-            }
-            m.setOnErrorListener { _, what, extra ->
-                playPreparing = false
-                playPlaying = false
-                // 直链过期 → 自动重新嗅探并续播
-                android.widget.Toast.makeText(context, "直链已失效，正在自动刷新…", android.widget.Toast.LENGTH_SHORT).show()
-                refreshSong = item
-                true
-            }
-            m.prepareAsync()
-            mediaPlayer = m
-            currentPlayId = item.id
-        }.onFailure {
-            playPreparing = false
-            android.widget.Toast.makeText(context, "无法播放：${it.message ?: "链接无效"}", android.widget.Toast.LENGTH_SHORT).show()
-            runCatching { m.release() }
-        }
-    }
-
-    fun skipBy(delta: Int) {
-        val cur = currentPlayId ?: return
-        val idx = displayItems.indexOfFirst { it.id == cur }
-        if (idx < 0) return
-        val target = displayItems.getOrNull(idx + delta) ?: return
-        playMusic(target)
-    }
-
-    // 播放中刷新进度
-    LaunchedEffect(playPlaying) {
-        while (playPlaying) {
-            val p = mediaPlayer
-            if (p != null) runCatching {
-                playPos = p.currentPosition
-                playDur = p.duration
-            }
-            kotlinx.coroutines.delay(500)
-        }
-    }
-
-    // ---- 直链保鲜（主动续期）：后台静默点播续期（静音、不打断播放），让常听的歌直链始终保持新鲜 ----
-
-    // ---- 直链过期自动刷新：离屏 WebView 重新嗅探该歌直链并续播（顺带抓歌词入缓存） ----
-    // 超时自动重试一轮（key 变化强制重挂），两轮都失败才提示手动
-    var refreshRetry by remember { mutableStateOf(0) }
-    refreshSong?.let { song ->
-        androidx.compose.runtime.key(refreshRetry) {
-            MusicRefresher(
-                songName = song.title,
-                artist = song.subTitle ?: "",
-                onCaptured = { newUrl, lyrics ->
-                    lyrics?.let {
-                        com.shangyin.app.ui.music.MusicLyricsCache.map[
-                            com.shangyin.app.ui.music.MusicLyricsCache.key(song.title, song.subTitle ?: "")
-                        ] = it
-                    }
-                    refreshRetry = 0
-                    scope.launch {
-                        // 同名同歌手条目会被 Repo.saveMusic 原位更新直链
-                        runCatching {
-                            Repo.saveMusic(
-                                name = song.title,
-                                artist = song.subTitle ?: "",
-                                coverUrl = song.coverUrl,
-                                playUrl = newUrl
-                            )
-                        }
-                        refreshSong = null
-                        playMusic(song.copy(doubanUrl = newUrl))
-                    }
-                },
-                onTimeout = {
-                    if (refreshRetry < 1) {
-                        refreshRetry++
-                    } else {
-                        refreshRetry = 0
-                        android.widget.Toast.makeText(
-                            context,
-                            "自动刷新失败——已打开音乐搜索，搜到后点播放即可修复直链",
-                            android.widget.Toast.LENGTH_LONG
-                        ).show()
-                        refreshSong = null
-                        runCatching { nav.navigate("musicSearch") }
-                    }
-                }
-            )
-        }
-    }
-
-    // ---- 静默续期：后台点播抓新直链只入库（不打断当前播放），失败静默下次再试 ----
-    renewingSong?.let { song ->
-        MusicRefresher(
-            songName = song.title,
-            artist = song.subTitle ?: "",
-            muteAudio = true,
-            onCaptured = { newUrl, lyrics ->
-                lyrics?.let {
-                    com.shangyin.app.ui.music.MusicLyricsCache.map[
-                        com.shangyin.app.ui.music.MusicLyricsCache.key(song.title, song.subTitle ?: "")
-                    ] = it
-                }
-                scope.launch {
-                    runCatching {
-                        Repo.saveMusic(
-                            name = song.title,
-                            artist = song.subTitle ?: "",
-                            coverUrl = song.coverUrl,
-                            playUrl = newUrl
-                        )
-                    }
-                }
-                renewingSong = null
-            },
-            onTimeout = { renewingSong = null }
-        )
-    }
 
     // ---- 清单内搜索：本清单 + 所有层级子清单 ----
     var isSearching by remember { mutableStateOf(false) }
@@ -476,101 +247,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 }
             )
         },
-        bottomBar = {
-            if (currentPlayId != null && !isEditMode) {
-                // 音乐清单 mini 播放条（navigationBarsPadding：避免被三键导航栏盖住）
-                Column(Modifier.navigationBarsPadding()) {
-                    // 歌词面板：向上拖播放条从播放器上方拉出，向下拖或点箭头收起
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = showLyrics,
-                        enter = androidx.compose.animation.expandVertically() + androidx.compose.animation.fadeIn(),
-                        exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
-                    ) {
-                        LyricsPanel(
-                            title = playTitle.substringBefore(" - "),
-                            artist = playArtist,
-                            loading = playLyrics == null,
-                            lines = remember(playLyrics) {
-                                com.shangyin.app.ui.music.parseLrc(playLyrics.orEmpty())
-                            },
-                            positionMs = playPos.toLong(),
-                            onClose = { showLyrics = false }
-                        )
-                    }
-                    Surface(
-                        shadowElevation = 8.dp,
-                        // 向上拖拽播放条 → 拉起歌词面板
-                        modifier = Modifier.pointerInput(Unit) {
-                            var fired = false
-                            detectVerticalDragGestures(
-                                onDragStart = { fired = false },
-                                onVerticalDrag = { _, dy ->
-                                    if (!fired && dy < -6) { fired = true; showLyrics = true }
-                                }
-                            )
-                        }
-                    ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        IconButton(onClick = {
-                            val p = mediaPlayer
-                            if (p != null && playPlaying) { runCatching { p.pause() }; playPlaying = false }
-                            else if (p != null) { runCatching { p.start() }; playPlaying = true }
-                        }, modifier = Modifier.size(40.dp)) {
-                            if (playPreparing) {
-                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                            } else {
-                                Icon(
-                                    if (playPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                    contentDescription = "播放/暂停",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                playTitle,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            // 可拖动进度条 + 时间轴：拖动中显示目标位置，松手 seek
-                            var scrubFraction by remember { mutableStateOf<Float?>(null) }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    formatMs(scrubFraction?.let { (it * playDur).toInt() } ?: playPos),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Slider(
-                                    value = scrubFraction
-                                        ?: if (playDur > 0) playPos.toFloat() / playDur else 0f,
-                                    onValueChange = { scrubFraction = it },
-                                    onValueChangeFinished = {
-                                        val f = scrubFraction
-                                        if (f != null && playDur > 0) {
-                                            val target = (f * playDur).toInt()
-                                            runCatching { mediaPlayer?.seekTo(target) }
-                                            playPos = target
-                                        }
-                                        scrubFraction = null
-                                    },
-                                    modifier = Modifier.weight(1f).padding(horizontal = 6.dp).height(22.dp)
-                                )
-                                Text(
-                                    formatMs(playDur),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                    }
-                }
-            }
-        }
+        bottomBar = {}
     ) { pad ->
         // 搜索模式：显示本清单 + 所有子清单的匹配条目
         if (isSearching) {
@@ -596,14 +273,11 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         )
                     }
                     items(searchResults, key = { "${it.item.id}_${it.ownerListId}" }) { r ->
-                        val isMusic = r.item.category == "音乐"
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                                 .combinedClickable(
-                                    onClick = {
-                                        if (isMusic) playMusic(r.item) else nav.safeNavigate("item/${r.item.id}")
-                                    },
+                                    onClick = { nav.safeNavigate("item/${r.item.id}") },
                                     // 长按 → 从所属清单移除（有时就是搜出来删的）
                                     onLongClick = { deleteSearchTarget = r }
                                 )
@@ -636,14 +310,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                         color = MaterialTheme.colorScheme.outline
                                     )
                                 }
-                            }
-                            if (isMusic) {
-                                Icon(
-                                    if (r.item.id == currentPlayId && playPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
                             }
                         }
                     }
@@ -715,33 +381,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
-                    // 音乐清单排序切换（编辑模式保持手动顺序，不显示）
-                    if (isMusicRoot && !isEditMode) {
-                        item(key = "music_sort") {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    "排序",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.width(10.dp))
-                                FilterChip(
-                                    selected = musicSortOrder == 0,
-                                    onClick = { musicSortOrder = 0 },
-                                    label = { Text("新增", style = MaterialTheme.typography.labelSmall) }
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                FilterChip(
-                                    selected = musicSortOrder == 1,
-                                    onClick = { musicSortOrder = 1 },
-                                    label = { Text("歌手", style = MaterialTheme.typography.labelSmall) }
-                                )
-                            }
-                        }
-                    }
                     items(childLists, key = { "child_${it.list.id}" }) { meta ->
                         val isDragging = draggingSubListId == meta.list.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "subScale")
@@ -766,18 +405,14 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             onClick = { nav.safeNavigate("list/${meta.list.id}") }
                         )
                     }
-                    itemsIndexed(displayItems, key = { _, it -> it.id }) { idx, item ->
+                    itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "scale")
-                        val isMusic = item.category == "音乐"
                         ItemRowInList(
                             item = item,
                             index = idx + 1,
-                            isMusicRow = isMusic,
-                            isPlayingState = playPlaying,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            isCurrentPlaying = item.id == currentPlayId && !isEditMode,
                             modifier = (if (isEditMode) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = true,
@@ -787,15 +422,9 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
                                 onTap = {},
                                 onLongPress = {}
-                            ) else Modifier.fillMaxWidth().combinedClickable(
-                                onClick = {
-                                    if (isMusic) playMusic(item) else nav.safeNavigate("item/${item.id}")
-                                },
-                                // 音乐清单行长按 → 从清单移除（非编辑模式下也生效）
-                                onLongClick = {
-                                    if (isMusic) deleteMusicTarget = item
-                                }
-                            ))
+                            ) else Modifier.fillMaxWidth().clickable {
+                                nav.safeNavigate("item/${item.id}")
+                            })
                                 .graphicsLayer {
                                     scaleX = scale; scaleY = scale
                                     shadowElevation = if (isDragging) 24f else 0f
@@ -900,34 +529,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 }) { Text("移除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deleteSearchTarget = null }) { Text("取消") } }
-        )
-    }
-
-    // 音乐清单移除（长按触发）：从音乐清单移出，正在播放则先停
-    deleteMusicTarget?.let { item ->
-        AlertDialog(
-            onDismissRequest = { deleteMusicTarget = null },
-            title = { Text("移出歌曲") },
-            text = {
-                Text(
-                    buildString {
-                        append("将「${item.title}」从音乐清单中移除？")
-                        append("\n不会删除收藏的条目本身。")
-                    }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (item.id == currentPlayId) {
-                        releasePlayer()
-                        currentPlayId = null
-                        playPlaying = false
-                    }
-                    scope.launch { Repo.removeItemFromList(listId, item.id) }
-                    deleteMusicTarget = null
-                }) { Text("移除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { deleteMusicTarget = null }) { Text("取消") } }
         )
     }
 
@@ -1231,61 +832,14 @@ private fun ItemRowInList(
     item: CollectionItemEntity,
     modifier: Modifier = Modifier,
     index: Int = 0,
-    isMusicRow: Boolean = false,
-    isPlayingState: Boolean = false,
     isEditMode: Boolean = false,
-    onRemove: () -> Unit = {},
-    isCurrentPlaying: Boolean = false
+    onRemove: () -> Unit = {}
 ) {
     Box(modifier.fillMaxWidth()) {
-        if (isMusicRow) {
-            // 播放器风格：序号/播放状态 + 歌名/歌手（无封面、无箭头，点行即播）
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (isCurrentPlaying) {
-                    Icon(
-                        if (isPlayingState) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                } else {
-                    Text(
-                        "$index",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.width(24.dp)
-                    )
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        item.title,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = if (isCurrentPlaying) FontWeight.Bold else FontWeight.Normal,
-                        color = if (isCurrentPlaying) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (!item.subTitle.isNullOrBlank()) {
-                        Text(
-                            item.subTitle,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.Top
-            ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.Top
+        ) {
                 CoverImage(
                     url = item.coverUrl,
                     modifier = Modifier.width(40.dp).height(56.dp)
@@ -1313,7 +867,6 @@ private fun ItemRowInList(
                     }
                 }
             }
-        }
         if (isEditMode) {
             Box(
                 modifier = Modifier
@@ -1331,128 +884,6 @@ private fun ItemRowInList(
                     tint = Color.White,
                     modifier = Modifier.size(16.dp)
                 )
-            }
-        }
-    }
-}
-
-/** 毫秒 → m:ss */
-private fun formatMs(ms: Int): String {
-    if (ms <= 0) return "0:00"
-    return "%d:%02d".format(ms / 60000, (ms / 1000) % 60)
-}
-
-/**
- * 歌词面板：从 mini 播放条上方拉出的半屏界面。
- * 顶部歌曲信息（大字歌名 + 歌手）+ 歌词列表（按播放进度高亮当前行并自动滚动）。
- * 向下拖拽或点箭头收起。
- */
-@Composable
-private fun LyricsPanel(
-    title: String,
-    artist: String,
-    loading: Boolean,
-    lines: List<com.shangyin.app.ui.music.LyricLine>,
-    positionMs: Long,
-    onClose: () -> Unit
-) {
-    val listState = rememberLazyListState()
-    // 当前行：最后一个时间 <= 进度的行（无时间轴的行 timeMs=-1 不参与）
-    val activeIndex = lines.indexOfLast { it.timeMs in 0..positionMs }
-    LaunchedEffect(activeIndex, lines.size) {
-        if (activeIndex >= 0 && lines.isNotEmpty()) {
-            listState.animateScrollToItem((activeIndex - 3).coerceAtLeast(0))
-        }
-    }
-    val panelHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * 0.55).dp
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.98f),
-        tonalElevation = 3.dp,
-        // 向下拖拽收起
-        modifier = Modifier.pointerInput(Unit) {
-            var fired = false
-            detectVerticalDragGestures(
-                onDragStart = { fired = false },
-                onVerticalDrag = { _, dy ->
-                    if (!fired && dy > 10) { fired = true; onClose() }
-                }
-            )
-        }
-    ) {
-        Column(Modifier.fillMaxWidth().height(panelHeight)) {
-            // 头部：歌曲信息 + 收起箭头
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 14.dp, bottom = 4.dp)
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    if (artist.isNotBlank()) {
-                        Text(
-                            artist,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
-                }
-                IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Rounded.ExpandMore,
-                        contentDescription = "收起歌词面板",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-            when {
-                loading -> Box(
-                    Modifier.fillMaxWidth().weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
-                        Text(
-                            "正在获取歌词…",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp)
-                        )
-                    }
-                }
-                lines.isEmpty() -> Box(
-                    Modifier.fillMaxWidth().weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "没有歌词",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                else -> LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp),
-                    modifier = Modifier.fillMaxWidth().weight(1f)
-                ) {
-                    itemsIndexed(lines) { i, line ->
-                        Text(
-                            line.text.ifBlank { "···" },
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = if (i == activeIndex) FontWeight.Bold else FontWeight.Normal,
-                            color = if (i == activeIndex) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
-                        )
-                    }
-                }
             }
         }
     }
