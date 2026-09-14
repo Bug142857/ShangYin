@@ -30,6 +30,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material3.AlertDialog
@@ -287,6 +288,39 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                                 if (t > 0L) "已连接 WebDAV · 上次同步 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(t))}"
                                 else "已连接 WebDAV · 从未同步"
                             } else "用 WebDAV 网盘备份/恢复，换手机不丢数据",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
+            // 片源管理（在线观影）
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        nav.safeNavigate("vodSources")
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.OndemandVideo, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("片源管理", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (SettingsStore.getVodSources().any { it.enabled }) {
+                                val n = SettingsStore.getVodSources().count { it.enabled }
+                                "已配置 $n 个片源 · 影视详情页可在线观看"
+                            } else "配置影视采集源，收藏的影视可在线观看",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

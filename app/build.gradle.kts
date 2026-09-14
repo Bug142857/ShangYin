@@ -14,8 +14,8 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 69
-        versionName = "2.9.0"
+        versionCode = 70
+        versionName = "2.10.0"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
@@ -102,6 +102,11 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.jsoup)
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    // 在线观影：ExoPlayer + HLS 流媒体播放（media3 1.5.1，兼容 compileSdk 35）
+    implementation("androidx.media3:media3-exoplayer:1.5.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
+    implementation("androidx.media3:media3-ui:1.5.1")
 
     debugImplementation(libs.androidx.ui.tooling)
 }

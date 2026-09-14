@@ -28,9 +28,11 @@ import com.shangyin.app.ui.celebrity.CelebrityScreen
 import com.shangyin.app.ui.home.HomeScreen
 import com.shangyin.app.ui.item.ItemDetailScreen
 import com.shangyin.app.ui.lists.ListDetailScreen
+import com.shangyin.app.ui.player.PlayerScreen
 import com.shangyin.app.ui.search.SearchScreen
 import com.shangyin.app.ui.settings.CloudSyncScreen
 import com.shangyin.app.ui.settings.SettingsScreen
+import com.shangyin.app.ui.settings.VodSourceScreen
 
 /**
  * 导航动画配置：切换动画极短（120ms），保证操作省时丝滑。
@@ -130,6 +132,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             }
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
             composable("cloudsync") { CloudSyncScreen(nav) }
+            composable("vodSources") { VodSourceScreen(nav) }
+            composable("player") { PlayerScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

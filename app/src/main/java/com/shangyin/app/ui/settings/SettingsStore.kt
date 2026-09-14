@@ -104,4 +104,51 @@ object SettingsStore {
         sp.edit().remove(KEY_WEBDAV_URL).remove(KEY_WEBDAV_USER)
             .remove(KEY_WEBDAV_PASS).remove(KEY_LAST_CLOUD_SYNC).apply()
     }
+
+    // ---------- 在线观影（片源管理 + 播放进度） ----------
+
+    private const val KEY_VOD_SOURCES = "vod_sources_json"
+    private const val KEY_VOD_PROGRESS_PREFIX = "vod_progress_"
+
+    private val vodJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    /** 采集源列表（JSON 持久化） */
+    var vodSourcesJson: String
+        get() = sp.getString(KEY_VOD_SOURCES, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_VOD_SOURCES, v).apply()
+
+    fun getVodSources(): List<com.shangyin.app.data.vod.VodSource> = runCatching {
+        if (vodSourcesJson.isBlank()) emptyList()
+        else vodJson.decodeFromString<List<com.shangyin.app.data.vod.VodSource>>(vodSourcesJson)
+    }.getOrDefault(emptyList())
+
+    fun setVodSources(list: List<com.shangyin.app.data.vod.VodSource>) {
+        vodSourcesJson = vodJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(com.shangyin.app.data.vod.VodSource.serializer()),
+            list
+        )
+    }
+
+    /** 播放进度 key：play_{itemId}_{episodeUrl.hashCode()} */
+    fun vodProgressKey(itemId: Long, episodeUrl: String): String =
+        "play_${itemId}_${episodeUrl.hashCode()}"
+
+    /** 读取播放进度，返回 (positionMs, durationMs, timestampMs)；无记录返回 null */
+    fun getVodProgress(key: String): Triple<Long, Long, Long>? {
+        val raw = sp.getString(KEY_VOD_PROGRESS_PREFIX + key, null) ?: return null
+        val parts = raw.split(";")
+        val pos = parts.getOrNull(0)?.toLongOrNull() ?: return null
+        val dur = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+        val ts = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+        return Triple(pos, dur, ts)
+    }
+
+    fun saveVodProgress(key: String, positionMs: Long, durationMs: Long) {
+        if (positionMs <= 0L) return
+        sp.edit().putString(KEY_VOD_PROGRESS_PREFIX + key, "$positionMs;$durationMs;${System.currentTimeMillis()}").apply()
+    }
+
+    fun clearVodProgress(key: String) {
+        sp.edit().remove(KEY_VOD_PROGRESS_PREFIX + key).apply()
+    }
 }

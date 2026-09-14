@@ -36,6 +36,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -107,6 +108,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
     var showAllCelebrities by remember(itemId) { mutableStateOf(false) }
     var viewerUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var viewerIndex by remember { mutableStateOf(0) }
+    var showVodSearch by remember(itemId) { mutableStateOf(false) }
 
     // 系统返回键：先关"全部"覆盖页，再退出详情
     BackHandler(enabled = showAllPhotos || showAllCelebrities) {
@@ -361,6 +363,22 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
             }
 
+            // 在线观影（仅影视条目显示）
+            if (entity.category == "电影" || entity.category == "剧集") {
+                OutlinedButton(
+                    onClick = { showVodSearch = true },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("在线观看")
+                }
+            }
+
             // 评价（点击编辑）
             ReviewSection(entity)
 
@@ -500,6 +518,17 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         // 预告片本地播放
         videoUrl?.let { url ->
             VideoPlayerDialog(url, onClose = { videoUrl = null })
+        }
+
+        // 在线观影弹层（按标题搜片源）
+        if (showVodSearch) {
+            VodSearchSheet(
+                nav = nav,
+                itemId = entity.id,
+                title = entity.title,
+                year = entity.year,
+                onDismiss = { showVodSearch = false }
+            )
         }
     }
 }
