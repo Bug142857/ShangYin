@@ -102,6 +102,45 @@ object VodClient {
         resp.list.firstOrNull() ?: VodItem(vod_id = vodId)
     }
 
+    // ---------- 链接测试 ----------
+
+    /**
+     * 测试单个采集源是否可用，返回带结果的新 VodSource。
+     * 结果分类：
+     * - ok：HTTP 200 且返回合法 JSON、code=1，总量>0 → "可用 · 共 N 部"；量=0 也判可用（"可用 · 0 部"）
+     * - proxy：连接超时/被拒（可解析但连不上）→ 需外网或已墙，提示红色
+     * - dead：解析失败 / HTTP 非 200 / 返回 HTML（域名在但没有正确接口，可能改版/失效）→ 已失效
+     */
+    suspend fun testSource(src: VodSource): VodSource = withContext(Dispatchers.IO) {
+        val url = buildUrl(src.baseUrl, "ac=videolist&wd=" + URLEncoder.encode("a", "UTF-8") + "&pg=1")
+        val now = System.currentTimeMillis()
+        val base = src.copy(testAt = now)
+        val result = runCatching {
+            client.newCall(
+                Request.Builder().url(url).header("User-Agent", UA).build()
+            ).execute().use { resp ->
+                if (!resp.isSuccessful) return@use "dead" to "请求失败 HTTP ${resp.code}"
+                val body = resp.body?.string() ?: return@use "dead" to "返回为空"
+                if (!body.trimStart().startsWith("{")) return@use "dead" to "返回异常（非 JSON）"
+                val r = json.decodeFromString<VodResp>(body)
+                if (r.code != 1) return@use "dead" to "接口错误：${r.msg?.take(40) ?: "code=${r.code}"}"
+                "ok" to "可用 · 共 ${r.total} 部"
+            }
+        }.getOrElse { e ->
+            val msg = e.message.orEmpty()
+            when {
+                msg.contains("timeout", true) ||
+                    msg.contains("connect", true) ||
+                    msg.contains("refused", true) ||
+                    msg.contains("unreachable", true) ||
+                    msg.contains("failed to connect", true) ->
+                    "proxy" to "需外网 · 直连超时/被拒"
+                else -> "dead" to "已失效 · 连接失败"
+            }
+        }
+        base.copy(testStatus = result.first, testMsg = result.second)
+    }
+
     private fun parseResp(body: String): VodResp? = runCatching {
         // 有的源会返回 HTML（被墙/域名失效），快速识别直接放弃
         if (!body.trimStart().startsWith("{")) return@runCatching null

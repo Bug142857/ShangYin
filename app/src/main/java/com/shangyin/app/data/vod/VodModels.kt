@@ -11,7 +11,13 @@ data class VodSource(
     val id: String,
     val name: String,
     val baseUrl: String,
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    /** 链接测试：null 未测 / ok 可用 / dead 已失效 / proxy 需外网 */
+    val testStatus: String? = null,
+    /** 测试结果描述，如"可用 · 共 123 部" */
+    val testMsg: String? = null,
+    /** 最近测试时间戳（ms） */
+    val testAt: Long = 0L
 )
 
 /** 苹果CMS videolist 接口响应（字段全默认值，防个别源缺字段解析崩） */

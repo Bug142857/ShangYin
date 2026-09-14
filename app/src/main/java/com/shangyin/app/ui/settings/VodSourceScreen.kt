@@ -18,6 +18,7 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -33,12 +34,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,7 +51,10 @@ import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
@@ -69,9 +76,66 @@ fun VodSourceScreen(nav: NavHostController) {
     var deleting by remember { mutableStateOf<VodSource?>(null) }
     var importing by remember { mutableStateOf(false) }
 
+    // 链接测试状态
+    var testing by remember { mutableStateOf(false) }
+    var testDone by remember { mutableIntStateOf(0) }
+    var testTotal by remember { mutableIntStateOf(0) }
+    val testingIds = remember { mutableStateListOf<String>() }
+    val testLock = remember { Any() }
+
     fun persist(list: List<VodSource>) {
         sources = list
         SettingsStore.setVodSources(list)
+    }
+
+    /** 应用单源测试结果（线程安全：批量测试时多协程并发回写） */
+    fun applyResult(tested: VodSource) {
+        synchronized(testLock) {
+            sources = sources.map { if (it.id == tested.id) tested else it }
+        }
+    }
+
+    /** 测试全部源（并发 6，结果逐条上屏，结束统一落盘） */
+    fun testAll() {
+        if (testing) return
+        val targets = sources
+        if (targets.isEmpty()) return
+        scope.launch {
+            testing = true
+            testDone = 0
+            testTotal = targets.size
+            val sem = Semaphore(6)
+            targets.map { src ->
+                launch(Dispatchers.IO) {
+                    sem.withPermit {
+                        applyResult(VodClient.testSource(src))
+                        testDone++
+                    }
+                }
+            }.joinAll()
+            persist(sources)
+            testing = false
+            val t = sources
+            Toast.makeText(
+                context,
+                "测试完成：可用 ${t.count { it.testStatus == "ok" }} · " +
+                    "已失效 ${t.count { it.testStatus == "dead" }} · " +
+                    "需外网 ${t.count { it.testStatus == "proxy" }}",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /** 测试单个源（点卡片触发） */
+    fun testOne(src: VodSource) {
+        if (testingIds.contains(src.id)) return
+        testingIds.add(src.id)
+        scope.launch(Dispatchers.IO) {
+            val tested = VodClient.testSource(src)
+            applyResult(tested)
+            persist(sources)
+            testingIds.remove(src.id)
+        }
     }
 
     Scaffold(
@@ -84,6 +148,9 @@ fun VodSourceScreen(nav: NavHostController) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { testAll() }, enabled = !testing) {
+                        Icon(Icons.Rounded.NetworkCheck, contentDescription = "测试全部")
+                    }
                     IconButton(onClick = { showImport = true }) {
                         Icon(Icons.Rounded.CloudDownload, contentDescription = "批量导入")
                     }
@@ -108,6 +175,28 @@ fun VodSourceScreen(nav: NavHostController) {
             )
             Spacer(Modifier.height(12.dp))
 
+            // 测试进度/汇总
+            if (testing) {
+                Text(
+                    "正在测试链接… $testDone/$testTotal",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(4.dp))
+            } else {
+                val okN = sources.count { it.testStatus == "ok" }
+                val deadN = sources.count { it.testStatus == "dead" }
+                val proxyN = sources.count { it.testStatus == "proxy" }
+                if (okN + deadN + proxyN > 0) {
+                    Text(
+                        "可用 $okN · 已失效 $deadN · 需外网 $proxyN",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+            }
+
             if (sources.isEmpty()) {
                 Column(
                     Modifier.fillMaxWidth().padding(top = 48.dp),
@@ -128,7 +217,7 @@ fun VodSourceScreen(nav: NavHostController) {
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
                 items(sources, key = { it.id }) { src ->
-                    Card {
+                    Card(onClick = { testOne(src) }) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -144,6 +233,25 @@ fun VodSourceScreen(nav: NavHostController) {
                                     VodClient.normalizeBaseUrl(src.baseUrl),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    when {
+                                        testingIds.contains(src.id) -> "测试中…"
+                                        src.testStatus == "ok" -> src.testMsg ?: "可用"
+                                        src.testStatus == "dead" -> src.testMsg ?: "已失效"
+                                        src.testStatus == "proxy" -> src.testMsg ?: "需外网"
+                                        else -> "未测试 · 点卡片测试"
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = when {
+                                        testingIds.contains(src.id) -> MaterialTheme.colorScheme.primary
+                                        src.testStatus == "ok" -> Color(0xFF2E7D32)
+                                        src.testStatus == "dead" -> MaterialTheme.colorScheme.error
+                                        src.testStatus == "proxy" -> Color(0xFFEF6C00)
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
