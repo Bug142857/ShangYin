@@ -1,5 +1,8 @@
 package com.shangyin.app.ui.home
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +43,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +70,19 @@ fun HomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     var draggingId by remember { mutableStateOf<Long?>(null) }
     val currentIds = rememberUpdatedState(lists.map { it.list.id })
+
+    // 双击返回退出应用（2 秒内按两次）
+    val context = LocalContext.current
+    var lastBackAt by remember { mutableStateOf(0L) }
+    BackHandler {
+        val now = System.currentTimeMillis()
+        if (now - lastBackAt < 2000) {
+            (context as? Activity)?.finish()
+        } else {
+            lastBackAt = now
+            Toast.makeText(context, "再按一次退出应用", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     Scaffold(
         topBar = {

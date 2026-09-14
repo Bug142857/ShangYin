@@ -76,6 +76,31 @@ object SettingsStore {
         sp.edit().remove(KEY_DOUBAN_COOKIE).remove(KEY_DOUBAN_CK).apply()
     }
 
+    // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
+
+    /** 导出关键配置快照（key 与 SP key 一致） */
+    fun exportConfig(): Map<String, String> {
+        val out = mutableMapOf<String, String>()
+        for (key in com.shangyin.app.data.ConfigBackup.KEYS) {
+            out[key] = sp.getString(key, "").orEmpty()
+        }
+        return out
+    }
+
+    /** 恢复配置：仅补上当前 SP 缺失的 key，不覆盖已有值；返回恢复条数 */
+    fun importConfigIfMissing(data: Map<String, String>): Int {
+        var count = 0
+        val editor = sp.edit()
+        for ((key, value) in data) {
+            if (value.isNotBlank() && !sp.contains(key)) {
+                editor.putString(key, value)
+                count++
+            }
+        }
+        if (count > 0) editor.apply()
+        return count
+    }
+
     // ---------- WebDAV 云同步 ----------
 
     /** WebDAV 服务器地址，如 https://dav.jianguoyun.com/dav/ */

@@ -63,17 +63,13 @@ object Repo {
     }
 
     /**
-     * 确保条目归属分类同名根清单（不存在则创建）。
-     * 这是"零孤儿"机制的核心：任何条目创建/收藏路径都必须落到清单里，
-     * 不在任何清单中的条目会被自动清理（pruneOrphans）。
+     * 条目归属到同名分类根清单（仅当该清单已存在时挂入，绝不自动新建清单）。
+     * 不存在时条目暂不挂清单：不影响正常使用，用户可稍后通过"添加"显式归入清单；
+     * 启动时 pruneOrphans 会清理长期未归入任何清单的条目（零孤儿机制）。
      */
     suspend fun ensureItemInCategoryList(itemId: Long, categoryLabel: String) {
         val target = listDao.observeAllLists().first()
-            .firstOrNull { it.parentId == null && it.name == categoryLabel }
-            ?: run {
-                val newId = createList(categoryLabel)
-                listDao.observeList(newId).first() ?: ItemListEntity(id = newId, name = categoryLabel)
-            }
+            .firstOrNull { it.parentId == null && it.name == categoryLabel } ?: return
         // 已在清单内则忽略（insertItem 有唯一约束）
         val already = listDao.observeItemsIn(target.id).first().any { it.id == itemId }
         if (!already) addItemToList(target.id, itemId)

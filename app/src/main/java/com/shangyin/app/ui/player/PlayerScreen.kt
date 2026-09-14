@@ -6,7 +6,6 @@ import android.content.res.Configuration
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,20 +19,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -42,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -65,8 +69,9 @@ import kotlinx.coroutines.delay
 /**
  * 在线观影播放页：ExoPlayer 播 HLS。
  * - 剧集作为播放列表喂给 ExoPlayer（自动连播，控制器自带上一/下一集）
- * - 竖屏：视频上 + 剧集 chips 下；横屏：沉浸全屏
- * - 进度每 5 秒落盘 + 退后台/退出时落盘，重进可续播
+ * - 竖屏：视频 16:9 在顶部 + 下方信息面板（标题/线路/集数网格）
+ * - 横屏：沉浸全屏（Activity 配置了 configChanges，旋转不重建，组合保持）
+ * - 退出/返回/退到后台都会停止或暂停播放，防止后台继续运行
  */
 @Composable
 fun PlayerScreen(nav: NavHostController) {
@@ -81,11 +86,19 @@ fun PlayerScreen(nav: NavHostController) {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
     }
     var currentEp by remember {
-        mutableIntStateOf(PlayerSession.startIndex.coerceIn(0, (groups.firstOrNull()?.episodes?.size ?: 1) - 1).coerceAtLeast(0))
+        mutableIntStateOf(
+            PlayerSession.startIndex.coerceIn(0, (groups.firstOrNull()?.episodes?.size ?: 1) - 1).coerceAtLeast(0)
+        )
     }
-    var firstLoad by remember { mutableIntStateOf(1) } // 1=首次加载（带续播位置）
+    var firstLoad by remember { mutableStateOf(true) } // 首次加载（带续播位置）
+    var released by remember { mutableStateOf(false) }
 
     val player = remember { ExoPlayer.Builder(context).build() }
+    val playerView = remember {
+        PlayerView(context).apply {
+            useController = true
+        }
+    }
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     fun toggleFullscreen() {
@@ -96,12 +109,12 @@ fun PlayerScreen(nav: NavHostController) {
     }
 
     fun saveProgress() {
+        if (released) return
         val eps = groups.getOrNull(groupIndex)?.episodes ?: return
         val ep = eps.getOrNull(player.currentMediaItemIndex) ?: return
         val pos = player.currentPosition
         val dur = player.duration
         if (dur == C.TIME_UNSET || dur <= 0L) return
-        // 结尾 5 秒内视为看完，不保存（下次从头播）
         if (pos in 1 until (dur - 5000)) {
             SettingsStore.saveVodProgress(SettingsStore.vodProgressKey(PlayerSession.itemId, ep.url), pos, dur)
         } else if (pos >= dur - 5000) {
@@ -109,10 +122,21 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
+    /** 彻底停止并释放播放器（返回/离开页面时调用，防止后台继续播放） */
+    fun cleanup() {
+        if (released) return
+        released = true
+        runCatching { playerView.player = null }
+        runCatching { player.stop() }
+        runCatching { player.release() }
+    }
+
     // 剧集列表（每次加载线路时重建播放列表）
     LaunchedEffect(groupIndex) {
+        if (released) return@LaunchedEffect
         val eps = groups.getOrNull(groupIndex)?.episodes ?: return@LaunchedEffect
         if (eps.isEmpty()) return@LaunchedEffect
+        playerView.player = player
         val items = eps.map { ep ->
             val b = MediaItem.Builder().setUri(ep.url)
             if (ep.url.substringBefore('?').endsWith(".m3u8")) {
@@ -121,8 +145,8 @@ fun PlayerScreen(nav: NavHostController) {
             b.build()
         }
         val startIdx = currentEp.coerceIn(0, eps.size - 1)
-        val startPos = if (firstLoad == 1) PlayerSession.startPosMs else 0L
-        firstLoad = 0
+        val startPos = if (firstLoad) PlayerSession.startPosMs else 0L
+        firstLoad = false
         player.setMediaItems(items, startIdx, startPos)
         player.prepare()
         player.playWhenReady = true
@@ -149,16 +173,19 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 退后台保存 + 离开页面释放
+    // 退到后台：暂停并保存（防止后台继续出声）；离开页面：彻底释放
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) saveProgress()
+            if (event == Lifecycle.Event.ON_STOP) {
+                saveProgress()
+                runCatching { player.pause() }
+            }
         }
         lifecycleOwner.lifecycle.addObserver(obs)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(obs)
             saveProgress()
-            player.release()
+            cleanup()
         }
     }
 
@@ -184,11 +211,13 @@ fun PlayerScreen(nav: NavHostController) {
 
     BackHandler(enabled = true) {
         saveProgress()
+        cleanup()
         nav.safePopBackStack()
     }
 
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
+    Box(Modifier.fillMaxSize()) {
         if (groups.isEmpty()) {
+            Box(Modifier.fillMaxSize().background(Color.Black))
             Column(
                 Modifier.align(Alignment.Center),
                 horizontalAlignment = Alignment.CenterHorizontally
@@ -203,28 +232,25 @@ fun PlayerScreen(nav: NavHostController) {
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                // 视频区：横屏铺满，竖屏 16:9
+                // 视频区：横屏铺满全屏，竖屏 16:9 置顶
                 Box(
                     Modifier
                         .then(
                             if (isLandscape) Modifier.fillMaxSize()
                             else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                         )
+                        .background(Color.Black)
                 ) {
                     AndroidView(
-                        factory = { ctx ->
-                            PlayerView(ctx).apply {
-                                this.player = player
-                                useController = true
-                                setFullscreenButtonClickListener { toggleFullscreen() }
-                            }
-                        },
+                        factory = { playerView },
+                        update = { it.player = if (released) null else player },
                         modifier = Modifier.fillMaxSize()
                     )
                     // 返回按钮悬浮
                     IconButton(
                         onClick = {
                             saveProgress()
+                            cleanup()
                             nav.safePopBackStack()
                         },
                         modifier = Modifier
@@ -242,26 +268,29 @@ fun PlayerScreen(nav: NavHostController) {
                     }
                 }
 
-                // 竖屏下方：标题 + 线路 + 剧集
+                // 竖屏下方：标题 + 线路 + 集数网格（横屏隐藏）
                 if (!isLandscape) {
-                    Column(Modifier.fillMaxSize().background(Color.Black).padding(horizontal = 16.dp)) {
+                    val eps = groups.getOrNull(groupIndex)?.episodes.orEmpty()
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(horizontal = 16.dp)
+                    ) {
                         Spacer(Modifier.height(12.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                PlayerSession.title,
-                                color = Color.White,
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "线路：${groups.getOrNull(groupIndex)?.name.orEmpty()}",
-                                color = Color.White.copy(alpha = 0.6f),
-                                style = MaterialTheme.typography.labelMedium
-                            )
-                        }
+                        Text(
+                            PlayerSession.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "来源：${groups.getOrNull(groupIndex)?.name.orEmpty()} · 共 ${eps.size} 集",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(Modifier.height(8.dp))
 
                         // 线路切换（多线路才显示）
@@ -273,32 +302,39 @@ fun PlayerScreen(nav: NavHostController) {
                                         onClick = {
                                             if (gi != groupIndex) {
                                                 saveProgress()
-                                                val same = currentEp.coerceIn(
+                                                currentEp = currentEp.coerceIn(
                                                     0, (groups.getOrNull(gi)?.episodes?.size ?: 1) - 1
                                                 )
-                                                currentEp = same
                                                 groupIndex = gi
                                             }
                                         },
-                                        label = {
-                                            Text(
-                                                groups[gi].name,
-                                                color = if (gi == groupIndex) Color.White else Color.White.copy(alpha = 0.7f)
-                                            )
-                                        }
+                                        label = { Text(groups[gi].name) }
                                     )
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
                         }
 
-                        // 剧集 chips
-                        val eps = groups.getOrNull(groupIndex)?.episodes.orEmpty()
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            "选集",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        // 集数网格（占满剩余空间，可滚动）
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(4),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
                             items(eps.size) { idx ->
                                 val ep = eps[idx]
-                                FilterChip(
-                                    selected = idx == currentEp,
+                                val selected = idx == currentEp
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.surfaceVariant,
                                     onClick = {
                                         if (idx != currentEp) {
                                             player.seekTo(idx, 0L)
@@ -306,13 +342,20 @@ fun PlayerScreen(nav: NavHostController) {
                                             currentEp = idx
                                         }
                                     },
-                                    label = {
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
                                         Text(
                                             ep.name,
-                                            color = if (idx == currentEp) Color.White else Color.White.copy(alpha = 0.7f)
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
                                         )
                                     }
-                                )
+                                }
                             }
                         }
                         Spacer(Modifier.height(16.dp))

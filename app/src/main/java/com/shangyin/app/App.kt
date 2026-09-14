@@ -23,8 +23,18 @@ class App : Application(), ImageLoaderFactory {
         instance = this
         Repo.init(this)
         SettingsStore.init(this)
+        // 关键配置恢复（豆瓣Cookie/坚果云/片源）——从公共目录备份文件补缺，防卸载重装丢配置
+        runCatching { com.shangyin.app.data.ConfigBackup.restoreIfNeeded(this) }
         // 首次使用播种内置默认采集源（在线观影）
         SettingsStore.ensureDefaultVodSourcesSeeded()
+        // 配置变更（登录/云同步/片源等）时自动备份到公共目录
+        SettingsStore.registerListener { _, key ->
+            if (key in com.shangyin.app.data.ConfigBackup.KEYS) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    runCatching { com.shangyin.app.data.ConfigBackup.backup(this@App) }
+                }
+            }
+        }
         // 零孤儿机制：启动时静默清理历史遗留的孤立收藏（v2.4.0 起新孤儿不会再产生）
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching { Repo.pruneOrphans() }
