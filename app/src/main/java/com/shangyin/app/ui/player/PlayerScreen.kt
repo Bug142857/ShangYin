@@ -1,10 +1,15 @@
 package com.shangyin.app.ui.player
 
 import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -25,6 +31,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Fullscreen
+import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,6 +74,16 @@ import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.delay
 
+/** 从 Compose 的 context 逐层解包找 Activity（防止被 ContextThemeWrapper 包裹导致旋转/全屏失效） */
+private fun Context.findActivity(): Activity? {
+    var ctx: Context = this
+    while (ctx is ContextWrapper) {
+        if (ctx is Activity) return ctx
+        ctx = ctx.baseContext
+    }
+    return null
+}
+
 /**
  * 在线观影播放页：ExoPlayer 播 HLS。
  * - 剧集作为播放列表喂给 ExoPlayer（自动连播，控制器自带上一/下一集）
@@ -76,7 +94,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun PlayerScreen(nav: NavHostController) {
     val context = LocalContext.current
-    val activity = context as? Activity
+    val activity = remember { context.findActivity() }
     val lifecycleOwner = LocalLifecycleOwner.current
     val config = LocalConfiguration.current
     val view = LocalView.current
@@ -94,18 +112,34 @@ fun PlayerScreen(nav: NavHostController) {
     var released by remember { mutableStateOf(false) }
 
     val player = remember { ExoPlayer.Builder(context).build() }
-    val playerView = remember {
-        PlayerView(context).apply {
-            useController = true
-        }
-    }
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
+    var controlsVisible by remember { mutableStateOf(true) } // 控制器显隐（横屏浮层跟随）
 
+    /** 全屏切换：点击时读设备实时方向（避免 remember 捕获过期值） */
     fun toggleFullscreen() {
-        activity?.requestedOrientation = if (isLandscape)
+        val act = activity ?: return
+        val landscape = act.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        act.requestedOrientation = if (landscape)
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         else
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+
+    val playerView = remember {
+        PlayerView(context).apply {
+            useController = true
+            // 全屏按钮用自绘 Compose 悬浮按钮（右上角），不依赖 media3 内置全屏键（部分版本不显示）
+            setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
+                controlsVisible = vis == android.view.View.VISIBLE
+            })
+        }
+    }
+
+    // 进入播放页默认横屏全屏（画面最大化），退出时在 onDispose 恢复竖屏
+    LaunchedEffect(Unit) {
+        if (config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        }
     }
 
     fun saveProgress() {
@@ -246,25 +280,117 @@ fun PlayerScreen(nav: NavHostController) {
                         update = { it.player = if (released) null else player },
                         modifier = Modifier.fillMaxSize()
                     )
-                    // 返回按钮悬浮
-                    IconButton(
-                        onClick = {
-                            saveProgress()
-                            cleanup()
-                            nav.safePopBackStack()
-                        },
+                    // 顶部悬浮：返回（左）+ 全屏切换（右），跟随控制器显隐
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = controlsVisible,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
                         modifier = Modifier
                             .align(Alignment.TopStart)
-                            .padding(8.dp)
-                            .size(36.dp)
-                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            .fillMaxWidth()
                     ) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "返回",
-                            tint = Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            IconButton(
+                                onClick = {
+                                    saveProgress()
+                                    cleanup()
+                                    nav.safePopBackStack()
+                                },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Rounded.ArrowBack,
+                                    contentDescription = "返回",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { toggleFullscreen() },
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                            ) {
+                                Icon(
+                                    if (isLandscape) Icons.Rounded.FullscreenExit
+                                    else Icons.Rounded.Fullscreen,
+                                    contentDescription = if (isLandscape) "退出全屏" else "进入全屏",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // 横屏浮层：跟随控制器显隐，提供线路/集数切换
+                    if (isLandscape && groups.isNotEmpty()) {
+                        androidx.compose.animation.AnimatedVisibility(
+                            visible = controlsVisible,
+                            enter = fadeIn(),
+                            exit = fadeOut(),
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(bottom = 56.dp)
+                        ) {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.Black.copy(alpha = 0.55f))
+                                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                if (groups.size > 1) {
+                                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        items(groups.size) { gi ->
+                                            FilterChip(
+                                                selected = gi == groupIndex,
+                                                onClick = {
+                                                    if (gi != groupIndex) {
+                                                        saveProgress()
+                                                        currentEp = currentEp.coerceIn(
+                                                            0, (groups.getOrNull(gi)?.episodes?.size ?: 1) - 1
+                                                        )
+                                                        groupIndex = gi
+                                                    }
+                                                },
+                                                label = { Text(groups[gi].name, color = Color.White) }
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                                val epsL = groups.getOrNull(groupIndex)?.episodes.orEmpty()
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    items(epsL.size) { idx ->
+                                        val selected = idx == currentEp
+                                        FilterChip(
+                                            selected = selected,
+                                            onClick = {
+                                                if (idx != currentEp) {
+                                                    player.seekTo(idx, 0L)
+                                                    player.playWhenReady = true
+                                                    currentEp = idx
+                                                }
+                                            },
+                                            label = {
+                                                Text(
+                                                    epsL[idx].name,
+                                                    color = if (selected) Color.White
+                                                    else Color.White.copy(alpha = 0.7f)
+                                                )
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
