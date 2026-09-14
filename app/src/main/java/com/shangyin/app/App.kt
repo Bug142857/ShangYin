@@ -23,6 +23,8 @@ class App : Application(), ImageLoaderFactory {
         instance = this
         Repo.init(this)
         SettingsStore.init(this)
+        // 首次使用播种内置默认采集源（在线观影）
+        SettingsStore.ensureDefaultVodSourcesSeeded()
         // 零孤儿机制：启动时静默清理历史遗留的孤立收藏（v2.4.0 起新孤儿不会再产生）
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching { Repo.pruneOrphans() }

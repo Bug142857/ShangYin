@@ -129,6 +129,16 @@ object SettingsStore {
         )
     }
 
+    /**
+     * 首次使用时播种内置默认源（仅当从未配置过片源时执行一次；
+     * 用户之后删光所有源也不会重新播种）。
+     */
+    fun ensureDefaultVodSourcesSeeded() {
+        if (!sp.contains(KEY_VOD_SOURCES)) {
+            setVodSources(com.shangyin.app.data.vod.DEFAULT_VOD_SOURCES)
+        }
+    }
+
     /** 播放进度 key：play_{itemId}_{episodeUrl.hashCode()} */
     fun vodProgressKey(itemId: Long, episodeUrl: String): String =
         "play_${itemId}_${episodeUrl.hashCode()}"
