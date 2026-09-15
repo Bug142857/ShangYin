@@ -374,7 +374,12 @@ fun PlayerScreen(nav: NavHostController) {
                             // 倍速改右下角自建按钮）；进度条挂拖动时间气泡
                             if (!barBound.value) {
                                 barBound.value = true
+                                // 隐藏设置齿轮（"立体声"音轨项无公开 API 移除，倍速改右下角自建按钮）
                                 pv.findViewById<android.view.View>(media3R.id.exo_settings)?.visibility =
+                                    android.view.View.GONE
+                                // 隐藏控制器自带的屏幕变暗遮罩层（点击屏幕出控制条时不压暗画面，
+                                // 该 View 在默认布局中 id 为 exo_controls_background）
+                                pv.findViewById<android.view.View>(media3R.id.exo_controls_background)?.visibility =
                                     android.view.View.GONE
                                 pv.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.addListener(
                                     object : TimeBar.OnScrubListener {
