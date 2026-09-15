@@ -13,6 +13,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,23 +37,30 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -86,6 +94,16 @@ private fun Context.findActivity(): Activity? {
         ctx = ctx.baseContext
     }
     return null
+}
+
+/** 毫秒 → h:mm:ss / mm:ss */
+private fun fmt(ms: Long): String {
+    if (ms <= 0) return "00:00"
+    val s = ms / 1000
+    val h = s / 3600
+    val m = (s % 3600) / 60
+    return if (h > 0) String.format("%d:%02d:%02d", h, m, s % 60)
+    else String.format("%02d:%02d", m, s % 60)
 }
 
 /**
@@ -140,7 +158,13 @@ fun PlayerScreen(nav: NavHostController) {
             .build()
     }
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var controlsVisible by remember { mutableStateOf(true) } // 控制器显隐（横屏浮层跟随）
+    var controlsVisible by remember { mutableStateOf(true) } // 控制条显隐（点画面切换）
+    var panelOpen by remember { mutableStateOf(false) }      // 选集面板（横屏右下角按钮触发）
+    var isPlaying by remember { mutableStateOf(false) }
+    var dragging by remember { mutableStateOf(false) }       // 进度条拖动中
+    var dragPos by remember { mutableLongStateOf(0L) }
+    var positionMs by remember { mutableLongStateOf(0L) }
+    var durationMs by remember { mutableLongStateOf(0L) }
 
     /** 全屏切换：点击时读设备实时方向（避免 remember 捕获过期值） */
     fun toggleFullscreen() {
@@ -154,11 +178,9 @@ fun PlayerScreen(nav: NavHostController) {
 
     val playerView = remember {
         PlayerView(context).apply {
-            useController = true
-            // 全屏按钮用自绘 Compose 悬浮按钮（右上角），不依赖 media3 内置全屏键（部分版本不显示）
-            setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
-                controlsVisible = vis == android.view.View.VISIBLE
-            })
+            // 控制条全自绘（Compose）：media3 自带的上一集/快退/快进按钮不需要，
+            // useController=false 后点击事件不被消费，由外层 Compose 处理画面点击显隐
+            useController = false
         }
     }
 
@@ -251,6 +273,36 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
+    // 播放状态即时监听（驱动播放/暂停图标）
+    DisposableEffect(player) {
+        val l = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlayingNow: Boolean) {
+                isPlaying = isPlayingNow
+            }
+        }
+        player.addListener(l)
+        onDispose { player.removeListener(l) }
+    }
+
+    // 进度 500ms 轮询（驱动自绘进度条与时间显示；拖动期间不刷新）
+    LaunchedEffect(player) {
+        while (true) {
+            if (!dragging) {
+                positionMs = player.currentPosition.coerceAtLeast(0L)
+                val d = player.duration
+                durationMs = if (d == C.TIME_UNSET || d <= 0) 0L else d
+            }
+            delay(500)
+        }
+    }
+
+    // 控制条 5 秒自动隐藏（暂停浏览/面板打开/拖动进度时不隐藏）
+    LaunchedEffect(controlsVisible, isPlaying, panelOpen, dragging) {
+        if (!controlsVisible || !isPlaying || panelOpen || dragging) return@LaunchedEffect
+        delay(5000)
+        controlsVisible = false
+    }
+
     // 退到后台：暂停并保存（防止后台继续出声）；离开页面：彻底释放
     DisposableEffect(lifecycleOwner) {
         val obs = LifecycleEventObserver { _, event ->
@@ -318,6 +370,13 @@ fun PlayerScreen(nav: NavHostController) {
                             else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                         )
                         .background(Color.Black)
+                        // 点画面：先关选集面板，否则切换控制条显隐
+                        .pointerInput(Unit) {
+                            detectTapGestures {
+                                if (panelOpen) panelOpen = false
+                                else controlsVisible = !controlsVisible
+                            }
+                        }
                 ) {
                     AndroidView(
                         factory = { playerView },
@@ -374,14 +433,94 @@ fun PlayerScreen(nav: NavHostController) {
                         }
                     }
 
-                    // 横屏右侧面板：标题 + 线路 + 选集网格（跟随控制器显隐，
-                    // 底部留出控制条高度，不再遮挡进度条）
+                    // 底部低矮控制条：播放/暂停 + 进度拖动 + 时间 + 选集按钮（横屏）
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = controlsVisible,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .fillMaxWidth()
+                    ) {
+                        val durVal = durationMs.toFloat().coerceAtLeast(1f)
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        0f to Color.Transparent,
+                                        1f to Color.Black.copy(alpha = 0.65f)
+                                    )
+                                )
+                                .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { player.playWhenReady = !player.playWhenReady },
+                                modifier = Modifier.size(38.dp)
+                            ) {
+                                Icon(
+                                    if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                    contentDescription = if (isPlaying) "暂停" else "播放",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(26.dp)
+                                )
+                            }
+                            Slider(
+                                value = (if (dragging) dragPos else positionMs).toFloat().coerceIn(0f, durVal),
+                                onValueChange = {
+                                    dragging = true
+                                    dragPos = it.toLong()
+                                },
+                                onValueChangeFinished = {
+                                    player.seekTo(dragPos)
+                                    positionMs = dragPos
+                                    dragging = false
+                                },
+                                valueRange = 0f..durVal,
+                                colors = SliderDefaults.colors(
+                                    thumbColor = Color.White,
+                                    activeTrackColor = Color.White,
+                                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(24.dp)
+                            )
+                            Text(
+                                "${fmt(if (dragging) dragPos else positionMs)} / ${fmt(durationMs)}",
+                                color = Color.White.copy(alpha = 0.85f),
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(start = 6.dp)
+                            )
+                            // 选集按钮（右下角，点开右侧面板）
+                            if (isLandscape && groups.isNotEmpty()) {
+                                TextButton(
+                                    onClick = {
+                                        panelOpen = !panelOpen
+                                        controlsVisible = true
+                                    }
+                                ) {
+                                    Text(
+                                        "选集",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // 横屏右侧面板：标题 + 线路 + 选集网格（右下角"选集"按钮触发；
+                    // 面板底部抬高，不遮挡控制条）
                     if (isLandscape && groups.isNotEmpty()) {
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = controlsVisible,
+                            visible = panelOpen,
                             enter = fadeIn() + slideInHorizontally { it },
                             exit = fadeOut() + slideOutHorizontally { it },
-                            modifier = Modifier.align(Alignment.CenterEnd)
+                            modifier = Modifier
+                                .align(Alignment.CenterEnd)
+                                .padding(bottom = 40.dp)
                         ) {
                             val epsR = groups.getOrNull(groupIndex)?.episodes.orEmpty()
                             Column(
@@ -389,7 +528,7 @@ fun PlayerScreen(nav: NavHostController) {
                                     .fillMaxHeight()
                                     .width(300.dp)
                                     .background(Color.Black.copy(alpha = 0.72f))
-                                    .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 72.dp)
+                                    .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 8.dp)
                             ) {
                                 Text(
                                     PlayerSession.title,

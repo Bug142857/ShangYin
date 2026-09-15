@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -24,13 +25,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -54,7 +60,10 @@ import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.async
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * 外网源资源库页（H1 浏览页点"查看全部"进入）：
@@ -122,6 +131,32 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
         loadPage(1)
     }
 
+    // 分类下拉框状态 + 各分类资源数探测（total=0 的分类不显示）
+    var catExpanded by remember { mutableStateOf(false) }
+    var catCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+
+    // 并发探测每个分类的资源总数（限并发 8），空分类自动从下拉中剔除
+    LaunchedEffect(categories) {
+        if (categories.isEmpty()) return@LaunchedEffect
+        val sem = Semaphore(8)
+        categories.map { cat ->
+            launch {
+                sem.withPermit {
+                    val t = runCatching {
+                        VodClient.fetchList(src, "", 1, cat.type_id)?.total ?: 0
+                    }.getOrDefault(0)
+                    catCounts = catCounts + (cat.type_id to t)
+                }
+            }
+        }.joinAll()
+    }
+
+    // 只展示"有资源"的分类（未探测完的先全部显示，探测到空再剔除）
+    val visibleCats = categories.filter { (catCounts[it.type_id] ?: 1) > 0 }
+    val selName = selectedType
+        ?.let { tid -> categories.firstOrNull { it.type_id == tid }?.type_name }
+        ?: "全部分类"
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -154,25 +189,61 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 分类 chips（"全部" + 源自带分类表）
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(vertical = 6.dp)
+            // 分类下拉框（"全部" + 有资源的分类，右侧显示资源数）
+            ExposedDropdownMenuBox(
+                expanded = catExpanded,
+                onExpandedChange = { catExpanded = it },
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
             ) {
-                item {
-                    FilterChip(
-                        selected = selectedType == null,
-                        onClick = { selectedType = null },
-                        label = { Text("全部") }
-                    )
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(selName, style = MaterialTheme.typography.bodyMedium)
+                        Icon(
+                            Icons.Rounded.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
-                items(categories, key = { it.type_id }) { cat ->
-                    FilterChip(
-                        selected = selectedType == cat.type_id,
-                        onClick = { selectedType = cat.type_id },
-                        label = { Text(cat.type_name) }
+                ExposedDropdownMenu(
+                    expanded = catExpanded,
+                    onDismissRequest = { catExpanded = false },
+                    modifier = Modifier.width(220.dp)
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("全部") },
+                        trailingIcon = if (selectedType == null) {
+                            { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp)) }
+                        } else null,
+                        onClick = {
+                            selectedType = null
+                            catExpanded = false
+                        }
                     )
+                    visibleCats.forEach { cat ->
+                        val n = catCounts[cat.type_id]
+                        DropdownMenuItem(
+                            text = {
+                                Text(if (n != null) "${cat.type_name}（$n）" else cat.type_name)
+                            },
+                            trailingIcon = if (selectedType == cat.type_id) {
+                                { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp)) }
+                            } else null,
+                            onClick = {
+                                selectedType = cat.type_id
+                                catExpanded = false
+                            }
+                        )
+                    }
                 }
             }
 
