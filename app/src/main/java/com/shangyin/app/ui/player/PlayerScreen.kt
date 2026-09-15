@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -39,6 +40,8 @@ import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,6 +55,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -79,8 +83,12 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.DefaultTimeBar
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.TimeBar
 import androidx.navigation.NavHostController
+import com.shangyin.app.R
+import androidx.media3.ui.R as media3R
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.safePopBackStack
@@ -158,13 +166,12 @@ fun PlayerScreen(nav: NavHostController) {
             .build()
     }
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var controlsVisible by remember { mutableStateOf(true) } // 控制条显隐（点画面切换）
-    var panelOpen by remember { mutableStateOf(false) }      // 选集面板（横屏右下角按钮触发）
-    var isPlaying by remember { mutableStateOf(false) }
-    var dragging by remember { mutableStateOf(false) }       // 进度条拖动中
-    var dragPos by remember { mutableLongStateOf(0L) }
-    var positionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
+    var controlsVisible by remember { mutableStateOf(true) } // 控制器显隐（media3 listener 同步）
+    var panelOpen by remember { mutableStateOf(false) }      // 选集面板（控制条右下角按钮触发）
+    var speedMenuOpen by remember { mutableStateOf(false) }  // 倍速菜单
+    var speed by remember { mutableFloatStateOf(1f) }        // 当前倍速
+    var scrubbingMs by remember { mutableStateOf<Long?>(null) } // 拖动进度时的时间气泡
+    val barBound = remember { mutableStateOf(false) }        // TimeBar listener 只绑一次
 
     /** 全屏切换：点击时读设备实时方向（避免 remember 捕获过期值） */
     fun toggleFullscreen() {
@@ -177,11 +184,17 @@ fun PlayerScreen(nav: NavHostController) {
     }
 
     val playerView = remember {
-        PlayerView(context).apply {
-            // 控制条全自绘（Compose）：media3 自带的上一集/快退/快进按钮不需要，
-            // useController=false 后点击事件不被消费，由外层 Compose 处理画面点击显隐
-            useController = false
-        }
+        // 从 XML inflate（controller_layout_id 挂自定义控制条布局：保留 播放/暂停+时间+进度条，
+        // 去掉上一集/下一集/快退/快进与设置齿轮（避免"立体声"音轨项），倍速/选集按钮代码绑定；
+        // 拖动进度显示时间气泡（源站无缩略图数据，无法显示画面缩略窗）
+        (android.view.LayoutInflater.from(context).inflate(R.layout.vod_player_view, null, false) as PlayerView)
+            .apply {
+                useController = true
+                controllerShowTimeoutMs = 5000
+                setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
+                    controlsVisible = vis == android.view.View.VISIBLE
+                })
+            }
     }
 
     // 进入播放页默认横屏全屏（画面最大化），退出时在 onDispose 恢复竖屏
@@ -273,34 +286,14 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 播放状态即时监听（驱动播放/暂停图标）
-    DisposableEffect(player) {
-        val l = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlayingNow: Boolean) {
-                isPlaying = isPlayingNow
-            }
-        }
-        player.addListener(l)
-        onDispose { player.removeListener(l) }
+    // 倍速应用
+    LaunchedEffect(speed) {
+        player.setPlaybackSpeed(speed)
     }
 
-    // 进度 500ms 轮询（驱动自绘进度条与时间显示；拖动期间不刷新）
-    LaunchedEffect(player) {
-        while (true) {
-            if (!dragging) {
-                positionMs = player.currentPosition.coerceAtLeast(0L)
-                val d = player.duration
-                durationMs = if (d == C.TIME_UNSET || d <= 0) 0L else d
-            }
-            delay(500)
-        }
-    }
-
-    // 控制条 5 秒自动隐藏（暂停浏览/面板打开/拖动进度时不隐藏）
-    LaunchedEffect(controlsVisible, isPlaying, panelOpen, dragging) {
-        if (!controlsVisible || !isPlaying || panelOpen || dragging) return@LaunchedEffect
-        delay(5000)
-        controlsVisible = false
+    // 选集面板打开时暂停控制器自动隐藏（防止面板被一起收走），关闭后恢复
+    LaunchedEffect(panelOpen) {
+        playerView.controllerShowTimeoutMs = if (panelOpen) Int.MAX_VALUE else 5000
     }
 
     // 退到后台：暂停并保存（防止后台继续出声）；离开页面：彻底释放
@@ -370,17 +363,39 @@ fun PlayerScreen(nav: NavHostController) {
                             else Modifier.fillMaxWidth().aspectRatio(16f / 9f)
                         )
                         .background(Color.Black)
-                        // 点画面：先关选集面板，否则切换控制条显隐
-                        .pointerInput(Unit) {
-                            detectTapGestures {
-                                if (panelOpen) panelOpen = false
-                                else controlsVisible = !controlsVisible
-                            }
-                        }
                 ) {
                     AndroidView(
                         factory = { playerView },
-                        update = { it.player = if (released) null else player },
+                        update = { pv ->
+                            pv.player = if (released) null else player
+                            // 绑定自定义布局里的按钮（playerView 单实例，只绑一次防重复）
+                            if (!barBound.value) {
+                                barBound.value = true
+                                pv.findViewById<TextView>(R.id.btn_episode)?.setOnClickListener {
+                                    panelOpen = !panelOpen
+                                }
+                                pv.findViewById<TextView>(R.id.btn_speed)?.setOnClickListener {
+                                    speedMenuOpen = true
+                                }
+                                // 拖动进度条时显示时间气泡（exo_progress 是 media3 库 id，
+                                // nonTransitive R 下需引用库的 R 类）
+                                pv.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.addListener(
+                                    object : TimeBar.OnScrubListener {
+                                        override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                                            scrubbingMs = position
+                                        }
+
+                                        override fun onScrubMove(timeBar: TimeBar, position: Long) {
+                                            scrubbingMs = position
+                                        }
+
+                                        override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                                            scrubbingMs = null
+                                        }
+                                    }
+                                )
+                            }
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                     // 顶部悬浮：返回（左）+ 全屏切换（右），跟随控制器显隐
@@ -433,89 +448,48 @@ fun PlayerScreen(nav: NavHostController) {
                         }
                     }
 
-                    // 底部低矮控制条：播放/暂停 + 进度拖动 + 时间 + 选集按钮（横屏）
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = controlsVisible,
-                        enter = fadeIn(),
-                        exit = fadeOut(),
-                        modifier = Modifier
-                            .align(Alignment.BottomStart)
-                            .fillMaxWidth()
+                    // 拖动进度条时的时间气泡（源站无缩略图雪碧图数据，无法显示画面缩略窗）
+                    scrubbingMs?.let { ms ->
+                        Text(
+                            fmt(ms),
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 44.dp)
+                                .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+
+                    // 倍速菜单（自定义布局无设置齿轮，倍速独立提供；点其他处关闭）
+                    DropdownMenu(
+                        expanded = speedMenuOpen,
+                        onDismissRequest = { speedMenuOpen = false },
+                        modifier = Modifier.align(Alignment.BottomEnd)
                     ) {
-                        val durVal = durationMs.toFloat().coerceAtLeast(1f)
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                                        0f to Color.Transparent,
-                                        1f to Color.Black.copy(alpha = 0.65f)
-                                    )
-                                )
-                                .padding(start = 2.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = { player.playWhenReady = !player.playWhenReady },
-                                modifier = Modifier.size(38.dp)
-                            ) {
-                                Icon(
-                                    if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                    contentDescription = if (isPlaying) "暂停" else "播放",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(26.dp)
-                                )
-                            }
-                            Slider(
-                                value = (if (dragging) dragPos else positionMs).toFloat().coerceIn(0f, durVal),
-                                onValueChange = {
-                                    dragging = true
-                                    dragPos = it.toLong()
-                                },
-                                onValueChangeFinished = {
-                                    player.seekTo(dragPos)
-                                    positionMs = dragPos
-                                    dragging = false
-                                },
-                                valueRange = 0f..durVal,
-                                colors = SliderDefaults.colors(
-                                    thumbColor = Color.White,
-                                    activeTrackColor = Color.White,
-                                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                                ),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(24.dp)
-                            )
-                            Text(
-                                "${fmt(if (dragging) dragPos else positionMs)} / ${fmt(durationMs)}",
-                                color = Color.White.copy(alpha = 0.85f),
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(start = 6.dp)
-                            )
-                            // 选集按钮（右下角，点开右侧面板）
-                            if (isLandscape && groups.isNotEmpty()) {
-                                TextButton(
-                                    onClick = {
-                                        panelOpen = !panelOpen
-                                        controlsVisible = true
-                                    }
-                                ) {
+                        listOf(0.75f, 1f, 1.25f, 1.5f, 2f, 3f).forEach { sp ->
+                            DropdownMenuItem(
+                                text = {
                                     Text(
-                                        "选集",
-                                        color = Color.White,
-                                        style = MaterialTheme.typography.labelMedium
+                                        if (sp == 1f) "1.0x（正常）" else "${sp}x",
+                                        color = if (sp == speed) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
                                     )
+                                },
+                                onClick = {
+                                    speed = sp
+                                    speedMenuOpen = false
                                 }
-                            }
+                            )
                         }
                     }
 
-                    // 横屏右侧面板：标题 + 线路 + 选集网格（右下角"选集"按钮触发；
-                    // 面板底部抬高，不遮挡控制条）
+                    // 横屏右侧面板：标题 + 线路 + 选集网格（控制条右下角"选集"按钮触发；
+                    // 面板底部抬高，不遮挡控制条；控制器隐藏时面板一起收起）
                     if (isLandscape && groups.isNotEmpty()) {
                         androidx.compose.animation.AnimatedVisibility(
-                            visible = panelOpen,
+                            visible = panelOpen && controlsVisible,
                             enter = fadeIn() + slideInHorizontally { it },
                             exit = fadeOut() + slideOutHorizontally { it },
                             modifier = Modifier

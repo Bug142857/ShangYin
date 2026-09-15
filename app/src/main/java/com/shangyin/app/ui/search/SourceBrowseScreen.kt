@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -25,12 +27,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material3.Button
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -70,7 +70,7 @@ import kotlinx.coroutines.sync.withPermit
  * 顶部分类 chips（接口 class 字段，按分类 ?t= 过滤）+ 3 列海报网格分页浏览，
  * 分类分开展示，点击影片直接播放。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -189,58 +189,71 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 分类下拉框（"全部" + 有资源的分类，右侧显示资源数）
-            ExposedDropdownMenuBox(
-                expanded = catExpanded,
-                onExpandedChange = { catExpanded = it },
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+            // 分类区：默认一行横滑 chips + 右侧三角按钮；点三角展开全部分类换行显示
+            Row(
+                Modifier.padding(start = 16.dp, end = 4.dp, top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    Row(
-                        Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(selName, style = MaterialTheme.typography.bodyMedium)
-                        Icon(
-                            Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(20.dp)
+                    item {
+                        FilterChip(
+                            selected = selectedType == null,
+                            onClick = {
+                                selectedType = null
+                                catExpanded = false
+                            },
+                            label = { Text("全部") }
                         )
                     }
-                }
-                ExposedDropdownMenu(
-                    expanded = catExpanded,
-                    onDismissRequest = { catExpanded = false },
-                    modifier = Modifier.width(220.dp)
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("全部") },
-                        trailingIcon = if (selectedType == null) {
-                            { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp)) }
-                        } else null,
-                        onClick = {
-                            selectedType = null
-                            catExpanded = false
-                        }
-                    )
-                    visibleCats.forEach { cat ->
-                        val n = catCounts[cat.type_id]
-                        DropdownMenuItem(
-                            text = {
-                                Text(if (n != null) "${cat.type_name}（$n）" else cat.type_name)
-                            },
-                            trailingIcon = if (selectedType == cat.type_id) {
-                                { Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp)) }
-                            } else null,
+                    items(visibleCats, key = { it.type_id }) { cat ->
+                        FilterChip(
+                            selected = selectedType == cat.type_id,
                             onClick = {
                                 selectedType = cat.type_id
                                 catExpanded = false
+                            },
+                            label = { Text(cat.type_name) }
+                        )
+                    }
+                }
+                IconButton(onClick = { catExpanded = !catExpanded }) {
+                    Icon(
+                        if (catExpanded) Icons.Rounded.ArrowDropUp
+                        else Icons.Rounded.ArrowDropDown,
+                        contentDescription = if (catExpanded) "收起分类" else "展开分类"
+                    )
+                }
+            }
+            // 展开区：全部分类（仅含有效分类）换行铺开，点任意分类后收起
+            androidx.compose.animation.AnimatedVisibility(visible = catExpanded) {
+                FlowRow(
+                    Modifier
+                        .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    FilterChip(
+                        selected = selectedType == null,
+                        onClick = {
+                            selectedType = null
+                            catExpanded = false
+                        },
+                        label = { Text("全部") }
+                    )
+                    visibleCats.forEach { cat ->
+                        val n = catCounts[cat.type_id]
+                        FilterChip(
+                            selected = selectedType == cat.type_id,
+                            onClick = {
+                                selectedType = cat.type_id
+                                catExpanded = false
+                            },
+                            label = {
+                                Text(if (n != null) "${cat.type_name} ${n}" else cat.type_name)
                             }
                         )
                     }
