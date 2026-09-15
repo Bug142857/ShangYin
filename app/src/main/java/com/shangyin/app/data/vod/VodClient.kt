@@ -112,7 +112,9 @@ object VodClient {
      * - dead：解析失败 / HTTP 非 200 / 返回 HTML（域名在但没有正确接口，可能改版/失效）→ 已失效
      */
     suspend fun testSource(src: VodSource): VodSource = withContext(Dispatchers.IO) {
-        val url = buildUrl(src.baseUrl, "ac=videolist&wd=" + URLEncoder.encode("a", "UTF-8") + "&pg=1")
+        // 不带 wd 请求全库列表（total=真实资源总量）。
+        // 旧实现用 wd=a 探测：total 是关键词命中数，中文库没有片名含"a"的影片会误显示"共 0 部"
+        val url = buildUrl(src.baseUrl, "ac=videolist&pg=1")
         val now = System.currentTimeMillis()
         val base = src.copy(testAt = now)
         val result = runCatching {
