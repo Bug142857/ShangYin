@@ -53,6 +53,7 @@ import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
 /**
@@ -87,6 +88,9 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
         if (loading) return
         loading = true
         scope.launch {
+            // 分类表兜底：很多源 ac=videolist 不带 class 字段，首次加载并行补拉 ?ac=list
+            val needCats = categories.isEmpty()
+            val catsJob = if (needCats) scope.async { VodClient.fetchCategories(src) } else null
             val resp = VodClient.fetchList(src, "", target, selectedType)
             if (resp != null) {
                 if (categories.isEmpty()) categories = resp.categories
@@ -98,6 +102,13 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                 failed = false
             } else {
                 failed = true
+            }
+            val cats = catsJob?.await().orEmpty()
+            if (cats.isNotEmpty()) {
+                // 合并去重（顶级分类 type_pid=0 排前面，二级分类随后）
+                categories = (categories + cats)
+                    .distinctBy { it.type_id }
+                    .sortedWith(compareBy({ it.type_pid }, { it.type_id }))
             }
             loading = false
         }

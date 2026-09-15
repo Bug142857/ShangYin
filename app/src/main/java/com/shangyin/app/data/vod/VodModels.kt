@@ -42,6 +42,8 @@ data class VodResp(
 @Serializable
 data class VodCategory(
     val type_id: Int = 0,
+    /** 父分类 id（0=顶级；二级分类平铺展示） */
+    val type_pid: Int = 0,
     val type_name: String = ""
 )
 

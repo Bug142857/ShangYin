@@ -124,7 +124,18 @@ fun PlayerScreen(nav: NavHostController) {
             .setReadTimeoutMs(15000)
             .setAllowCrossProtocolRedirects(true)
         val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
+        // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
+        // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 30000,
+                /* maxBufferMs = */ 60000,
+                /* bufferForPlaybackMs = */ 1200,
+                /* bufferForRebufferMs = */ 3000
+            )
+            .build()
         ExoPlayer.Builder(context)
+            .setLoadControl(loadControl)
             .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
             .build()
     }

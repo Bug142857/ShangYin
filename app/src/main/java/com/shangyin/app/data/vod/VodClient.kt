@@ -60,6 +60,16 @@ object VodClient {
     // ---------- 搜索 ----------
 
     /**
+     * 拉取源的分类表（标准在 ?ac=list 接口）。
+     * 很多源的 ac=videolist 不带 class 字段，分类页用它兜底。
+     */
+    suspend fun fetchCategories(src: VodSource): List<VodCategory> = withContext(Dispatchers.IO) {
+        val resp = parseResp(httpGet(buildUrl(src.baseUrl, "ac=list")) ?: return@withContext emptyList())
+            ?: return@withContext emptyList()
+        if (resp.code == 1) resp.categories else emptyList()
+    }
+
+    /**
      * 拉取源列表（含 total 总量与分类表）：kw 为空时不带 wd（全库列表，total=库总量），
      * typeId 非 null 时按分类过滤（?t=type_id），H1 浏览页用它分页浏览。
      */
