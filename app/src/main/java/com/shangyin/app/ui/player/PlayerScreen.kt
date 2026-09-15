@@ -195,6 +195,32 @@ fun PlayerScreen(nav: NavHostController) {
             setShowFastForwardButton(false)
             setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
                 controlsVisible = vis == android.view.View.VISIBLE
+                // 每次控制器显隐都强制隐藏（幂等）：变暗遮罩 exo_controls_background + 设置齿轮 exo_settings。
+                // 不能只在 AndroidView update 里绑一次——controller 是延迟 inflate 的，
+                // 早期 findViewById 返回 null 会被 ?. 静默跳过（v2.11.6 遮罩没消失的原因）
+                this@apply.findViewById<android.view.View>(media3R.id.exo_controls_background)?.visibility =
+                    android.view.View.GONE
+                this@apply.findViewById<android.view.View>(media3R.id.exo_settings)?.visibility =
+                    android.view.View.GONE
+                // 拖动进度时间气泡：controller 首次出现后绑定（此时必已 inflate）
+                if (!barBound.value) {
+                    this@apply.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.let { bar ->
+                        barBound.value = true
+                        bar.addListener(object : TimeBar.OnScrubListener {
+                            override fun onScrubStart(timeBar: TimeBar, position: Long) {
+                                scrubbingMs = position
+                            }
+
+                            override fun onScrubMove(timeBar: TimeBar, position: Long) {
+                                scrubbingMs = position
+                            }
+
+                            override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                                scrubbingMs = null
+                            }
+                        })
+                    }
+                }
             })
         }
     }
@@ -368,36 +394,7 @@ fun PlayerScreen(nav: NavHostController) {
                 ) {
                     AndroidView(
                         factory = { playerView },
-                        update = { pv ->
-                            pv.player = if (released) null else player
-                            // 一次性绑定：隐藏设置齿轮（"立体声"音轨项无公开 API 移除，
-                            // 倍速改右下角自建按钮）；进度条挂拖动时间气泡
-                            if (!barBound.value) {
-                                barBound.value = true
-                                // 隐藏设置齿轮（"立体声"音轨项无公开 API 移除，倍速改右下角自建按钮）
-                                pv.findViewById<android.view.View>(media3R.id.exo_settings)?.visibility =
-                                    android.view.View.GONE
-                                // 隐藏控制器自带的屏幕变暗遮罩层（点击屏幕出控制条时不压暗画面，
-                                // 该 View 在默认布局中 id 为 exo_controls_background）
-                                pv.findViewById<android.view.View>(media3R.id.exo_controls_background)?.visibility =
-                                    android.view.View.GONE
-                                pv.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.addListener(
-                                    object : TimeBar.OnScrubListener {
-                                        override fun onScrubStart(timeBar: TimeBar, position: Long) {
-                                            scrubbingMs = position
-                                        }
-
-                                        override fun onScrubMove(timeBar: TimeBar, position: Long) {
-                                            scrubbingMs = position
-                                        }
-
-                                        override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
-                                            scrubbingMs = null
-                                        }
-                                    }
-                                )
-                            }
-                        },
+                        update = { pv -> pv.player = if (released) null else player },
                         modifier = Modifier.fillMaxSize()
                     )
                     // 顶部悬浮：返回（左）+ 全屏切换（右），跟随控制器显隐
