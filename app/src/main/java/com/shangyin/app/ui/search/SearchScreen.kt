@@ -205,7 +205,15 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                     FilterChip(
                         selected = selectedCat == label,
                         onClick = {
-                            selectedCat = if (selectedCat == label) "" else label
+                            when (label) {
+                                // 点 H1 直接进入外网片源浏览页，无需再点搜索
+                                "H1" -> {
+                                    keyboard?.hide()
+                                    query = ""
+                                    nav.safeNavigate("h1search")
+                                }
+                                else -> selectedCat = if (selectedCat == label) "" else label
+                            }
                         },
                         label = { Text(label) },
                         modifier = Modifier.padding(end = 8.dp)
@@ -223,7 +231,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                         Text(
                             when {
                                 selectedCat.isEmpty() -> "先选分类，再输入关键词"
-                                selectedCat == "H1" -> "点搜索直接进入外网片源浏览…"
+                                selectedCat == "H1" -> "选 H1 后点标签即可直接进入"
                                 selectedCat == "H2" -> "H2 分类开发中"
                                 else -> "在${selectedCat}中搜索…"
                             }

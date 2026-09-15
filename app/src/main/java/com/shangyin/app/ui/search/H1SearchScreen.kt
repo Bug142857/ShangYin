@@ -52,7 +52,6 @@ import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.ui.common.CoverImage
-import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
@@ -126,39 +125,13 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         }
     }
 
-    /** 点击影片：补详情（无播放地址时）→ 默认第一线路进播放页（播放页内可切线路/集数） */
+    /** 点击影片：公共播放流程（补详情→解析线路→断点续播→跳播放页） */
     fun playItem(src: VodSource, item: VodItem) {
         if (openingId != null) return
         openingId = item.vod_id
         scope.launch {
-            val full = if (item.vod_play_url.isBlank()) {
-                runCatching { VodClient.fetchDetail(src, item.vod_id) }.getOrDefault(item)
-            } else item
-            val groups = VodClient.parsePlayGroups(full.vod_play_from, full.vod_play_url)
-            if (groups.isEmpty()) {
-                Toast.makeText(context, "「${full.vod_name}」暂无可用播放地址", Toast.LENGTH_SHORT).show()
-                openingId = null
-                return@launch
-            }
-            // 断点续播：进度按播放地址记忆（itemId 用 0，地址本身全局唯一）
-            var idx = 0
-            var pos = 0L
-            var bestTs = -1L
-            groups[0].episodes.forEachIndexed { i, ep ->
-                val p = SettingsStore.getVodProgress(SettingsStore.vodProgressKey(0L, ep.url))
-                    ?: return@forEachIndexed
-                if (p.third > bestTs) {
-                    bestTs = p.third; idx = i; pos = p.first
-                }
-            }
-            PlayerSession.itemId = 0L
-            PlayerSession.title = full.vod_name
-            PlayerSession.groups = groups
-            PlayerSession.groupIndex = 0
-            PlayerSession.startIndex = idx
-            PlayerSession.startPosMs = pos
-            openingId = null
-            nav.safeNavigate("player")
+            val ok = openVodAndPlay(nav, context, src, item)
+            if (!ok) openingId = null
         }
     }
 
@@ -265,10 +238,10 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(Modifier.weight(1f))
-                                if (state.status == 1 && state.items.size < state.total) {
-                                    TextButton(onClick = { load(src, state.page + 1, keyword) }) {
+                                if (state.status == 1) {
+                                    TextButton(onClick = { nav.safeNavigate("h1source/" + src.id) }) {
                                         Text(
-                                            "加载更多",
+                                            "查看全部",
                                             style = MaterialTheme.typography.labelMedium
                                         )
                                     }

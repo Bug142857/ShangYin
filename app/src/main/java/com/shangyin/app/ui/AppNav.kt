@@ -31,6 +31,7 @@ import com.shangyin.app.ui.lists.ListDetailScreen
 import com.shangyin.app.ui.player.PlayerScreen
 import com.shangyin.app.ui.search.H1SearchScreen
 import com.shangyin.app.ui.search.SearchScreen
+import com.shangyin.app.ui.search.SourceBrowseScreen
 import com.shangyin.app.ui.settings.CloudSyncScreen
 import com.shangyin.app.ui.settings.DataManageScreen
 import com.shangyin.app.ui.settings.SettingsScreen
@@ -145,6 +146,12 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 })
             ) { entry ->
                 H1SearchScreen(nav, entry.arguments?.getString("kw").orEmpty())
+            }
+            composable(
+                route = "h1source/{srcId}",
+                arguments = listOf(navArgument("srcId") { type = NavType.StringType })
+            ) { entry ->
+                SourceBrowseScreen(nav, entry.arguments?.getString("srcId").orEmpty())
             }
             composable(
                 route = "list/{id}",

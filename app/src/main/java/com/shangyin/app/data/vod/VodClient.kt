@@ -60,13 +60,19 @@ object VodClient {
     // ---------- 搜索 ----------
 
     /**
-     * 拉取源列表（含 total 总量）：kw 为空时不带 wd（全库列表，total=库总量），
-     * H1 浏览页用它分页浏览；带 kw 则按关键词搜索。
+     * 拉取源列表（含 total 总量与分类表）：kw 为空时不带 wd（全库列表，total=库总量），
+     * typeId 非 null 时按分类过滤（?t=type_id），H1 浏览页用它分页浏览。
      */
-    suspend fun fetchList(src: VodSource, kw: String, page: Int): VodResp? = withContext(Dispatchers.IO) {
-        val params = if (kw.isBlank()) "ac=videolist&pg=$page"
-        else "ac=videolist&wd=" + URLEncoder.encode(kw, "UTF-8") + "&pg=$page"
-        parseResp(httpGet(buildUrl(src.baseUrl, params)) ?: return@withContext null)
+    suspend fun fetchList(
+        src: VodSource,
+        kw: String,
+        page: Int,
+        typeId: Int? = null
+    ): VodResp? = withContext(Dispatchers.IO) {
+        val params = StringBuilder("ac=videolist&pg=$page")
+        if (kw.isNotBlank()) params.append("&wd=").append(URLEncoder.encode(kw, "UTF-8"))
+        if (typeId != null) params.append("&t=").append(typeId)
+        parseResp(httpGet(buildUrl(src.baseUrl, params.toString())) ?: return@withContext null)
     }
 
     /**
@@ -197,7 +203,10 @@ object VodClient {
                 groups.add(VodPlayGroup(gName, episodes))
             }
         }
-        return groups
+        // 默认只保留 3u8 线路：yun 等其他线路的直链大多已失效或带防盗链，实测基本播不了；
+        // 个别影片确实只有其他线路时回退原列表，保证有得播
+        val only3u8 = groups.filter { it.name.contains("3u8", ignoreCase = true) }
+        return if (only3u8.isEmpty()) groups else only3u8
     }
 
     // ---------- 标题匹配 ----------

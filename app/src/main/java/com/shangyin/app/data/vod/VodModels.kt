@@ -1,5 +1,6 @@
 package com.shangyin.app.data.vod
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -32,7 +33,16 @@ data class VodResp(
     val page: Int = 1,
     val pagecount: Int = 1,
     val total: Int = 0,
+    /** 全库列表接口返回的分类表（type_id 用于 ?t= 过滤） */
+    @SerialName("class") val categories: List<VodCategory> = emptyList(),
     val list: List<VodItem> = emptyList()
+)
+
+/** 苹果CMS 源的分类（电影/剧集/动漫…，不同源分类各异） */
+@Serializable
+data class VodCategory(
+    val type_id: Int = 0,
+    val type_name: String = ""
 )
 
 /** 采集站影片条目（搜索/详情通用） */
