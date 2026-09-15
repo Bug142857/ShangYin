@@ -28,7 +28,8 @@ object VodClient {
         .writeTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    private const val UA =
+    /** 移动端 UA（采集站多数校验 UA，播放器也复用这个） */
+    const val UA =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
 
     // ---------- URL 构造 ----------
@@ -57,6 +58,16 @@ object VodClient {
     }.getOrNull()
 
     // ---------- 搜索 ----------
+
+    /**
+     * 拉取源列表（含 total 总量）：kw 为空时不带 wd（全库列表，total=库总量），
+     * H1 浏览页用它分页浏览；带 kw 则按关键词搜索。
+     */
+    suspend fun fetchList(src: VodSource, kw: String, page: Int): VodResp? = withContext(Dispatchers.IO) {
+        val params = if (kw.isBlank()) "ac=videolist&pg=$page"
+        else "ac=videolist&wd=" + URLEncoder.encode(kw, "UTF-8") + "&pg=$page"
+        parseResp(httpGet(buildUrl(src.baseUrl, params)) ?: return@withContext null)
+    }
 
     /**
      * 多源并行搜索，单源失败/慢不影响其他源（OkHttp 自带 5s 连接 / 10s 读取超时）。
@@ -123,7 +134,10 @@ object VodClient {
             ).execute().use { resp ->
                 if (!resp.isSuccessful) return@use "dead" to "请求失败 HTTP ${resp.code}"
                 val body = resp.body?.string() ?: return@use "dead" to "返回为空"
-                if (!body.trimStart().startsWith("{")) return@use "dead" to "返回异常（非 JSON）"
+                if (!body.trimStart().startsWith("{")) {
+                    // HTTP 200 但返回 HTML：多为 DNS 污染/运营商劫持/被墙注入页，实测多为需外网环境
+                    return@use "proxy" to "需外网 · 返回异常（疑似被墙）"
+                }
                 val r = json.decodeFromString<VodResp>(body)
                 if (r.code != 1) return@use "dead" to "接口错误：${r.msg?.take(40) ?: "code=${r.code}"}"
                 "ok" to "可用 · 共 ${r.total} 部"

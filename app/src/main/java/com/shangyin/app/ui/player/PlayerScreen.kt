@@ -73,6 +73,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.delay
@@ -114,7 +115,19 @@ fun PlayerScreen(nav: NavHostController) {
     var firstLoad by remember { mutableStateOf(true) } // 首次加载（带续播位置）
     var released by remember { mutableStateOf(false) }
 
-    val player = remember { ExoPlayer.Builder(context).build() }
+    val player = remember {
+        // 采集站多数校验 UA 且常见 http↔https 302 跳转：
+        // 带浏览器 UA + 允许跨协议重定向，修复部分线路（如 ukyun）直链 403 打不开的问题
+        val httpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+            .setUserAgent(VodClient.UA)
+            .setConnectTimeoutMs(8000)
+            .setReadTimeoutMs(15000)
+            .setAllowCrossProtocolRedirects(true)
+        val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
+            .build()
+    }
     val isLandscape = config.orientation == Configuration.ORIENTATION_LANDSCAPE
     var controlsVisible by remember { mutableStateOf(true) } // 控制器显隐（横屏浮层跟随）
 
@@ -191,11 +204,28 @@ fun PlayerScreen(nav: NavHostController) {
         if (startPos > 0L) Toast.makeText(context, "已从上次位置继续播放", Toast.LENGTH_SHORT).show()
     }
 
-    // 换集同步（自动连播 / 控制器切集）
+    // 换集同步（自动连播 / 控制器切集）+ 播放出错提示
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 currentEp = player.currentMediaItemIndex
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                if (released) return
+                val reason = when (error.errorCode) {
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS ->
+                        "资源被拒或已失效"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ->
+                        "网络连接失败"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ->
+                        "格式不支持"
+                    else -> "播放出错"
+                }
+                Toast.makeText(context, "该线路 $reason，可切其他线路/集数", Toast.LENGTH_LONG).show()
             }
         }
         player.addListener(listener)

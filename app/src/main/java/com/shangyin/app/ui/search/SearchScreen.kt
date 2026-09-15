@@ -117,11 +117,11 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
             Toast.makeText(context, "H2 分类开发中，敬请期待", Toast.LENGTH_SHORT).show()
             return
         }
-        // H1 = 外网片源目录搜索：跳转独立页，按源分组展示，点击直接播放
+        // H1 = 外网片源目录：直接进入浏览页（页内可搜索），按源分组展示资源
         if (selectedCat == "H1") {
             keyboard?.hide()
             query = ""
-            nav.safeNavigate("h1search/" + java.net.URLEncoder.encode(q, "UTF-8"))
+            nav.safeNavigate("h1search")
             return
         }
         keyboard?.hide()  // 搜索后自动收起键盘
@@ -223,7 +223,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                         Text(
                             when {
                                 selectedCat.isEmpty() -> "先选分类，再输入关键词"
-                                selectedCat == "H1" -> "搜索外网片源（需外网环境）…"
+                                selectedCat == "H1" -> "点搜索直接进入外网片源浏览…"
                                 selectedCat == "H2" -> "H2 分类开发中"
                                 else -> "在${selectedCat}中搜索…"
                             }

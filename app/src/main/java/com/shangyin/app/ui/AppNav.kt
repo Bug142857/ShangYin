@@ -138,8 +138,11 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("vodSources") { VodSourceScreen(nav) }
             composable("player") { PlayerScreen(nav) }
             composable(
-                route = "h1search/{kw}",
-                arguments = listOf(navArgument("kw") { type = NavType.StringType })
+                route = "h1search?kw={kw}",
+                arguments = listOf(navArgument("kw") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                })
             ) { entry ->
                 H1SearchScreen(nav, entry.arguments?.getString("kw").orEmpty())
             }
