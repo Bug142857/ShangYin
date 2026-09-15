@@ -14,9 +14,12 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -189,16 +192,62 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 分类区：默认一行横滑 chips + 右侧三角按钮；点三角展开全部分类换行显示
-            Row(
-                Modifier.padding(start = 16.dp, end = 4.dp, top = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.weight(1f)
+            // 分类区：收起=横滑一行 + 三角展开；展开=标题行 + 换行 chips（限高可滚），
+            // 两种状态互斥显示（避免首行重复）
+            if (!catExpanded) {
+                Row(
+                    Modifier.padding(start = 16.dp, end = 4.dp, top = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    item {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedType == null,
+                                onClick = { selectedType = null },
+                                label = { Text("全部") }
+                            )
+                        }
+                        items(visibleCats, key = { it.type_id }) { cat ->
+                            FilterChip(
+                                selected = selectedType == cat.type_id,
+                                onClick = { selectedType = cat.type_id },
+                                label = { Text(cat.type_name) }
+                            )
+                        }
+                    }
+                    IconButton(onClick = { catExpanded = true }) {
+                        Icon(
+                            Icons.Rounded.ArrowDropDown,
+                            contentDescription = "展开分类"
+                        )
+                    }
+                }
+            } else {
+                Column(
+                    Modifier
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .heightIn(max = 320.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("全部分类", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = { catExpanded = false }) {
+                            Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起分类")
+                        }
+                    }
+                    FlowRow(
+                        Modifier
+                            .verticalScroll(rememberScrollState())
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                         FilterChip(
                             selected = selectedType == null,
                             onClick = {
@@ -207,55 +256,19 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                             },
                             label = { Text("全部") }
                         )
-                    }
-                    items(visibleCats, key = { it.type_id }) { cat ->
-                        FilterChip(
-                            selected = selectedType == cat.type_id,
-                            onClick = {
-                                selectedType = cat.type_id
-                                catExpanded = false
-                            },
-                            label = { Text(cat.type_name) }
-                        )
-                    }
-                }
-                IconButton(onClick = { catExpanded = !catExpanded }) {
-                    Icon(
-                        if (catExpanded) Icons.Rounded.ArrowDropUp
-                        else Icons.Rounded.ArrowDropDown,
-                        contentDescription = if (catExpanded) "收起分类" else "展开分类"
-                    )
-                }
-            }
-            // 展开区：全部分类（仅含有效分类）换行铺开，点任意分类后收起
-            androidx.compose.animation.AnimatedVisibility(visible = catExpanded) {
-                FlowRow(
-                    Modifier
-                        .padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedType == null,
-                        onClick = {
-                            selectedType = null
-                            catExpanded = false
-                        },
-                        label = { Text("全部") }
-                    )
-                    visibleCats.forEach { cat ->
-                        val n = catCounts[cat.type_id]
-                        FilterChip(
-                            selected = selectedType == cat.type_id,
-                            onClick = {
-                                selectedType = cat.type_id
-                                catExpanded = false
-                            },
-                            label = {
-                                Text(if (n != null) "${cat.type_name} ${n}" else cat.type_name)
-                            }
-                        )
+                        visibleCats.forEach { cat ->
+                            val n = catCounts[cat.type_id]
+                            FilterChip(
+                                selected = selectedType == cat.type_id,
+                                onClick = {
+                                    selectedType = cat.type_id
+                                    catExpanded = false
+                                },
+                                label = {
+                                    Text(if (n != null) "${cat.type_name} ${n}" else cat.type_name)
+                                }
+                            )
+                        }
                     }
                 }
             }

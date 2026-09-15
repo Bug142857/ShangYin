@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -64,10 +63,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -184,17 +183,20 @@ fun PlayerScreen(nav: NavHostController) {
     }
 
     val playerView = remember {
-        // 从 XML inflate（controller_layout_id 挂自定义控制条布局：保留 播放/暂停+时间+进度条，
-        // 去掉上一集/下一集/快退/快进与设置齿轮（避免"立体声"音轨项），倍速/选集按钮代码绑定；
-        // 拖动进度显示时间气泡（源站无缩略图数据，无法显示画面缩略窗）
-        (android.view.LayoutInflater.from(context).inflate(R.layout.vod_player_view, null, false) as PlayerView)
-            .apply {
-                useController = true
-                controllerShowTimeoutMs = 5000
-                setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
-                    controlsVisible = vis == android.view.View.VISIBLE
-                })
-            }
+        // 标准 media3 控制器布局（v2.11.4 自定义布局有闪退风险已回退）：
+        // 公开 API 隐藏 上一集/下一集/快退5s/快进15s → 中间只剩播放/暂停，时间/进度条保留；
+        // 设置齿轮运行时隐藏（菜单里的"立体声"音轨项无公开 API 移除），倍速改自建按钮
+        PlayerView(context).apply {
+            useController = true
+            controllerShowTimeoutMs = 5000
+            setShowPreviousButton(false)
+            setShowNextButton(false)
+            setShowRewindButton(false)
+            setShowFastForwardButton(false)
+            setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
+                controlsVisible = vis == android.view.View.VISIBLE
+            })
+        }
     }
 
     // 进入播放页默认横屏全屏（画面最大化），退出时在 onDispose 恢复竖屏
@@ -368,17 +370,12 @@ fun PlayerScreen(nav: NavHostController) {
                         factory = { playerView },
                         update = { pv ->
                             pv.player = if (released) null else player
-                            // 绑定自定义布局里的按钮（playerView 单实例，只绑一次防重复）
+                            // 一次性绑定：隐藏设置齿轮（"立体声"音轨项无公开 API 移除，
+                            // 倍速改右下角自建按钮）；进度条挂拖动时间气泡
                             if (!barBound.value) {
                                 barBound.value = true
-                                pv.findViewById<TextView>(R.id.btn_episode)?.setOnClickListener {
-                                    panelOpen = !panelOpen
-                                }
-                                pv.findViewById<TextView>(R.id.btn_speed)?.setOnClickListener {
-                                    speedMenuOpen = true
-                                }
-                                // 拖动进度条时显示时间气泡（exo_progress 是 media3 库 id，
-                                // nonTransitive R 下需引用库的 R 类）
+                                pv.findViewById<android.view.View>(media3R.id.exo_settings)?.visibility =
+                                    android.view.View.GONE
                                 pv.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.addListener(
                                     object : TimeBar.OnScrubListener {
                                         override fun onScrubStart(timeBar: TimeBar, position: Long) {
@@ -462,7 +459,41 @@ fun PlayerScreen(nav: NavHostController) {
                         )
                     }
 
-                    // 倍速菜单（自定义布局无设置齿轮，倍速独立提供；点其他处关闭）
+                    // 右下角悬浮按钮：选集（横屏）+ 倍速（设置齿轮已隐藏，倍速自建）
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = controlsVisible,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 2.dp, bottom = 2.dp)
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isLandscape && groups.isNotEmpty()) {
+                                TextButton(onClick = { panelOpen = !panelOpen }) {
+                                    Text("选集", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
+                            IconButton(
+                                onClick = { speedMenuOpen = true },
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                            ) {
+                                Icon(
+                                    painterResource(R.drawable.ic_speed),
+                                    contentDescription = "倍速",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    // 倍速菜单（锚在右下角）
                     DropdownMenu(
                         expanded = speedMenuOpen,
                         onDismissRequest = { speedMenuOpen = false },
