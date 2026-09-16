@@ -31,10 +31,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
@@ -59,7 +62,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -92,6 +97,8 @@ import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 /** 从 Compose 的 context 逐层解包找 Activity（防止被 ContextThemeWrapper 包裹导致旋转/全屏失效） */
 private fun Context.findActivity(): Activity? {
@@ -111,6 +118,16 @@ private fun fmt(ms: Long): String {
     val m = (s % 3600) / 60
     return if (h > 0) String.format("%d:%02d:%02d", h, m, s % 60)
     else String.format("%02d:%02d", m, s % 60)
+}
+
+/**
+ * 选集面板进程内记忆（按条目 id 区分）：
+ * 面板收起重开、退出播放页再进，都能恢复升/降序与网格滚动位置，不用重新往下滑
+ */
+private object EpisodePanelMemory {
+    var itemId: Long = Long.MIN_VALUE
+    var sortDesc: Boolean = false
+    var scrollIndex: Int = 0
 }
 
 /**
@@ -171,6 +188,22 @@ fun PlayerScreen(nav: NavHostController) {
     var speed by remember { mutableFloatStateOf(1f) }        // 当前倍速
     var scrubbingMs by remember { mutableStateOf<Long?>(null) } // 拖动进度时的时间气泡
     val barBound = remember { mutableStateOf(false) }        // TimeBar listener 只绑一次
+
+    // 选集排序（升/降序）+ 网格滚动状态提升到页面级：面板收起/旋转不丢；
+    // 同一部视频退出重进时从 EpisodePanelMemory 恢复
+    val sameItem = EpisodePanelMemory.itemId == PlayerSession.itemId
+    var sortDesc by remember { mutableStateOf(sameItem && EpisodePanelMemory.sortDesc) }
+    val gridState = rememberLazyGridState()
+    val scope = rememberCoroutineScope()
+
+    /** 切换排序后把当前集滚回可视位置（长剧倒序时直接看到最末几集） */
+    fun toggleEpisodeSort() {
+        val n = groups.getOrNull(groupIndex)?.episodes?.size ?: return
+        if (n <= 0) return
+        sortDesc = !sortDesc
+        val disp = (if (sortDesc) n - 1 - currentEp else currentEp).coerceIn(0, n - 1)
+        scope.launch { gridState.scrollToItem(disp) }
+    }
 
     /** 全屏切换：点击时读设备实时方向（避免 remember 捕获过期值） */
     fun toggleFullscreen() {
@@ -322,6 +355,33 @@ fun PlayerScreen(nav: NavHostController) {
     // 选集面板打开时暂停控制器自动隐藏（防止面板被一起收走），关闭后恢复
     LaunchedEffect(panelOpen) {
         playerView.controllerShowTimeoutMs = if (panelOpen) Int.MAX_VALUE else 5000
+    }
+
+    // 首次进入（或切线路）时定位选集网格：同一条目有记忆滚动位置则恢复，否则滚到当前集
+    var scrollRestoredOnce by remember { mutableStateOf(false) }
+    LaunchedEffect(groupIndex) {
+        val n = groups.getOrNull(groupIndex)?.episodes?.size ?: return@LaunchedEffect
+        if (n <= 0) return@LaunchedEffect
+        if (!scrollRestoredOnce) {
+            scrollRestoredOnce = true
+            if (EpisodePanelMemory.itemId == PlayerSession.itemId &&
+                EpisodePanelMemory.scrollIndex in 0 until n
+            ) {
+                gridState.scrollToItem(EpisodePanelMemory.scrollIndex)
+                return@LaunchedEffect
+            }
+        }
+        val disp = (if (sortDesc) n - 1 - currentEp else currentEp).coerceIn(0, n - 1)
+        gridState.scrollToItem(disp)
+    }
+
+    // 滚动位置实时写入记忆（面板收起、退出播放页后重进可恢复）
+    LaunchedEffect(gridState, sortDesc, groupIndex) {
+        snapshotFlow { gridState.firstVisibleItemIndex }.collect { i ->
+            EpisodePanelMemory.itemId = PlayerSession.itemId
+            EpisodePanelMemory.sortDesc = sortDesc
+            EpisodePanelMemory.scrollIndex = i
+        }
     }
 
     // 退到后台：暂停并保存（防止后台继续出声）；离开页面：彻底释放
@@ -596,20 +656,53 @@ fun PlayerScreen(nav: NavHostController) {
                                     Spacer(Modifier.height(12.dp))
                                 }
 
-                                Text(
-                                    "选集",
-                                    color = Color.White.copy(alpha = 0.6f),
-                                    style = MaterialTheme.typography.labelMedium
-                                )
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "选集",
+                                        color = Color.White.copy(alpha = 0.6f),
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Surface(
+                                        shape = RoundedCornerShape(8.dp),
+                                        color = Color.White.copy(alpha = 0.12f),
+                                        onClick = { toggleEpisodeSort() },
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Row(
+                                            Modifier.padding(horizontal = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                if (sortDesc) Icons.Rounded.ArrowDownward
+                                                else Icons.Rounded.ArrowUpward,
+                                                contentDescription = if (sortDesc) "降序" else "升序",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Text(
+                                                if (sortDesc) "倒序" else "正序",
+                                                color = Color.White.copy(alpha = 0.85f),
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                        }
+                                    }
+                                }
                                 Spacer(Modifier.height(6.dp))
-                                // 集数网格（占满面板剩余高度，可滚动）
+                                // 集数网格（占满面板剩余高度，可滚动；支持升/降序）
                                 LazyVerticalGrid(
                                     columns = GridCells.Fixed(3),
+                                    state = gridState,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                                     verticalArrangement = Arrangement.spacedBy(8.dp),
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    items(epsR.size) { idx ->
+                                    items(epsR.size) { i ->
+                                        val idx = if (sortDesc) epsR.size - 1 - i else i
                                         val sel = idx == currentEp
                                         Surface(
                                             shape = RoundedCornerShape(8.dp),
@@ -690,20 +783,53 @@ fun PlayerScreen(nav: NavHostController) {
                             Spacer(Modifier.height(8.dp))
                         }
 
-                        Text(
-                            "选集",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "选集",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                onClick = { toggleEpisodeSort() },
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        if (sortDesc) Icons.Rounded.ArrowDownward
+                                        else Icons.Rounded.ArrowUpward,
+                                        contentDescription = if (sortDesc) "降序" else "升序",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        if (sortDesc) "倒序" else "正序",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                         Spacer(Modifier.height(8.dp))
-                        // 集数网格（占满剩余空间，可滚动）
+                        // 集数网格（占满剩余空间，可滚动；支持升/降序）
                         LazyVerticalGrid(
                             columns = GridCells.Fixed(4),
+                            state = gridState,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            items(eps.size) { idx ->
+                            items(eps.size) { i ->
+                                val idx = if (sortDesc) eps.size - 1 - i else i
                                 val ep = eps[idx]
                                 val selected = idx == currentEp
                                 Surface(
