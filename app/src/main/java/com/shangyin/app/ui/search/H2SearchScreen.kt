@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -83,10 +84,12 @@ fun H2SearchScreen(nav: NavHostController) {
 
     var initializing by remember { mutableStateOf(SettingsStore.bikaToken.isBlank()) }
     var initError by remember { mutableStateOf<String?>(null) }
+    var retryKey by remember { mutableIntStateOf(0) } // 重试需变更 key 才能重启 LaunchedEffect
+    var showLoginDialog by remember { mutableStateOf(false) } // 手动登录已有哔咔账号（如 haka_comic 注册的账号）
 
     if (initializing) {
         // 自动注册哔咔游客账号（无需手动登录/注册）
-        LaunchedEffect(Unit) {
+        LaunchedEffect(retryKey) {
             runCatching { BikaClient.ensureGuestAccount() }
                 .onSuccess { initializing = false }
                 .onFailure { initError = it.message ?: "网络错误" }
@@ -107,7 +110,10 @@ fun H2SearchScreen(nav: NavHostController) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(8.dp))
-                TextButton(onClick = { initError = null }) { Text("重试") }
+                Row {
+                    TextButton(onClick = { initError = null; retryKey++ }) { Text("重试") }
+                    TextButton(onClick = { showLoginDialog = true }) { Text("登录已有账号") }
+                }
             }
         }
         return
@@ -199,6 +205,11 @@ fun H2SearchScreen(nav: NavHostController) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showLoginDialog = true }) {
+                        Icon(Icons.Rounded.Person, contentDescription = "登录哔咔账号")
                     }
                 }
             )
@@ -348,7 +359,92 @@ fun H2SearchScreen(nav: NavHostController) {
                 }
             }
         }
+
+        if (showLoginDialog) {
+            BikaLoginDialog(
+                onDismiss = { showLoginDialog = false },
+                onLoggedIn = {
+                    showLoginDialog = false
+                    Toast.makeText(context, "哔咔账号登录成功，收藏数据与本账号通用", Toast.LENGTH_LONG).show()
+                }
+            )
+        }
     }
+}
+
+/** 手动登录已有哔咔账号对话框（如 haka_comic / 哔咔官方 App 注册的账号，凭据通用） */
+@Composable
+private fun BikaLoginDialog(onDismiss: () -> Unit, onLoggedIn: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    fun doLogin() {
+        if (busy || email.isBlank() || password.isBlank()) return
+        scope.launch {
+            busy = true
+            error = null
+            runCatching { BikaClient.signIn(email.trim(), password) }
+                .onSuccess {
+                    SettingsStore.bikaToken = it
+                    onLoggedIn()
+                }
+                .onFailure { error = it.message ?: "登录失败" }
+            busy = false
+        }
+    }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("登录哔咔账号") },
+        text = {
+            Column {
+                Text(
+                    "可选。自动游客账号已可正常浏览；登录自己的哔咔账号（含 haka_comic 注册的账号）可与其收藏数据通用。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    placeholder = { Text("用户名 / 邮箱") },
+                    singleLine = true,
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    placeholder = { Text("密码") },
+                    singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    enabled = !busy,
+                    keyboardActions = KeyboardActions(onDone = { doLogin() }),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            if (busy) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                TextButton(onClick = { doLogin() }, enabled = email.isNotBlank() && password.isNotBlank()) {
+                    Text("登录")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 /** 漫画卡片：封面 + 标题 + 作者 + 喜欢数 */

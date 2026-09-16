@@ -104,12 +104,13 @@ object BikaClient {
         )
     }
 
-    /** 发请求并解析 data 字段；code!=1 抛异常（401 归为登录失效） */
+    /** 发请求并解析 data 字段；code!=1/200 抛异常（401 归为登录失效）；requireData=false 时允许无 data 响应（如 auth/register 只回 code/message） */
     private suspend fun request(
         method: String,
         pathWithQuery: String,
         token: String,
-        bodyJson: String? = null
+        bodyJson: String? = null,
+        requireData: Boolean = true
     ): JsonObject = withContext(Dispatchers.IO) {
         val builder = Request.Builder()
             .url(HOST + pathWithQuery)
@@ -129,11 +130,13 @@ object BikaClient {
             throw Exception("响应解析失败")
         }
         val code = root["code"]?.jsonPrimitive?.intOrNull ?: 0
-        if (code == 401) throw BikaAuthException("哔咔登录已失效，请重新登录")
-        if (code != 1) {
+        if (code == 401) throw BikaAuthException("哔咔登录已失效")
+        // 成功码：1（部分接口）/ 200（auth/register、categories 等实测均为 200）
+        if (code != 1 && code != 200) {
             throw Exception(root["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误(code=$code)")
         }
-        root["data"]?.jsonObject ?: throw Exception("响应缺少 data")
+        root["data"]?.jsonObject
+            ?: (if (requireData) throw Exception("响应缺少 data") else JsonObject(emptyMap()))
     }
 
     // ---------- 图片 URL 拼接（与 haka_comic 一致） ----------
@@ -165,7 +168,7 @@ object BikaClient {
             val body = """{"birthday":"2005-01-01","email":"${jsonEncode(email)}","gender":"m",""" +
                 """"name":"${jsonEncode(name)}","password":"${jsonEncode(password)}",""" +
                 """"question1":"1","question2":"2","question3":"3","answer1":"4","answer2":"5","answer3":"6"}"""
-            request("POST", "auth/register", token = "", bodyJson = body)
+            request("POST", "auth/register", token = "", bodyJson = body, requireData = false)
             Unit
         }
 
