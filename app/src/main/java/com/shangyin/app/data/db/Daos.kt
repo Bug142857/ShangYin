@@ -85,7 +85,7 @@ interface ListDao {
     // 用于统计包含子清单内所有条目的总数
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.createdAt, " +
             "(WITH RECURSIVE descendants(id) AS (" +
             "  SELECT id FROM lists WHERE id = l.id " +
             "  UNION ALL " +
@@ -93,18 +93,18 @@ interface ListDao {
             ") SELECT COUNT(*) FROM list_items li WHERE li.listId IN (SELECT id FROM descendants)" +
             ") AS itemCount " +
             "FROM lists l " +
-            "WHERE l.parentId IS NULL " +
+            "WHERE l.parentId IS NULL AND l.world = :world " +
             "ORDER BY l.sortIndex ASC, l.createdAt ASC"
     )
-    fun observeRootListsWithMeta(): Flow<List<ListWithMeta>>
+    fun observeRootListsWithMeta(world: Int): Flow<List<ListWithMeta>>
 
     @Query(
-        "SELECT * FROM lists WHERE parentId IS NULL ORDER BY sortIndex ASC, createdAt ASC"
+        "SELECT * FROM lists WHERE parentId IS NULL AND world = :world ORDER BY sortIndex ASC, createdAt ASC"
     )
-    suspend fun getRootListsOnce(): List<ItemListEntity>
+    suspend fun getRootListsOnce(world: Int): List<ItemListEntity>
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.createdAt, " +
             "(WITH RECURSIVE descendants(id) AS (" +
             "  SELECT id FROM lists WHERE id = l.id " +
             "  UNION ALL " +
@@ -119,7 +119,7 @@ interface ListDao {
 
     /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.createdAt, " +
             "(WITH RECURSIVE descendants(id) AS (" +
             "  SELECT id FROM lists WHERE id = l.id " +
             "  UNION ALL " +

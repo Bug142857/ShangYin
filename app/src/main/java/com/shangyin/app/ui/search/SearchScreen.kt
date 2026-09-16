@@ -73,12 +73,17 @@ private var lastSelectedListId: Long = -1L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
+fun SearchScreen(
+    nav: NavHostController,
+    targetListId: Long = -1L,
+    initialCat: String = "",
+    initialKw: String = ""
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(initialKw) }
     // 用单例缓存搜索结果，避免导航后丢失
     var results by remember { mutableStateOf(SearchCache.results) }
     var celebrityResults by remember { mutableStateOf(SearchCache.celebrities) }
@@ -87,8 +92,10 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
     // 搜索错误信息：失败时显示在结果区域，让用户看到具体原因（不只 Toast）
     var searchError by remember { mutableStateOf<String?>(null) }
     // 分类筛选：必须先选分类才能搜索（影视/图书/游戏/人物），防止结果互相干扰
-    // 默认选中「影视」（最常用），用户可切换
-    var selectedCat by rememberSaveable { mutableStateOf("影视") }
+    // 默认选中「影视」（最常用），用户可切换；从主页跳转时可带初始分类
+    var selectedCat by rememberSaveable {
+        mutableStateOf(if (initialCat in listOf("影视", "图书", "游戏", "人物")) initialCat else "影视")
+    }
     // 防频繁点击：导航中禁用所有点击
     var navigating by remember { mutableStateOf(false) }
 
@@ -110,20 +117,6 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
         if (q.isEmpty()) return
         if (selectedCat.isEmpty()) {
             Toast.makeText(context, "请先选择要搜索的分类", Toast.LENGTH_SHORT).show()
-            return
-        }
-        // H2 = Pixiv 搜图：直接进入搜图页（页内搜索）
-        if (selectedCat == "H2") {
-            keyboard?.hide()
-            query = ""
-            nav.safeNavigate("h2search")
-            return
-        }
-        // H1 = 外网片源目录：直接进入浏览页（页内可搜索），按源分组展示资源
-        if (selectedCat == "H1") {
-            keyboard?.hide()
-            query = ""
-            nav.safeNavigate("h1search")
             return
         }
         keyboard?.hide()  // 搜索后自动收起键盘
@@ -165,6 +158,11 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
         }
     }
 
+    // 从主页搜索栏跳转带关键词：自动执行一次搜索
+    LaunchedEffect(Unit) {
+        if (initialKw.isNotBlank()) doSearch()
+    }
+
     fun addToList(r: DoubanResult, listId: Long) {
         scope.launch {
             runCatching { Repo.saveFromDouban(r) }
@@ -203,26 +201,10 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 4.dp)
             ) {
-                listOf("影视", "图书", "游戏", "人物", "H1", "H2").forEach { label ->
+                listOf("影视", "图书", "游戏", "人物").forEach { label ->
                     FilterChip(
                         selected = selectedCat == label,
-                        onClick = {
-                            when (label) {
-                                // 点 H1 直接进入外网片源浏览页，无需再点搜索
-                                "H1" -> {
-                                    keyboard?.hide()
-                                    query = ""
-                                    nav.safeNavigate("h1search")
-                                }
-                                // 点 H2 直接进入 Pixiv 搜图页，无需再点搜索
-                                "H2" -> {
-                                    keyboard?.hide()
-                                    query = ""
-                                    nav.safeNavigate("h2search")
-                                }
-                                else -> selectedCat = if (selectedCat == label) "" else label
-                            }
-                        },
+                        onClick = { selectedCat = label },
                         label = { Text(label) },
                         modifier = Modifier.padding(end = 8.dp)
                     )
@@ -236,14 +218,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                     value = query,
                     onValueChange = { query = it },
                     placeholder = {
-                        Text(
-                            when {
-                                selectedCat.isEmpty() -> "先选分类，再输入关键词"
-                                selectedCat == "H1" -> "选 H1 后点标签即可直接进入"
-                                selectedCat == "H2" -> "选 H2 后点标签即可进入哔咔漫画"
-                                else -> "在${selectedCat}中搜索…"
-                            }
-                        )
+                        Text(if (selectedCat.isEmpty()) "先选分类，再输入关键词" else "在${selectedCat}中搜索…")
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),

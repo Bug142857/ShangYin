@@ -43,8 +43,8 @@ data class BikaComic(
 /** 哔咔章节 */
 data class BikaChapter(val id: String, val title: String?, val order: Int)
 
-/** 哔咔分类 */
-data class BikaCategory(val id: String?, val title: String)
+/** 哔咔分类（thumbUrl 用于首页分类封面网格，参考 haka_comic） */
+data class BikaCategory(val id: String?, val title: String, val thumbUrl: String = "")
 
 /** 列表分页信息 */
 data class BikaComicsPage(val docs: List<BikaComic>, val page: Int, val pages: Int, val total: Int)
@@ -162,44 +162,18 @@ object BikaClient {
 
     // ---------- 接口 ----------
 
-    /** 注册哔咔账号（接口无需验证码，与 haka_comic 注册表单一致；安全问题用固定值） */
-    private suspend fun register(email: String, password: String, name: String): Unit =
-        withContext(Dispatchers.IO) {
-            val body = """{"birthday":"2005-01-01","email":"${jsonEncode(email)}","gender":"m",""" +
-                """"name":"${jsonEncode(name)}","password":"${jsonEncode(password)}",""" +
-                """"question1":"1","question2":"2","question3":"3","answer1":"4","answer2":"5","answer3":"6"}"""
-            request("POST", "auth/register", token = "", bodyJson = body, requireData = false)
-            Unit
-        }
-
-    /** 生成随机账号并注册+登录，成功后 token 写入 SettingsStore */
-    suspend fun ensureGuestAccount(): String {
-        val t = System.currentTimeMillis()
-        val rand = java.security.SecureRandom()
-        val pw = buildString {
-            repeat(16) { append("abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"[rand.nextInt(56)]) }
-        }
-        val email = "lz$t"
-        val name = "lzfx${rand.nextInt(9000) + 1000}"
-        register(email, pw, name)
-        val token = signIn(email, pw)
-        SettingsStore.bikaToken = token
-        return token
-    }
-
     /**
-     * 带 token 的调用包装：无 token 先自动注册游客账号；
-     * 调用中遇登录失效自动重新注册一次并重试原请求（对调用方透明）。
+     * 带 token 的调用包装：未登录直接抛 BikaAuthException（登录入口在 设置→账号管理→哔咔登录）；
+     * 登录失效时清除本地 token 并抛出，由界面引导用户重新登录。
      */
     suspend fun <T> withAuth(block: suspend (String) -> T): T {
-        var token = SettingsStore.bikaToken
-        if (token.isBlank()) token = ensureGuestAccount()
+        val token = SettingsStore.bikaToken
+        if (token.isBlank()) throw BikaAuthException("未登录哔咔账号")
         return try {
             block(token)
         } catch (e: BikaAuthException) {
             SettingsStore.clearBikaToken()
-            val fresh = ensureGuestAccount()
-            block(fresh)
+            throw BikaAuthException("哔咔登录已失效")
         }
     }
 
@@ -210,7 +184,7 @@ object BikaClient {
         data["token"]?.jsonPrimitive?.content ?: throw Exception("登录响应缺少 token")
     }
 
-    /** 分类列表（过滤 isWeb 网页分类，与 haka 一致） */
+    /** 分类列表（过滤 isWeb 网页分类，与 haka 一致；含分类封面图） */
     suspend fun fetchCategories(token: String): List<BikaCategory> = withContext(Dispatchers.IO) {
         val data = request("GET", "categories", token)
         val arr = data["categories"]?.jsonArray ?: return@withContext emptyList()
@@ -219,7 +193,14 @@ object BikaClient {
             val isWeb = o["isWeb"]?.jsonPrimitive?.contentOrNull == "true" || o["isWeb"]?.toString() == "true"
             if (isWeb) return@mapNotNull null
             val title = o["title"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-            BikaCategory(id = o["_id"]?.jsonPrimitive?.contentOrNull, title = title)
+            val thumb = o["thumb"]?.jsonObject
+            val thumbUrl = thumb?.let { t ->
+                imageUrl(
+                    t["fileServer"]?.jsonPrimitive?.contentOrNull ?: "",
+                    t["path"]?.jsonPrimitive?.contentOrNull ?: ""
+                )
+            }.orEmpty()
+            BikaCategory(id = o["_id"]?.jsonPrimitive?.contentOrNull, title = title, thumbUrl = thumbUrl)
         }.filter { it.title.isNotBlank() }
     }
 

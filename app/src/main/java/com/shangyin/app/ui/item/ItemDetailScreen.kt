@@ -140,6 +140,50 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             return@Scaffold
         }
         val entity = it_!!
+
+        // ---- 里世界条目：不走豆瓣详情 ----
+        // 番号视频：直接恢复播放（doubanId = "srcId|vodId"）
+        if (entity.category == "番号") {
+            val context = LocalContext.current
+            LaunchedEffect(entity.id) {
+                val parts = entity.doubanId.split("|")
+                val vid = parts.getOrNull(1)?.toLongOrNull()
+                if (parts.size != 2 || vid == null || vid <= 0L) {
+                    Toast.makeText(context, "条目数据异常，无法播放", Toast.LENGTH_SHORT).show()
+                    nav.safePopBackStack()
+                    return@LaunchedEffect
+                }
+                val src = com.shangyin.app.ui.settings.SettingsStore.getVodSources()
+                    .firstOrNull { it.id == parts[0] }
+                if (src == null) {
+                    Toast.makeText(context, "片源「${entity.subTitle}」已被删除，无法播放", Toast.LENGTH_LONG).show()
+                    nav.safePopBackStack()
+                    return@LaunchedEffect
+                }
+                val ok = com.shangyin.app.ui.search.openVodAndPlay(
+                    nav, context, src,
+                    com.shangyin.app.data.vod.VodItem(vod_id = vid, vod_name = entity.title)
+                )
+                if (!ok) nav.safePopBackStack()
+            }
+            Column(Modifier.padding(pad).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(60.dp))
+                androidx.compose.material3.CircularProgressIndicator()
+                Spacer(Modifier.height(12.dp))
+                Text("正在打开播放…", style = MaterialTheme.typography.bodySmall)
+            }
+            return@Scaffold
+        }
+        // 本子：跳哔咔详情
+        if (entity.category == "本子") {
+            LaunchedEffect(entity.id) {
+                nav.safePopBackStack()
+                nav.safeNavigate("bikaComic/${android.net.Uri.encode(entity.doubanId)}")
+            }
+            Column(Modifier.padding(pad).fillMaxSize()) {}
+            return@Scaffold
+        }
+
         val cacheKey = "${entity.category}/${entity.doubanId}"
 
         var celebrities by remember(cacheKey) { mutableStateOf(DetailCache.celebrities[cacheKey].orEmpty()) }

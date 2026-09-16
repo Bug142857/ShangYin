@@ -185,8 +185,9 @@ object Repo {
 
     fun observeListsWithMeta(): Flow<List<ListWithMeta>> = listDao.observeListsWithMeta()
 
-    /** 首页用：只显示根级清单（parentId IS NULL） */
-    fun observeRootListsWithMeta(): Flow<List<ListWithMeta>> = listDao.observeRootListsWithMeta()
+    /** 首页用：只显示根级清单（parentId IS NULL），按世界过滤（0=表世界，1=里世界） */
+    fun observeRootListsWithMeta(world: Int = 0): Flow<List<ListWithMeta>> =
+        listDao.observeRootListsWithMeta(world)
 
     /** 显示某清单的子清单 */
     fun observeSubListsWithMeta(listId: Long): Flow<List<ListWithMeta>> = listDao.observeSubListsWithMeta(listId)
@@ -240,8 +241,8 @@ object Repo {
 
     fun observeAllLists(): Flow<List<ItemListEntity>> = listDao.observeAllLists()
 
-    suspend fun createList(name: String, parentId: Long? = null): Long =
-        listDao.insertList(ItemListEntity(name = name.trim(), parentId = parentId))
+    suspend fun createList(name: String, parentId: Long? = null, world: Int = 0): Long =
+        listDao.insertList(ItemListEntity(name = name.trim(), parentId = parentId, world = world))
 
     suspend fun renameList(list: ItemListEntity, name: String) =
         listDao.updateList(list.copy(name = name.trim()))
@@ -290,11 +291,11 @@ object Repo {
         }
     }
 
-    /** 主页根清单拖拽排序：把 fromIdx 移到 toIdx，重排 sortIndex */
-    suspend fun reorderRootList(fromIdx: Int, toIdx: Int) {
+    /** 主页根清单拖拽排序：把 fromIdx 移到 toIdx，重排 sortIndex（按世界分别排序） */
+    suspend fun reorderRootList(world: Int, fromIdx: Int, toIdx: Int) {
         if (fromIdx == toIdx) return
         db.withTransaction {
-            val roots = listDao.getRootListsOnce().toMutableList()
+            val roots = listDao.getRootListsOnce(world).toMutableList()
             if (fromIdx !in roots.indices || toIdx !in roots.indices) return@withTransaction
             val moved = roots.removeAt(fromIdx)
             roots.add(toIdx, moved)
@@ -302,6 +303,24 @@ object Repo {
                 if (l.sortIndex != i) listDao.updateList(l.copy(sortIndex = i))
             }
         }
+    }
+
+    /** 保存自定义条目（番号视频 / 本子漫画，非豆瓣来源）：按 (category,doubanId) 去重，返回条目 ID */
+    suspend fun saveCustomItem(
+        category: String,
+        doubanId: String,
+        title: String,
+        coverUrl: String?,
+        subTitle: String = ""
+    ): Long {
+        itemDao.findByDouban(category, doubanId)?.let { return it.id }
+        val id = itemDao.insert(
+            CollectionItemEntity(
+                category = category, doubanId = doubanId, title = title,
+                coverUrl = coverUrl, subTitle = subTitle
+            )
+        )
+        return if (id > 0) id else itemDao.findByDouban(category, doubanId)?.id ?: -1L
     }
 
     /** 加入清单：若已在清单内则忽略；同时用清单首图做清单封面 */

@@ -3,7 +3,6 @@ package com.shangyin.app.ui.search
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,21 +16,25 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Sort
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -50,448 +53,452 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.bika.BikaClient
-import com.shangyin.app.data.bika.BikaCategory
 import com.shangyin.app.data.bika.BikaComic
+import com.shangyin.app.data.bika.BikaComicsPage
 import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
 
-/** 排序选项（哔咔 sort 参数）：dd=新到旧 da=旧到新 ld=最多喜欢 vd=最多观看 */
-private val SORTS = listOf("新到旧" to "dd", "旧到新" to "da", "最多喜欢" to "ld", "最多观看" to "vd")
-
 /**
- * H2 哔咔漫画搜索页（数据源来自 haka_comic 项目内置的哔咔 API）。
- * 无需手动登录：首次进入自动注册游客账号，token 失效自动重新注册。
- * 可按分类浏览或关键词搜索，双列网格，点击进详情阅读。
+ * 本子（哔咔漫画）页，界面参考 haka_comic：
+ * - 一级：搜索栏 + 最近更新入口 + 分类封面网格
+ * - 二级：某分类/最近更新/搜索的漫画列表（行式卡片：封面 + [N P]标题 + 作者 + 标签 + 喜欢/观看）
+ * - 排序在列表页顶栏
+ * 需登录哔咔账号（设置 → 账号管理 → 哔咔登录）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun H2SearchScreen(nav: NavHostController) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val keyboard = LocalSoftwareKeyboardController.current
+    val loggedIn = SettingsStore.bikaToken.isNotBlank()
 
-    var initializing by remember { mutableStateOf(SettingsStore.bikaToken.isBlank()) }
-    var initError by remember { mutableStateOf<String?>(null) }
-    var retryKey by remember { mutableIntStateOf(0) } // 重试需变更 key 才能重启 LaunchedEffect
-    var showLoginDialog by remember { mutableStateOf(false) } // 手动登录已有哔咔账号（如 haka_comic 注册的账号）
-
-    if (initializing) {
-        // 自动注册哔咔游客账号（无需手动登录/注册）
-        LaunchedEffect(retryKey) {
-            runCatching { BikaClient.ensureGuestAccount() }
-                .onSuccess { initializing = false }
-                .onFailure { initError = it.message ?: "网络错误" }
-        }
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-            modifier = Modifier.fillMaxSize().padding(32.dp)
-        ) {
-            if (initError == null) {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(10.dp))
-                Text("正在初始化哔咔账号…", style = MaterialTheme.typography.bodySmall)
-            } else {
-                Text(
-                    "初始化失败：$initError",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium
+    // 未登录：引导去设置登录
+    if (!loggedIn) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("本子") },
+                    navigationIcon = {
+                        IconButton(onClick = { nav.safePopBackStack() }) {
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                        }
+                    }
                 )
-                Spacer(Modifier.height(8.dp))
-                Row {
-                    TextButton(onClick = { initError = null; retryKey++ }) { Text("重试") }
-                    TextButton(onClick = { showLoginDialog = true }) { Text("登录已有账号") }
+            }
+        ) { pad ->
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(pad).fillMaxSize().padding(32.dp)
+            ) {
+                EmptyView("未登录哔咔账号")
+                Spacer(Modifier.height(20.dp))
+                TextButton(onClick = { nav.safeNavigate("account") }) {
+                    Text("去 设置 → 账号管理 → 哔咔登录")
                 }
             }
         }
         return
     }
 
-    var input by remember { mutableStateOf("") }
-    var keyword by remember { mutableStateOf("") }                 // 已提交的搜索词
-    var selectedCat by remember { mutableStateOf<String?>(null) }  // 分类标题，null=全部
-    var sort by remember { mutableStateOf(SORTS[0].second) }
-    var categories by remember { mutableStateOf<List<BikaCategory>>(emptyList()) }
+    // null = 一级分类网格；非 null = 二级列表（分类名 / "最近更新"）
+    var viewCategory by remember { mutableStateOf<String?>(null) }
+    var searchKeyword by remember { mutableStateOf<String?>(null) } // 搜索模式列表
 
-    var items by remember { mutableStateOf<List<BikaComic>>(emptyList()) }
-    var page by remember { mutableStateOf(0) }
-    var total by remember { mutableStateOf(0) }
-    var loading by remember { mutableStateOf(false) }
-    var loadingMore by remember { mutableStateOf(false) }
-    var noMore by remember { mutableStateOf(false) }
+    val isSearchMode = searchKeyword != null
+
+    if (viewCategory == null && !isSearchMode) {
+        CategoryGridPage(
+            nav = nav,
+            onOpenCategory = { viewCategory = it },
+            onSearch = { searchKeyword = it }
+        )
+    } else {
+        ComicListPage(
+            nav = nav,
+            category = viewCategory,
+            keyword = searchKeyword,
+            onBack = {
+                if (isSearchMode) searchKeyword = null else viewCategory = null
+            }
+        )
+    }
+}
+
+// ---------------- 一级：分类封面网格 ----------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryGridPage(
+    nav: NavHostController,
+    onOpenCategory: (String?) -> Unit,
+    onSearch: (String) -> Unit
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    var categories by remember { mutableStateOf<List<com.shangyin.app.data.bika.BikaCategory>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    val gridState = rememberLazyGridState()
-    val reqId = remember { mutableIntStateOf(0) } // 过期响应丢弃
+    var query by remember { mutableStateOf("") }
 
-    /** 登录失效已由 BikaClient.withAuth 自动重新注册处理；二次失败按普通错误展示 */
-    fun handleAuthError() {
-        items = emptyList()
-        Toast.makeText(context, "哔咔账号已自动重新注册，请重试", Toast.LENGTH_SHORT).show()
-    }
-
-    /** 加载一页：有关键词走搜索，否则走分类浏览（selectedCat=null 时为全站列表） */
-    fun runLoad(q: String, cat: String?, pg: Int) {
-        if (loading || loadingMore) return
-        val my = ++reqId.value
-        if (pg == 1) {
-            keyword = q
-            items = emptyList()
-            noMore = false
-            error = null
-        }
-        scope.launch {
-            if (pg == 1) loading = true else loadingMore = true
-            runCatching {
-                BikaClient.withAuth { t ->
-                    if (q.isNotBlank()) {
-                        BikaClient.searchComics(t, q, pg, sort)
-                    } else {
-                        BikaClient.fetchComics(t, pg, cat, sort)
-                    }
-                }
-            }.onSuccess { resp ->
-                if (reqId.value != my) return@launch
-                items = if (pg == 1) resp.docs else items + resp.docs
-                page = resp.page
-                total = resp.total
-                noMore = resp.page >= resp.pages || resp.docs.isEmpty()
-            }.onFailure { e ->
-                if (reqId.value != my) return@launch
-                if (e is BikaClient.BikaAuthException) {
-                    handleAuthError()
-                } else if (pg == 1) {
-                    error = "加载失败：${e.message ?: e.javaClass.simpleName}"
-                }
-            }
-            if (reqId.value == my) {
-                loading = false
-                loadingMore = false
-            }
-        }
-    }
-
-    fun reload() = runLoad(keyword, selectedCat, 1)
-
-    fun doSearch() {
-        val q = input.trim()
-        keyboard?.hide()
-        selectedCat = null
-        runLoad(q, null, 1)
-    }
-
-    // 预加载分类列表
     LaunchedEffect(Unit) {
+        loading = true
         runCatching { BikaClient.withAuth { t -> BikaClient.fetchCategories(t) } }
-            .onSuccess { categories = it }
-            .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
+            .onSuccess { categories = it; error = null }
+            .onFailure { error = it.message }
+        loading = false
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("哔咔漫画") },
+                title = { Text("本子") },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showLoginDialog = true }) {
-                        Icon(Icons.Rounded.Person, contentDescription = "登录哔咔账号")
                     }
                 }
             )
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            // 搜索框
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            ) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    placeholder = { Text("搜索漫画关键词…") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { doSearch() }),
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { doSearch() }) {
-                    Icon(Icons.Rounded.Search, contentDescription = "搜索")
-                }
-            }
-            // 分类 chips（全部 + 官方分类）
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 2.dp)
-            ) {
-                val cats = listOf("全部") + categories.map { it.title }
-                cats.forEach { c ->
-                    FilterChip(
-                        selected = (c == "全部" && selectedCat == null) || selectedCat == c,
-                        onClick = {
-                            val newCat = if (c == "全部") null else c
-                            if (newCat != selectedCat) {
-                                selectedCat = newCat
-                                keyboard?.hide()
-                                runLoad(input.trim().ifBlank { "" }, newCat, 1)
-                            }
-                        },
-                        label = { Text(c, style = MaterialTheme.typography.labelMedium) },
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
-            }
-            // 排序 chips
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 16.dp, vertical = 2.dp)
-            ) {
-                Text(
-                    "排序",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.width(8.dp))
-                SORTS.forEach { (label, value) ->
-                    FilterChip(
-                        selected = sort == value,
-                        onClick = { sort = value; reload() },
-                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                        modifier = Modifier.padding(end = 8.dp)
-                    )
-                }
-            }
+            // 搜索栏：输入回车进入搜索结果列表
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索本子…") },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    imeAction = androidx.compose.ui.text.input.ImeAction.Search
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onSearch = {
+                        val kw = query.trim()
+                        if (kw.isNotEmpty()) {
+                            keyboard?.hide()
+                            onSearch(kw)
+                        }
+                    }
+                ),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+            )
 
             when {
-                // 未发起任何浏览/搜索
-                keyword.isBlank() && selectedCat == null && items.isEmpty() && !loading -> Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.fillMaxSize().padding(32.dp)
-                ) {
-                    Text("选择分类浏览，或输入关键词搜索", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "数据来自哔咔漫画，共 ${total.coerceAtLeast(0)} 部可看",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
-                // 首页加载中
-                loading -> Column(
+                error != null -> Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(10.dp))
-                    Text("加载中…", style = MaterialTheme.typography.bodySmall)
-                }
-                // 首页失败
-                error != null && items.isEmpty() -> Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                    modifier = Modifier.fillMaxSize().padding(32.dp)
-                ) {
-                    Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { reload() }) { Text("重试") }
+                    EmptyView("加载失败：$error")
+                    TextButton(onClick = { nav.safePopBackStack() }) { Text("返回") }
                 }
                 else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    state = gridState,
-                    contentPadding = PaddingValues(12.dp),
+                    columns = GridCells.Fixed(3),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(items.size) { i ->
-                        val d = items[i]
-                        ComicCard(d = d, onClick = {
-                            nav.safeNavigate("bikaComic/" + java.net.URLEncoder.encode(d.id, "UTF-8"))
-                        })
+                    // 最近更新入口（全部漫画，最新在前）
+                    gridItems(listOf("最近更新")) {
+                        CategoryCard(
+                            title = "最近更新",
+                            thumbUrl = null,
+                            onClick = { onOpenCategory(null) }
+                        )
                     }
-                    item(span = { GridItemSpan(2) }) {
+                    gridItems(categories, key = { it.id ?: it.title }) { cat ->
+                        CategoryCard(
+                            title = cat.title,
+                            thumbUrl = cat.thumbUrl.takeIf { it.isNotBlank() },
+                            onClick = { onOpenCategory(cat.title) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------- 二级：漫画行式列表 ----------------
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ComicListPage(
+    nav: NavHostController,
+    category: String?,
+    keyword: String?,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var items by remember { mutableStateOf<List<BikaComic>>(emptyList()) }
+    var page by remember { mutableIntStateOf(1) }
+    var pages by remember { mutableIntStateOf(1) }
+    var loading by remember { mutableStateOf(true) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var sort by remember { mutableStateOf("dd") } // dd新到旧/da旧到新/ld最多喜欢/vd最多观看
+    var sortMenu by remember { mutableStateOf(false) }
+    val reqId = remember { mutableIntStateOf(0) }
+
+    /** 加载一页 */
+    fun load(pg: Int) {
+        if (loading || loadingMore) return
+        val my = ++reqId.intValue
+        scope.launch {
+            if (pg == 1) loading = true else loadingMore = true
+            runCatching {
+                BikaClient.withAuth { t ->
+                    val kw = keyword
+                    if (!kw.isNullOrBlank()) BikaClient.searchComics(t, kw, pg, sort)
+                    else BikaClient.fetchComics(t, pg, category, sort)
+                }
+            }.onSuccess { resp: BikaComicsPage ->
+                if (my == reqId.intValue) {
+                    if (pg == 1) items = resp.docs
+                    else items = (items + resp.docs).distinctBy { it.id }
+                    page = resp.page
+                    pages = resp.pages
+                    error = null
+                }
+            }.onFailure {
+                if (my == reqId.intValue) error = it.message
+            }
+            if (pg == 1) loading = false else loadingMore = false
+        }
+    }
+
+    // 进入页面 / 切排序 重新加载第一页
+    LaunchedEffect(category, keyword, sort) { load(1) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
                         when {
-                            loadingMore -> Row(
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
-                            ) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text("加载中…", style = MaterialTheme.typography.bodySmall)
-                            }
-                            noMore && items.isNotEmpty() -> Text(
-                                "没有更多了",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
-                                textAlign = TextAlign.Center
+                            !keyword.isNullOrBlank() -> "搜索「$keyword」"
+                            category != null -> category
+                            else -> "最近更新"
+                        }
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { sortMenu = true }) {
+                        Icon(Icons.Rounded.Sort, contentDescription = "排序")
+                    }
+                    DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                        listOf(
+                            "dd" to "新到旧", "da" to "旧到新",
+                            "ld" to "最多喜欢", "vd" to "最多观看"
+                        ).forEach { (k, label) ->
+                            DropdownMenuItem(
+                                text = { Text(if (sort == k) "● $label" else label) },
+                                onClick = { sort = k; sortMenu = false }
                             )
-                            items.isNotEmpty() -> TextButton(
-                                onClick = { runLoad(keyword, selectedCat, page + 1) },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                            ) { Text("加载更多") }
+                        }
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        when {
+            loading -> Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+            error != null -> Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.padding(pad).fillMaxSize()
+            ) {
+                val msg = if (error == "未登录哔咔账号" || error == "哔咔登录已失效") {
+                    "哔咔登录已失效，请到 设置 → 账号管理 重新登录"
+                } else "加载失败：$error"
+                EmptyView(msg)
+                TextButton(onClick = onBack) { Text("返回") }
+            }
+            items.isEmpty() -> Box(Modifier.padding(pad).fillMaxSize()) {
+                EmptyView("没有找到漫画")
+            }
+            else -> LazyColumn(
+                contentPadding = PaddingValues(vertical = 6.dp),
+                modifier = Modifier.padding(pad).fillMaxSize()
+            ) {
+                items(items, key = { it.id }) { comic ->
+                    ComicRow(comic) { nav.safeNavigate("bikaComic/${android.net.Uri.encode(comic.id)}") }
+                }
+                if (page < pages) {
+                    item {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                            if (loadingMore) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            else TextButton(onClick = { load(page + 1) }) { Text("加载更多（${page}/${pages} 页）") }
                         }
                     }
                 }
             }
         }
-
-        if (showLoginDialog) {
-            BikaLoginDialog(
-                onDismiss = { showLoginDialog = false },
-                onLoggedIn = {
-                    showLoginDialog = false
-                    Toast.makeText(context, "哔咔账号登录成功，收藏数据与本账号通用", Toast.LENGTH_LONG).show()
-                }
-            )
-        }
     }
 }
 
-/** 手动登录已有哔咔账号对话框（如 haka_comic / 哔咔官方 App 注册的账号，凭据通用） */
+// ---------------- 组件 ----------------
+
+/** 分类卡片：封面（1:1.35）+ 名称；无封面时主题色块（最近更新入口） */
 @Composable
-private fun BikaLoginDialog(onDismiss: () -> Unit, onLoggedIn: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    fun doLogin() {
-        if (busy || email.isBlank() || password.isBlank()) return
-        scope.launch {
-            busy = true
-            error = null
-            runCatching { BikaClient.signIn(email.trim(), password) }
-                .onSuccess {
-                    SettingsStore.bikaToken = it
-                    onLoggedIn()
-                }
-                .onFailure { error = it.message ?: "登录失败" }
-            busy = false
-        }
-    }
-
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = { if (!busy) onDismiss() },
-        title = { Text("登录哔咔账号") },
-        text = {
-            Column {
-                Text(
-                    "可选。自动游客账号已可正常浏览；登录自己的哔咔账号（含 haka_comic 注册的账号）可与其收藏数据通用。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
-                    placeholder = { Text("用户名 / 邮箱") },
-                    singleLine = true,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    placeholder = { Text("密码") },
-                    singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    enabled = !busy,
-                    keyboardActions = KeyboardActions(onDone = { doLogin() }),
-                    modifier = Modifier.fillMaxWidth()
-                )
-                error?.let {
-                    Spacer(Modifier.height(8.dp))
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        },
-        confirmButton = {
-            if (busy) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+private fun CategoryCard(
+    title: String,
+    thumbUrl: String?,
+    onClick: () -> Unit
+) {
+    Column(modifier = Modifier.clickable { onClick() }) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f / 1.35f)
+                .clip(RoundedCornerShape(10.dp))
+        ) {
+            if (thumbUrl != null) {
+                CoverImage(url = thumbUrl, modifier = Modifier.fillMaxSize())
             } else {
-                TextButton(onClick = { doLogin() }, enabled = email.isNotBlank() && password.isNotBlank()) {
-                    Text("登录")
+                // 入口卡：主题色 + 大字
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.linearGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+                                )
+                            ),
+                            RoundedCornerShape(10.dp)
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
                 }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
         }
-    )
-}
-
-/** 漫画卡片：封面 + 标题 + 作者 + 喜欢数 */
-@Composable
-private fun ComicCard(d: BikaComic, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
-        Box {
-            CoverImage(
-                url = d.thumbUrl,
-                modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
-                corner = 10.dp,
-                onClick = onClick
-            )
-            if (d.finished) {
-                Text(
-                    "完结",
-                    color = androidx.compose.ui.graphics.Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(6.dp)
-                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            }
-        }
+        Spacer(Modifier.height(4.dp))
         Text(
-            d.title,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.Medium,
+            title,
+            style = MaterialTheme.typography.labelLarge,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-        Text(
-            buildString {
-                append(d.author.ifBlank { "佚名" })
-                if (d.likes > 0) append(" · ${d.likes} 赞")
-            },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            modifier = Modifier.fillMaxWidth()
         )
     }
+}
+
+/** 漫画行卡片（haka_comic ListItem 风格）：90:130 封面 + [N P]标题 + 作者 + 分类标签 + 喜欢/观看；完结角标 */
+@Composable
+private fun ComicRow(comic: BikaComic, onClick: () -> Unit) {
+    Box(modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(horizontal = 10.dp, vertical = 5.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(modifier = Modifier.width(92.dp).aspectRatio(90f / 130f).clip(RoundedCornerShape(10.dp))) {
+                CoverImage(url = comic.thumbUrl, modifier = Modifier.fillMaxSize())
+                // 完结角标（右上角绿底）
+                if (comic.finished) {
+                    Text(
+                        "完结",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = androidx.compose.ui.graphics.Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .background(
+                                androidx.compose.ui.graphics.Color(0xFF43A047).copy(alpha = 0.85f),
+                                RoundedCornerShape(bottomStart = 8.dp, topEnd = 10.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                    )
+                }
+            }
+            Column(Modifier.weight(1f).padding(top = 2.dp)) {
+                Text(
+                    if (comic.pagesCount > 0) "[${comic.pagesCount}P]${comic.title}" else comic.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    comic.author,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(4.dp))
+                // 分类标签（横滑，防挤爆）
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    comic.categories.take(4).forEach { tag ->
+                        Text(
+                            tag,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant,
+                                    RoundedCornerShape(4.dp)
+                                )
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Rounded.Favorite, contentDescription = null,
+                        tint = androidx.compose.ui.graphics.Color(0xFFEF5350),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(formatCount(comic.likes), style = MaterialTheme.typography.labelSmall)
+                    Spacer(Modifier.width(10.dp))
+                    Icon(
+                        Icons.Rounded.Visibility, contentDescription = null,
+                        tint = androidx.compose.ui.graphics.Color(0xFFFFB300),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(formatCount(comic.views), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}
+
+/** 数字格式化：>=1万 显示 x.x万 */
+private fun formatCount(n: Int): String = when {
+    n >= 10000 -> {
+        val w = n / 10000.0
+        if (w >= 10) "${w.toInt()}万" else String.format("%.1f万", w)
+    }
+    else -> "$n"
 }

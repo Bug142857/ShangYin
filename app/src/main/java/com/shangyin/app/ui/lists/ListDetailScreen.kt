@@ -128,6 +128,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
     var showCreateChild by remember { mutableStateOf(false) }
+    var showInnerPicker by remember { mutableStateOf(false) }
     var layoutMode by rememberSaveable { mutableStateOf(ListLayoutMode.GRID) }
     var isEditMode by remember { mutableStateOf(false) }
     var draggingItemId by remember { mutableStateOf<Long?>(null) }
@@ -225,7 +226,12 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             DropdownMenuItem(
                                 text = { Text("添加条目") },
                                 leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                                onClick = { menuOpen = false; nav.safeNavigate("search/$listId") }
+                                onClick = {
+                                    menuOpen = false
+                                    // 里世界清单：从已收藏的番号/本子里选；表世界：跳搜索页搜豆瓣
+                                    if ((list?.world ?: 0) == 1) showInnerPicker = true
+                                    else nav.safeNavigate("search/$listId")
+                                }
                             )
                             DropdownMenuItem(
                                 text = { Text("创建子清单") },
@@ -546,6 +552,84 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             onDismiss = { showCreateChild = false }
         )
     }
+
+    // 里世界清单：从已收藏的番号/本子条目中选择加入
+    if (showInnerPicker) {
+        InnerItemPickerDialog(
+            listId = listId,
+            onDismiss = { showInnerPicker = false }
+        )
+    }
+}
+
+/** 里世界清单添加条目：列出所有已收藏的番号视频 / 本子漫画，点选加入清单 */
+@Composable
+private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val all by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
+    val innerItems = remember(all) {
+        all.filter { it.category == "番号" || it.category == "本子" }
+            .sortedByDescending { it.updatedAt }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加到清单") },
+        text = {
+            if (innerItems.isEmpty()) {
+                Text(
+                    "还没有收藏过番号或本子\n去里世界的番号/本子页面点红心收藏",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            } else {
+                androidx.compose.foundation.lazy.LazyColumn(
+                    modifier = Modifier.height((innerItems.size * 56).coerceAtMost(320).dp)
+                ) {
+                    items(innerItems, key = { it.id }) { e ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    scope.launch {
+                                        Repo.addItemToList(e.id, listId)
+                                        onDismiss()
+                                    }
+                                }
+                                .padding(vertical = 6.dp)
+                        ) {
+                            if (!e.coverUrl.isNullOrBlank()) {
+                                CoverImage(
+                                    url = e.coverUrl,
+                                    modifier = Modifier.size(40.dp, 56.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    e.title,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    if (e.category == "番号") "番号 · ${e.subTitle}" else "本子 · ${e.subTitle}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.outline,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
 }
 
 /** 子清单网格卡片：和条目同尺寸（2:3 封面），角标区分 */

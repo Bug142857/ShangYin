@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,9 +45,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.shangyin.app.data.Repo
 import com.shangyin.app.data.bika.BikaChapter
 import com.shangyin.app.data.bika.BikaClient
 import com.shangyin.app.data.bika.BikaComic
+import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safePopBackStack
@@ -67,6 +72,11 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
 
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
+
+    // 收藏到里世界清单（category="本子"）
+    var showCollect by remember { mutableStateOf(false) }
+    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
+    val collected = remember(allItems, id) { allItems.any { it.category == "本子" && it.doubanId == id } }
 
     /** 登录失效已由 BikaClient.withAuth 自动重新注册，二次失败提示返回 */
     fun handleAuthError() {
@@ -127,6 +137,16 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showCollect = true }) {
+                        Icon(
+                            if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                            contentDescription = "收藏",
+                            tint = if (collected) androidx.compose.ui.graphics.Color(0xFFEF5350)
+                            else MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             )
@@ -310,5 +330,23 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     // 全屏阅读器（可缩放/翻页/长按保存当前页）
     viewerUrls?.let { urls ->
         PhotoViewerDialog(urls = urls, initialIndex = 0, onDismiss = { viewerUrls = null })
+    }
+
+    // 收藏对话框：存为 category="本子" 条目并挂入所选里世界清单
+    if (showCollect) {
+        val c = comic
+        CollectDialog(
+            onDismiss = { showCollect = false },
+            collect = { listId ->
+                if (c == null) false
+                else {
+                    val itemId = Repo.saveCustomItem(
+                        category = "本子", doubanId = id, title = c.title,
+                        coverUrl = c.thumbUrl, subTitle = c.author
+                    )
+                    if (itemId > 0) { Repo.addItemToList(itemId, listId); true } else false
+                }
+            }
+        )
     }
 }

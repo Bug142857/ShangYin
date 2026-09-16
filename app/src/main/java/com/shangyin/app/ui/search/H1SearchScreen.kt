@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,9 +49,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.shangyin.app.data.Repo
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.data.vod.VodSource
+import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -135,12 +139,19 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         }
     }
 
+    // 收藏番号视频到里世界清单（category="番号"，doubanId="srcId|vodId"）
+    var collectTarget by remember { mutableStateOf<Pair<VodSource, VodItem>?>(null) }
+    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
+    val savedIds = remember(allItems) {
+        allItems.filter { it.category == "番号" }.mapNotNull { it.doubanId }.toSet()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text("H1 · 外网片源", fontWeight = FontWeight.Bold)
+                        Text("番号", fontWeight = FontWeight.Bold)
                         Text(
                             if (keyword.isBlank()) "共 ${sources.size} 个源 · 页内可搜索" else "搜索「$keyword」",
                             style = MaterialTheme.typography.labelSmall,
@@ -258,7 +269,9 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                                         VodCard(
                                             item = item,
                                             opening = openingId == item.vod_id,
-                                            onClick = { playItem(src, item) }
+                                            collected = "${src.id}|${item.vod_id}" in savedIds,
+                                            onClick = { playItem(src, item) },
+                                            onCollect = { collectTarget = src to item }
                                         )
                                     }
                                 }
@@ -269,14 +282,33 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
             }
         }
     }
+
+    // 收藏番号对话框：存为 category="番号" 条目（doubanId="srcId|vodId"）挂入里世界清单
+    collectTarget?.let { (src, item) ->
+        CollectDialog(
+            onDismiss = { collectTarget = null },
+            collect = { listId ->
+                val itemId = Repo.saveCustomItem(
+                    category = "番号",
+                    doubanId = "${src.id}|${item.vod_id}",
+                    title = item.vod_name,
+                    coverUrl = item.vod_pic,
+                    subTitle = src.name
+                )
+                if (itemId > 0) { Repo.addItemToList(itemId, listId); true } else false
+            }
+        )
+    }
 }
 
-/** 外网片源卡片：海报 + 片名 + 备注，点击播放 */
+/** 外网片源卡片：海报 + 片名 + 备注，点击播放；右上角收藏番号 */
 @Composable
 private fun VodCard(
     item: VodItem,
     opening: Boolean,
-    onClick: () -> Unit
+    collected: Boolean,
+    onClick: () -> Unit,
+    onCollect: () -> Unit
 ) {
     Column(
         Modifier
@@ -291,6 +323,24 @@ private fun VodCard(
                     .height(128.dp),
                 corner = 8.dp
             )
+            // 收藏角标（右上角小爱心，不挡海报点击）
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(22.dp)
+                    .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(50)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Favorite,
+                    contentDescription = "收藏",
+                    tint = if (collected) Color(0xFFEF5350) else Color.White,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable { onCollect() }
+                )
+            }
             if (opening) {
                 Box(
                     Modifier

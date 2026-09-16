@@ -42,6 +42,8 @@ data class ItemListEntity(
     val parentId: Long? = null,
     /** 同级排序权重：子清单拖拽排序后写入，0 = 未手动排序（按 createdAt） */
     val sortIndex: Int = 0,
+    /** 归属世界：0 = 表世界（豆瓣收藏），1 = 里世界（番号/本子收藏） */
+    val world: Int = 0,
     val createdAt: Long = System.currentTimeMillis()
 )
 

@@ -4,6 +4,8 @@ import android.app.Activity
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,20 +20,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -42,14 +51,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -59,22 +70,29 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.R
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.ListWithMeta
+import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.common.dragReorderModifier
 import com.shangyin.app.ui.safeNavigate
 
+/**
+ * 主页：底部双标签「表世界 / 里世界」。
+ * - 表世界：分类 chips + 搜索栏（跳搜索页）+ 豆瓣收藏清单
+ * - 里世界：番号 / 本子 / 漫画 入口 + 里世界收藏清单
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(nav: NavHostController) {
-    val lists by Repo.observeRootListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
-    val scope = rememberCoroutineScope()
-    var draggingId by remember { mutableStateOf<Long?>(null) }
-    val currentIds = rememberUpdatedState(lists.map { it.list.id })
+    val context = LocalContext.current
+    var tab by rememberSaveable { mutableStateOf(0) } // 0=表世界 1=里世界
 
     // 双击返回退出应用（2 秒内按两次）
-    val context = LocalContext.current
     var lastBackAt by remember { mutableStateOf(0L) }
     BackHandler {
+        if (tab != 0) {
+            tab = 0
+            return@BackHandler
+        }
         val now = System.currentTimeMillis()
         if (now - lastBackAt < 2000) {
             (context as? Activity)?.finish()
@@ -87,63 +105,215 @@ fun HomeScreen(nav: NavHostController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.app_name), fontWeight = FontWeight.Bold) },
+                title = { Text(stringAppName(), fontWeight = FontWeight.Bold) },
                 actions = {
-                    IconButton(onClick = { nav.safeNavigate("search") }) {
-                        Icon(Icons.Rounded.Search, contentDescription = "去搜索")
-                    }
                     IconButton(onClick = { nav.safeNavigate("settings") }) {
                         Icon(Icons.Rounded.Menu, contentDescription = "设置")
                     }
                 }
             )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = tab == 0,
+                    onClick = { tab = 0 },
+                    icon = { Icon(Icons.Outlined.Public, contentDescription = null) },
+                    label = { Text("表世界") }
+                )
+                NavigationBarItem(
+                    selected = tab == 1,
+                    onClick = { tab = 1 },
+                    icon = { Icon(Icons.Outlined.Visibility, contentDescription = null) },
+                    label = { Text("里世界") }
+                )
+            }
         }
     ) { pad ->
-        if (lists.isEmpty()) {
-            EmptyHomeContent(nav, Modifier.padding(pad).fillMaxSize())
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.padding(pad).fillMaxSize()
-            ) {
-                items(lists, key = { it.list.id }) { meta ->
-                    CategoryTile(
-                        meta = meta,
-                        isDragging = draggingId == meta.list.id,
-                        currentIdsState = currentIds,
-                        onDragStateChange = { draggingId = it },
-                        onReorder = { from, to -> Repo.reorderRootList(from, to) },
-                        onClick = { nav.safeNavigate("list/${meta.list.id}") }
-                    )
-                }
-            }
+        when (tab) {
+            0 -> SurfaceWorld(nav, Modifier.padding(pad).fillMaxSize())
+            else -> InnerWorld(nav, Modifier.padding(pad).fillMaxSize())
         }
     }
 }
 
-/** 空主页 */
 @Composable
-private fun EmptyHomeContent(nav: NavHostController, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        EmptyView("还没有分类\n去搜索收藏喜欢的，或到设置里创建分类")
+private fun stringAppName() = androidx.compose.ui.res.stringResource(R.string.app_name)
+
+// ---------------- 表世界 ----------------
+
+/** 表世界：搜索栏 + 收藏清单 */
+@Composable
+private fun SurfaceWorld(nav: NavHostController, modifier: Modifier = Modifier) {
+    // 主页选中的搜索分类（跳搜索页时带上）
+    var searchCat by rememberSaveable { mutableStateOf("影视") }
+    var query by rememberSaveable { mutableStateOf("") }
+
+    /** 跳搜索页（带分类 + 可选关键词） */
+    fun goSearch() {
+        val kw = query.trim()
+        nav.safeNavigate(
+            if (kw.isNotEmpty()) "search?cat=$searchCat&kw=${android.net.Uri.encode(kw)}"
+            else "search?cat=$searchCat"
+        )
+        query = ""
+    }
+
+    Column(modifier) {
+        // 分类 chips
         Row(
-            modifier = Modifier.padding(top = 20.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 4.dp)
         ) {
-            OutlinedButton(onClick = { nav.safeNavigate("settings") }) {
-                Icon(Icons.Rounded.List, contentDescription = null, modifier = Modifier.height(18.dp))
-                Spacer(Modifier.height(6.dp))
-                Text("管理分类")
+            listOf("影视", "图书", "游戏", "人物").forEach { label ->
+                FilterChip(
+                    selected = searchCat == label,
+                    onClick = { searchCat = label },
+                    label = { Text(label) },
+                    modifier = Modifier.padding(end = 8.dp)
+                )
             }
-            Button(onClick = { nav.safeNavigate("search") }) {
-                Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.height(18.dp))
-                Spacer(Modifier.height(6.dp))
-                Text("搜索收藏")
+        }
+        // 搜索栏：回车或点右侧按钮跳搜索页执行搜索
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("在${searchCat}中搜索…") },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                imeAction = androidx.compose.ui.text.input.ImeAction.Search
+            ),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { goSearch() }),
+            trailingIcon = {
+                IconButton(onClick = { goSearch() }) {
+                    Icon(Icons.Rounded.KeyboardArrowRight, contentDescription = "搜索")
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+        WorldListSection(nav, world = 0, modifier = Modifier.weight(1f))
+    }
+}
+
+// ---------------- 里世界 ----------------
+
+/** 里世界：番号 / 本子 / 漫画 入口 + 里世界清单 */
+@Composable
+private fun InnerWorld(nav: NavHostController, modifier: Modifier = Modifier, ) {
+    val context = LocalContext.current
+    Column(modifier) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            InnerWorldEntry(
+                icon = Icons.Rounded.OndemandVideo,
+                title = "番号",
+                subtitle = "在线观影",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("h1search") }
+            )
+            InnerWorldEntry(
+                icon = Icons.Rounded.MenuBook,
+                title = "本子",
+                subtitle = "哔咔漫画",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("h2search") }
+            )
+            InnerWorldEntry(
+                icon = Icons.Rounded.AutoStories,
+                title = "漫画",
+                subtitle = "待开发",
+                modifier = Modifier.weight(1f),
+                onClick = { Toast.makeText(context, "漫画功能有待开发，敬请期待", Toast.LENGTH_SHORT).show() },
+                enabled = false
+            )
+        }
+        WorldListSection(nav, world = 1, modifier = Modifier.weight(1f))
+    }
+}
+
+/** 里世界入口卡片 */
+@Composable
+private fun InnerWorldEntry(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    Card(modifier = modifier.clickable(enabled = enabled) { onClick() }) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (enabled) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+                modifier = Modifier.size(30.dp)
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                color = if (enabled) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.outline
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+// ---------------- 清单区（两个世界共用） ----------------
+
+@Composable
+private fun WorldListSection(nav: NavHostController, world: Int, modifier: Modifier = Modifier) {
+    val lists by Repo.observeRootListsWithMeta(world)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    var draggingId by remember { mutableStateOf<Long?>(null) }
+    val currentIds = rememberUpdatedState(lists.map { it.list.id })
+
+    if (lists.isEmpty()) {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            EmptyView(
+                if (world == 0) "还没有清单\n去搜索收藏喜欢的，或到设置里创建清单"
+                else "还没有里世界清单\n到 设置 → 清单管理 创建，用来收藏番号视频和本子"
+            )
+        }
+    } else {
+        LazyColumn(
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = modifier
+        ) {
+            items(lists, key = { it.list.id }) { meta ->
+                CategoryTile(
+                    meta = meta,
+                    isDragging = draggingId == meta.list.id,
+                    currentIdsState = currentIds,
+                    onDragStateChange = { draggingId = it },
+                    onReorder = { from, to -> Repo.reorderRootList(world, from, to) },
+                    onClick = { nav.safeNavigate("list/${meta.list.id}") }
+                )
             }
         }
     }
@@ -197,30 +367,35 @@ private fun CategoryTile(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        androidx.compose.ui.graphics.Brush.linearGradient(listOf(c1, c2))
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                // 小方块里放清单名（基本两字；过长的自动缩小）
-                val n = meta.list.name
-                val fontSize = when {
-                    n.length <= 2 -> 16.sp
-                    n.length <= 4 -> 12.sp
-                    else -> 10.sp
+            // 有封面用封面，否则用渐变色块
+            if (meta.list.coverUrl.isNullOrBlank()) {
+                Box(
+                    modifier = Modifier
+                        .size(52.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Brush.linearGradient(listOf(c1, c2))),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val n = meta.list.name
+                    val fontSize = when {
+                        n.length <= 2 -> 16.sp
+                        n.length <= 4 -> 12.sp
+                        else -> 10.sp
+                    }
+                    Text(
+                        n,
+                        fontSize = fontSize,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.95f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    )
                 }
-                Text(
-                    n,
-                    fontSize = fontSize,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White.copy(alpha = 0.95f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 4.dp)
+            } else {
+                CoverImage(
+                    url = meta.list.coverUrl ?: "",
+                    modifier = Modifier.size(52.dp).clip(RoundedCornerShape(12.dp))
                 )
             }
             Spacer(Modifier.width(12.dp))

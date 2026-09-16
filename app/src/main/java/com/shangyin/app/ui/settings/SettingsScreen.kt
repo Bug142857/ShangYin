@@ -1,9 +1,6 @@
 package com.shangyin.app.ui.settings
 
-import android.content.Intent
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -24,11 +21,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.List
-import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SaveAlt
@@ -85,21 +80,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
     var showClearCache by remember { mutableStateOf(false) }
     var cacheSize by remember { mutableStateOf("计算中…") }
-    var showDoubanLogout by remember { mutableStateOf(false) }
-    // 豆瓣登录状态（keyInvalidate 触发重组）
-    var doubanLoginKey by remember { mutableStateOf(0) }
-    val isDoubanLoggedIn = remember(doubanLoginKey) { SettingsStore.isDoubanLoggedIn }
-    // 登录 Activity 回调：登录成功后刷新状态并重建 OkHttpClient
-    val loginLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        doubanLoginKey++  // 触发重组重新读登录状态
-        // 登录态变化后强制重建 OkHttpClient，让新 Cookie 立即生效
-        com.shangyin.app.data.douban.DoubanClient.onCookieChanged()
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            Toast.makeText(context, "豆瓣登录成功", Toast.LENGTH_SHORT).show()
-        }
-    }
 
     LaunchedEffect(Unit) {
         cacheSize = runCatching {
@@ -130,35 +110,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 清单管理
-            Card {
-                Row(
-                    modifier = Modifier.fillMaxWidth().clickable { showListManager = true }.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Rounded.List, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("清单管理", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "管理主页展示的自定义清单",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Rounded.ArrowBack,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp).rotate(180f),
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
-
-            // 主题
+            // 主题管理
             Card {
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable { showThemePicker = true }.padding(16.dp),
@@ -170,7 +122,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("主题切换", style = MaterialTheme.typography.titleSmall)
+                        Text("主题管理", style = MaterialTheme.typography.titleSmall)
                         Text(
                             themeLabel(currentTheme),
                             style = MaterialTheme.typography.bodySmall,
@@ -186,34 +138,23 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
-            // 豆瓣登录
+            // 清单管理
             Card {
                 Row(
-                    modifier = Modifier.fillMaxWidth().clickable {
-                        if (isDoubanLoggedIn) {
-                            // 已登录：长按提示退出登录（这里用点击弹确认框更直观）
-                            showDoubanLogout = true
-                        } else {
-                            // 未登录：启动登录 Activity
-                            loginLauncher.launch(Intent(context, DoubanLoginActivity::class.java))
-                        }
-                    }.padding(16.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { showListManager = true }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Rounded.Person,
-                        contentDescription = null,
-                        tint = if (isDoubanLoggedIn) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline
+                        Icons.Rounded.List, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("豆瓣登录", style = MaterialTheme.typography.titleSmall)
+                        Text("清单管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            if (isDoubanLoggedIn) "已登录，搜索结果更全" else "未登录，登录后搜索结果更全",
+                            "管理表世界 / 里世界的收藏清单",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isDoubanLoggedIn) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Icon(
@@ -225,27 +166,21 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
-            // 云同步
+            // 账号管理
             Card {
                 Row(
-                    modifier = Modifier.fillMaxWidth().clickable {
-                        nav.safeNavigate("cloudsync")
-                    }.padding(16.dp),
+                    modifier = Modifier.fillMaxWidth().clickable { nav.safeNavigate("account") }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Rounded.Cloud, contentDescription = null,
+                        Icons.Rounded.Person, contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("云端同步", style = MaterialTheme.typography.titleSmall)
+                        Text("账号管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            if (SettingsStore.isWebdavConfigured) {
-                                val t = SettingsStore.lastCloudSync
-                                if (t > 0L) "已连接 WebDAV · 上次同步 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(java.util.Date(t))}"
-                                else "已连接 WebDAV · 从未同步"
-                            } else "用 WebDAV 网盘备份/恢复，换手机不丢数据",
+                            "云端同步 · 豆瓣登录 · 哔咔登录",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -401,26 +336,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         )
     }
 
-    // 退出豆瓣登录确认
-    if (showDoubanLogout) {
-        AlertDialog(
-            onDismissRequest = { showDoubanLogout = false },
-            title = { Text("退出豆瓣登录") },
-            text = { Text("退出后搜索结果可能不完整（部分条目需要登录才能搜到），确认退出？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        SettingsStore.clearDoubanLogin()
-                        doubanLoginKey++
-                        com.shangyin.app.data.douban.DoubanClient.onCookieChanged()
-                        showDoubanLogout = false
-                        Toast.makeText(context, "已退出豆瓣登录", Toast.LENGTH_SHORT).show()
-                    }
-                ) { Text("退出", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { showDoubanLogout = false }) { Text("取消") } }
-        )
-    }
 }
 
 private fun themeLabel(theme: String): String = when (theme) {
@@ -453,6 +368,7 @@ private fun ListManagerDialog(
     }
 
     var showCreate by remember { mutableStateOf(false) }
+    var createWorld by remember { mutableStateOf(0) } // 新建清单归属：0=表世界 1=里世界
     var renameTarget by remember { mutableStateOf<ItemListEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<com.shangyin.app.data.db.ListWithMeta?>(null) }
 
@@ -474,6 +390,7 @@ private fun ListManagerDialog(
                                 name = meta.list.name,
                                 count = meta.itemCount,
                                 depth = depth,
+                                world = meta.list.world,
                                 onRename = { renameTarget = meta.list },
                                 onDelete = { deleteTarget = meta }
                             )
@@ -492,15 +409,59 @@ private fun ListManagerDialog(
         dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
 
+    // 新建清单：名称 + 归属世界
     if (showCreate) {
-        NameListDialog(
-            title = "新建清单",
-            confirmLabel = "创建",
-            onConfirm = { name ->
-                scope.launch { Repo.createList(name) }
-                showCreate = false
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showCreate = false },
+            title = { Text("新建清单") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = name,
+                        onValueChange = { name = it },
+                        placeholder = { Text("清单名称") },
+                        singleLine = true
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "归属",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = createWorld == 0,
+                            onClick = { createWorld = 0 },
+                            label = { Text("表世界") }
+                        )
+                        FilterChip(
+                            selected = createWorld == 1,
+                            onClick = { createWorld = 1 },
+                            label = { Text("里世界") }
+                        )
+                    }
+                    if (createWorld == 1) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "里世界清单用于收藏番号视频和本子",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
             },
-            onDismiss = { showCreate = false }
+            confirmButton = {
+                TextButton(
+                    enabled = name.isNotBlank(),
+                    onClick = {
+                        scope.launch { Repo.createList(name, world = createWorld) }
+                        showCreate = false
+                    }
+                ) { Text("创建") }
+            },
+            dismissButton = { TextButton(onClick = { showCreate = false }) { Text("取消") } }
         )
     }
 
@@ -553,12 +514,13 @@ private fun ListManagerDialog(
     }
 }
 
-/** 清单管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨 */
+/** 清单管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨；里世界清单带标记 */
 @Composable
 private fun ListManagerRow(
     name: String,
     count: Int,
     depth: Int = 0,
+    world: Int = 0,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -571,7 +533,11 @@ private fun ListManagerRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                if (depth > 0) "└ $name" else name,
+                buildString {
+                    append(if (depth > 0) "└ " else "")
+                    append(name)
+                    if (world == 1 && depth == 0) append("  ·里世界")
+                },
                 modifier = Modifier.weight(1f),
                 style = if (depth == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
                 fontWeight = if (depth == 0) FontWeight.SemiBold else FontWeight.Normal,

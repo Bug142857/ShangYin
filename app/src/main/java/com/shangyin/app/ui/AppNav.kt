@@ -85,7 +85,19 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 BackHandler(enabled = true) { /* ignore - 用户只能用系统退出/桌面键关App */ }
                 HomeScreen(nav)
             }
-            composable("search") { SearchScreen(nav) }
+            composable(
+                route = "search?cat={cat}&kw={kw}",
+                arguments = listOf(
+                    navArgument("cat") { type = NavType.StringType; defaultValue = "影视" },
+                    navArgument("kw") { type = NavType.StringType; defaultValue = "" }
+                )
+            ) { entry ->
+                SearchScreen(
+                    nav,
+                    initialCat = entry.arguments?.getString("cat").orEmpty(),
+                    initialKw = entry.arguments?.getString("kw").orEmpty()
+                )
+            }
             composable(
                 route = "search/{listId}",
                 arguments = listOf(navArgument("listId") { type = NavType.LongType; defaultValue = -1L })
@@ -136,6 +148,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 )
             }
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
+            composable("account") { com.shangyin.app.ui.settings.AccountScreen(nav) }
             composable("cloudsync") { CloudSyncScreen(nav) }
             composable("dataManage") { DataManageScreen(nav) }
             composable("vodSources") { VodSourceScreen(nav) }
