@@ -31,6 +31,7 @@ object ConfigBackup {
         "webdav_user",
         "webdav_pass",
         "vod_sources_json",
+        "bika_token",
         "theme"
     )
 

@@ -117,8 +117,9 @@ private fun Modifier.longPressOnlyModifier(
     }
 }
 
-/** 封面图：点击 + 长按保存；**默认 downloadable=false**（避免与外层 Modifier.clickable 手势冲突）。
- *  有 onClick 或独立卡片的场景显式传 downloadable=true 即可启用长按保存。 */
+/** 封面图：点击 + 长按保存；**默认 downloadable=false**。
+ *  保存功能已收敛：小图（列表/卡片/缩略）不挂长按手势，长按保存仅在放大查看（PhotoViewerDialog）中生效。
+ *  downloadable 参数保留，仅特殊独立卡片场景使用。 */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CoverImage(

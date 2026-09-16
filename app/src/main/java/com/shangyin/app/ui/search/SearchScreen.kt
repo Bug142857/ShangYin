@@ -240,7 +240,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                             when {
                                 selectedCat.isEmpty() -> "先选分类，再输入关键词"
                                 selectedCat == "H1" -> "选 H1 后点标签即可直接进入"
-                                selectedCat == "H2" -> "选 H2 后点标签即可直接搜图"
+                                selectedCat == "H2" -> "选 H2 后点标签即可进入哔咔漫画"
                                 else -> "在${selectedCat}中搜索…"
                             }
                         )

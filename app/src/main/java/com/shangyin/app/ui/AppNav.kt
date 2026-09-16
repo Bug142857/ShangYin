@@ -29,6 +29,7 @@ import com.shangyin.app.ui.home.HomeScreen
 import com.shangyin.app.ui.item.ItemDetailScreen
 import com.shangyin.app.ui.lists.ListDetailScreen
 import com.shangyin.app.ui.player.PlayerScreen
+import com.shangyin.app.ui.search.BikaComicDetailScreen
 import com.shangyin.app.ui.search.H1SearchScreen
 import com.shangyin.app.ui.search.H2SearchScreen
 import com.shangyin.app.ui.search.SearchScreen
@@ -154,8 +155,15 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             ) { entry ->
                 SourceBrowseScreen(nav, entry.arguments?.getString("srcId").orEmpty())
             }
-            // H2 = Pixiv 搜图（数据来自 pixiv-viewer-app 同款 HibiAPI 镜像）
+            // H2 = 哔咔漫画（数据源来自 haka_comic 项目内置的哔咔 API）
             composable("h2search") { H2SearchScreen(nav) }
+            // 哔咔漫画详情 + 阅读
+            composable(
+                route = "bikaComic/{id}",
+                arguments = listOf(navArgument("id") { type = NavType.StringType })
+            ) { entry ->
+                BikaComicDetailScreen(nav, entry.arguments?.getString("id").orEmpty())
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

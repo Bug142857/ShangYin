@@ -130,6 +130,19 @@ object SettingsStore {
             .remove(KEY_WEBDAV_PASS).remove(KEY_LAST_CLOUD_SYNC).apply()
     }
 
+    // ---------- 哔咔漫画 ----------
+
+    private const val KEY_BIKA_TOKEN = "bika_token"
+
+    /** 哔咔漫画登录 token（JWT，为空 = 未登录） */
+    var bikaToken: String
+        get() = sp.getString(KEY_BIKA_TOKEN, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_BIKA_TOKEN, v).apply()
+
+    fun clearBikaToken() {
+        sp.edit().remove(KEY_BIKA_TOKEN).apply()
+    }
+
     // ---------- 在线观影（片源管理 + 播放进度） ----------
 
     private const val KEY_VOD_SOURCES = "vod_sources_json"

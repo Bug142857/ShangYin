@@ -3,6 +3,7 @@ package com.shangyin.app.ui.search
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,16 +17,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -38,42 +41,40 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import com.shangyin.app.data.pix.PixivClient
-import com.shangyin.app.data.pix.PixivIllust
+import com.shangyin.app.data.bika.BikaClient
+import com.shangyin.app.data.bika.BikaCategory
+import com.shangyin.app.data.bika.BikaComic
 import com.shangyin.app.ui.common.CoverImage
-import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
 
-/**
- * H2 搜图页：数据来自 pixiv-viewer-app 同款 HibiAPI 镜像（无需登录），
- * 关键词搜索 Pixiv 插画，双列网格浏览，点击取详情后全屏看原图（可翻页/缩放/长按保存）。
- */
-private val MODES = listOf(
-    "部分标签" to "partial_match_for_tags",
-    "完全标签" to "exact_match_for_tags",
-    "标题说明" to "title_and_caption"
-)
-private val ORDERS = listOf("最新" to "date_desc", "最早" to "date_asc")
+/** 排序选项（哔咔 sort 参数）：dd=新到旧 da=旧到新 ld=最多喜欢 vd=最多观看 */
+private val SORTS = listOf("新到旧" to "dd", "旧到新" to "da", "最多喜欢" to "ld", "最多观看" to "vd")
 
+/**
+ * H2 哔咔漫画搜索页（数据源来自 haka_comic 项目内置的哔咔 API，需哔咔账号登录）。
+ * 未登录时显示登录面板；登录后可按分类浏览或关键词搜索，双列网格，点击进详情阅读。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun H2SearchScreen(nav: NavHostController) {
@@ -81,24 +82,45 @@ fun H2SearchScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
-    var input by remember { mutableStateOf("") }
-    var keyword by remember { mutableStateOf("") }
-    var mode by remember { mutableStateOf(MODES[0].second) }
-    var order by remember { mutableStateOf(ORDERS[0].second) }
+    var token by remember { mutableStateOf(SettingsStore.bikaToken) }
 
-    var items by remember { mutableStateOf<List<PixivIllust>>(emptyList()) }
-    var page by remember { mutableStateOf(0) }        // 已加载页码
+    if (token.isBlank()) {
+        BikaLoginPanel(
+            onLoggedIn = { t ->
+                SettingsStore.bikaToken = t
+                token = t
+            }
+        )
+        return
+    }
+
+    var input by remember { mutableStateOf("") }
+    var keyword by remember { mutableStateOf("") }                 // 已提交的搜索词
+    var selectedCat by remember { mutableStateOf<String?>(null) }  // 分类标题，null=全部
+    var sort by remember { mutableStateOf(SORTS[0].second) }
+    var categories by remember { mutableStateOf<List<BikaCategory>>(emptyList()) }
+
+    var items by remember { mutableStateOf<List<BikaComic>>(emptyList()) }
+    var page by remember { mutableStateOf(0) }
+    var total by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
     var noMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var openingId by remember { mutableStateOf<Long?>(null) }  // 正在取详情的作品
-    var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
     val gridState = rememberLazyGridState()
-    val reqId = remember { androidx.compose.runtime.mutableIntStateOf(0) } // 过期搜索响应丢弃
+    val reqId = remember { mutableIntStateOf(0) } // 过期响应丢弃
 
-    fun runSearch(q: String, pg: Int) {
-        if (q.isEmpty() || loading || loadingMore) return
+    /** 登录失效处理：清 token 回登录面板 */
+    fun handleAuthError() {
+        SettingsStore.clearBikaToken()
+        token = ""
+        items = emptyList()
+        Toast.makeText(context, "哔咔登录已失效，请重新登录", Toast.LENGTH_SHORT).show()
+    }
+
+    /** 加载一页：有关键词走搜索，否则走分类浏览（selectedCat=null 时为全站列表） */
+    fun runLoad(q: String, cat: String?, pg: Int) {
+        if (loading || loadingMore) return
         val my = ++reqId.value
         if (pg == 1) {
             keyword = q
@@ -108,18 +130,26 @@ fun H2SearchScreen(nav: NavHostController) {
         }
         scope.launch {
             if (pg == 1) loading = true else loadingMore = true
-            runCatching { PixivClient.searchIllust(q, mode, order, pg) }
-                .onSuccess { list ->
-                    if (reqId.value != my) return@launch
-                    items = if (pg == 1) list else items + list
-                    page = pg
-                    noMore = list.size < 30
+            runCatching {
+                if (q.isNotBlank()) {
+                    BikaClient.searchComics(token, q, pg, sort)
+                } else {
+                    BikaClient.fetchComics(token, pg, cat, sort)
                 }
-                .onFailure { e ->
-                    if (reqId.value == my && pg == 1) {
-                        error = "搜索失败：${e.message ?: e.javaClass.simpleName}"
-                    }
+            }.onSuccess { resp ->
+                if (reqId.value != my) return@launch
+                items = if (pg == 1) resp.docs else items + resp.docs
+                page = resp.page
+                total = resp.total
+                noMore = resp.page >= resp.pages || resp.docs.isEmpty()
+            }.onFailure { e ->
+                if (reqId.value != my) return@launch
+                if (e is BikaClient.BikaAuthException) {
+                    handleAuthError()
+                } else if (pg == 1) {
+                    error = "加载失败：${e.message ?: e.javaClass.simpleName}"
                 }
+            }
             if (reqId.value == my) {
                 loading = false
                 loadingMore = false
@@ -127,44 +157,26 @@ fun H2SearchScreen(nav: NavHostController) {
         }
     }
 
+    fun reload() = runLoad(keyword, selectedCat, 1)
+
     fun doSearch() {
         val q = input.trim()
-        if (q.isEmpty()) return
         keyboard?.hide()
-        runSearch(q, 1)
+        selectedCat = null
+        runLoad(q, null, 1)
     }
 
-    /** 模式/排序变化后用当前关键词重搜 */
-    fun reload() {
-        if (keyword.isNotBlank()) runSearch(keyword, 1)
-    }
-
-    /** 点击卡片：取详情拿全部原图，弹全屏预览 */
-    fun openDetail(d: PixivIllust) {
-        if (openingId != null) return
-        scope.launch {
-            openingId = d.id
-            runCatching { PixivClient.illustDetail(d.id) }
-                .onSuccess { detail ->
-                    val urls = detail?.let { PixivClient.allPageImages(it) }.orEmpty()
-                        .ifEmpty {
-                            listOfNotNull(PixivClient.imgProxy(d.imageUrls?.large))
-                                .filter { it.isNotBlank() }
-                        }
-                    viewerUrls = if (urls.isNotEmpty()) urls
-                    else listOf(PixivClient.coverUrl(d)).filter { it.isNotBlank() }
-                }
-                .onFailure {
-                    Toast.makeText(context, "获取图片失败：${it.message ?: "网络错误"}", Toast.LENGTH_SHORT).show()
-                }
-            openingId = null
-        }
+    // 已登录时预加载分类列表
+    LaunchedEffect(Unit) {
+        runCatching { BikaClient.fetchCategories(token) }
+            .onSuccess { categories = it }
+            .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("搜图") },
+                title = { Text("哔咔漫画") },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -182,7 +194,7 @@ fun H2SearchScreen(nav: NavHostController) {
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
-                    placeholder = { Text("输入标签 / 画师 / 关键词…") },
+                    placeholder = { Text("搜索漫画关键词…") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { doSearch() }),
@@ -192,7 +204,7 @@ fun H2SearchScreen(nav: NavHostController) {
                     Icon(Icons.Rounded.Search, contentDescription = "搜索")
                 }
             }
-            // 匹配模式
+            // 分类 chips（全部 + 官方分类）
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -200,16 +212,24 @@ fun H2SearchScreen(nav: NavHostController) {
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 2.dp)
             ) {
-                MODES.forEach { (label, value) ->
+                val cats = listOf("全部") + categories.map { it.title }
+                cats.forEach { c ->
                     FilterChip(
-                        selected = mode == value,
-                        onClick = { mode = value; reload() },
-                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                        selected = (c == "全部" && selectedCat == null) || selectedCat == c,
+                        onClick = {
+                            val newCat = if (c == "全部") null else c
+                            if (newCat != selectedCat) {
+                                selectedCat = newCat
+                                keyboard?.hide()
+                                runLoad(input.trim().ifBlank { "" }, newCat, 1)
+                            }
+                        },
+                        label = { Text(c, style = MaterialTheme.typography.labelMedium) },
                         modifier = Modifier.padding(end = 8.dp)
                     )
                 }
             }
-            // 排序
+            // 排序 chips
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -217,12 +237,16 @@ fun H2SearchScreen(nav: NavHostController) {
                     .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 2.dp)
             ) {
-                Text("排序", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "排序",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(Modifier.width(8.dp))
-                ORDERS.forEach { (label, value) ->
+                SORTS.forEach { (label, value) ->
                     FilterChip(
-                        selected = order == value,
-                        onClick = { order = value; reload() },
+                        selected = sort == value,
+                        onClick = { sort = value; reload() },
                         label = { Text(label, style = MaterialTheme.typography.labelMedium) },
                         modifier = Modifier.padding(end = 8.dp)
                     )
@@ -230,16 +254,16 @@ fun H2SearchScreen(nav: NavHostController) {
             }
 
             when {
-                // 未搜索空态
-                keyword.isEmpty() -> Column(
+                // 未发起任何浏览/搜索
+                keyword.isBlank() && selectedCat == null && items.isEmpty() && !loading -> Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                     modifier = Modifier.fillMaxSize().padding(32.dp)
                 ) {
-                    Text("输入关键词开始搜图", style = MaterialTheme.typography.titleMedium)
+                    Text("选择分类浏览，或输入关键词搜索", style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "支持中文 / 日文 / 英文标签，如：东方、東方、原神",
+                        "数据来自哔咔漫画，共 ${total.coerceAtLeast(0)} 部可看",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -252,7 +276,7 @@ fun H2SearchScreen(nav: NavHostController) {
                 ) {
                     CircularProgressIndicator()
                     Spacer(Modifier.height(10.dp))
-                    Text("搜索中…", style = MaterialTheme.typography.bodySmall)
+                    Text("加载中…", style = MaterialTheme.typography.bodySmall)
                 }
                 // 首页失败
                 error != null && items.isEmpty() -> Column(
@@ -262,7 +286,7 @@ fun H2SearchScreen(nav: NavHostController) {
                 ) {
                     Text(error!!, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { runSearch(keyword, 1) }) { Text("重试") }
+                    TextButton(onClick = { reload() }) { Text("重试") }
                 }
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
@@ -274,13 +298,10 @@ fun H2SearchScreen(nav: NavHostController) {
                 ) {
                     items(items.size) { i ->
                         val d = items[i]
-                        IllustCard(
-                            d = d,
-                            opening = openingId == d.id,
-                            onClick = { openDetail(d) }
-                        )
+                        ComicCard(d = d, onClick = {
+                            nav.safeNavigate("bikaComic/" + java.net.URLEncoder.encode(d.id, "UTF-8"))
+                        })
                     }
-                    // 加载更多 / 没有更多
                     item(span = { GridItemSpan(2) }) {
                         when {
                             loadingMore -> Row(
@@ -292,15 +313,15 @@ fun H2SearchScreen(nav: NavHostController) {
                                 Spacer(Modifier.width(8.dp))
                                 Text("加载中…", style = MaterialTheme.typography.bodySmall)
                             }
-                            noMore -> Text(
+                            noMore && items.isNotEmpty() -> Text(
                                 "没有更多了",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp),
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                textAlign = TextAlign.Center
                             )
                             items.isNotEmpty() -> TextButton(
-                                onClick = { runSearch(keyword, page + 1) },
+                                onClick = { runLoad(keyword, selectedCat, page + 1) },
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
                             ) { Text("加载更多") }
                         }
@@ -309,16 +330,100 @@ fun H2SearchScreen(nav: NavHostController) {
             }
         }
     }
+}
 
-    // 全屏原图预览（可缩放/翻页/长按保存）
-    viewerUrls?.let { urls ->
-        PhotoViewerDialog(urls = urls, initialIndex = 0, onDismiss = { viewerUrls = null })
+/** 登录面板：哔咔账号（邮箱 + 密码） */
+@Composable
+private fun BikaLoginPanel(onLoggedIn: (String) -> Unit) {
+    val scope = rememberCoroutineScope()
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxSize().padding(32.dp)
+    ) {
+        Spacer(Modifier.weight(1f))
+        Text("哔咔漫画", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "使用哔咔漫画账号登录",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.height(24.dp))
+        OutlinedTextField(
+            value = email,
+            onValueChange = { email = it },
+            placeholder = { Text("邮箱") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(10.dp))
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            placeholder = { Text("密码") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    if (!busy && email.isNotBlank() && password.isNotBlank()) {
+                        scope.launch {
+                            busy = true
+                            error = null
+                            runCatching { BikaClient.signIn(email.trim(), password) }
+                                .onSuccess { onLoggedIn(it) }
+                                .onFailure { error = "登录失败：${it.message ?: "网络错误"}" }
+                            busy = false
+                        }
+                    }
+                }
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = {
+                scope.launch {
+                    busy = true
+                    error = null
+                    runCatching { BikaClient.signIn(email.trim(), password) }
+                        .onSuccess { onLoggedIn(it) }
+                        .onFailure { error = "登录失败：${it.message ?: "网络错误"}" }
+                    busy = false
+                }
+            },
+            enabled = !busy && email.isNotBlank() && password.isNotBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (busy) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text("登录")
+        }
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.weight(1f))
+        Text(
+            "需要哔咔漫画账号（可在哔咔官方 App 注册）\n登录信息仅保存在本机",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
-/** 单个作品卡片：封面 + 多页/AI 角标 + 标题 + 画师 + 收藏数 */
+/** 漫画卡片：封面 + 标题 + 作者 + 喜欢数 */
 @Composable
-private fun IllustCard(d: PixivIllust, opening: Boolean, onClick: () -> Unit) {
+private fun ComicCard(d: BikaComic, onClick: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -326,48 +431,22 @@ private fun IllustCard(d: PixivIllust, opening: Boolean, onClick: () -> Unit) {
     ) {
         Box {
             CoverImage(
-                url = PixivClient.coverUrl(d),
+                url = d.thumbUrl,
                 modifier = Modifier.fillMaxWidth().aspectRatio(3f / 4f),
                 corner = 10.dp,
-                downloadable = true,   // 长按直接保存封面
                 onClick = onClick
             )
-            // 多页角标
-            if (d.pageCount > 1) {
+            if (d.finished) {
                 Text(
-                    "${d.pageCount}页",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(6.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            }
-            // AI 作品角标（illust_ai_type: 2=AI生成 3=AI辅助）
-            if (d.illustAiType >= 2) {
-                Text(
-                    "AI",
-                    color = Color.White,
+                    "完结",
+                    color = androidx.compose.ui.graphics.Color.White,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(6.dp)
-                        .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
+                        .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
                         .padding(horizontal = 5.dp, vertical = 1.dp)
                 )
-            }
-            // 详情加载中指示
-            if (opening) {
-                Box(
-                    Modifier
-                        .matchParentSize()
-                        .background(Color.Black.copy(alpha = 0.35f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(26.dp), strokeWidth = 2.dp, color = Color.White)
-                }
             }
         }
         Text(
@@ -380,8 +459,8 @@ private fun IllustCard(d: PixivIllust, opening: Boolean, onClick: () -> Unit) {
         )
         Text(
             buildString {
-                append(d.user?.name ?: "")
-                if (d.totalBookmarks > 0) append(" · ${d.totalBookmarks} 收藏")
+                append(d.author.ifBlank { "佚名" })
+                if (d.likes > 0) append(" · ${d.likes} 赞")
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
