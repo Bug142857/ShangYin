@@ -49,7 +49,6 @@ import com.shangyin.app.data.bika.BikaComic
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safePopBackStack
-import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
 
 /**
@@ -69,18 +68,16 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
 
-    /** 登录失效 → 提示并返回 */
+    /** 登录失效已由 BikaClient.withAuth 自动重新注册，二次失败提示返回 */
     fun handleAuthError() {
-        SettingsStore.clearBikaToken()
-        Toast.makeText(context, "哔咔登录已失效，请重新登录", Toast.LENGTH_LONG).show()
+        Toast.makeText(context, "哔咔账号异常，请重新进入", Toast.LENGTH_LONG).show()
         nav.safePopBackStack()
     }
 
     // 详情 + 章节并行加载，互不影响
     LaunchedEffect(id) {
-        val token = SettingsStore.bikaToken
         scope.launch {
-            runCatching { BikaClient.fetchComicDetail(token, id) }
+            runCatching { BikaClient.withAuth { t -> BikaClient.fetchComicDetail(t, id) } }
                 .onSuccess { comic = it }
                 .onFailure {
                     if (it is BikaClient.BikaAuthException) handleAuthError()
@@ -88,7 +85,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 }
         }
         scope.launch {
-            runCatching { BikaClient.fetchChapters(token, id) }
+            runCatching { BikaClient.withAuth { t -> BikaClient.fetchChapters(t, id) } }
                 .onSuccess { chapters = it }
                 .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
             chaptersLoading = false
@@ -100,7 +97,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         if (loadingEp != null) return
         scope.launch {
             loadingEp = order
-            runCatching { BikaClient.fetchChapterImages(SettingsStore.bikaToken, id, order) }
+            runCatching { BikaClient.withAuth { t -> BikaClient.fetchChapterImages(t, id, order) } }
                 .onSuccess { urls ->
                     if (urls.isEmpty()) Toast.makeText(context, "该章节暂无图片", Toast.LENGTH_SHORT).show()
                     else viewerUrls = urls
@@ -108,7 +105,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 .onFailure {
                     Toast.makeText(
                         context,
-                        if (it is BikaClient.BikaAuthException) "哔咔登录已失效，请重新登录" else "获取图片失败：${it.message ?: "网络错误"}",
+                        if (it is BikaClient.BikaAuthException) "哔咔账号异常，请重新进入" else "获取图片失败：${it.message ?: "网络错误"}",
                         Toast.LENGTH_SHORT
                     ).show()
                     if (it is BikaClient.BikaAuthException) handleAuthError()

@@ -28,7 +28,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -54,7 +53,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,8 +70,9 @@ import kotlinx.coroutines.launch
 private val SORTS = listOf("新到旧" to "dd", "旧到新" to "da", "最多喜欢" to "ld", "最多观看" to "vd")
 
 /**
- * H2 哔咔漫画搜索页（数据源来自 haka_comic 项目内置的哔咔 API，需哔咔账号登录）。
- * 未登录时显示登录面板；登录后可按分类浏览或关键词搜索，双列网格，点击进详情阅读。
+ * H2 哔咔漫画搜索页（数据源来自 haka_comic 项目内置的哔咔 API）。
+ * 无需手动登录：首次进入自动注册游客账号，token 失效自动重新注册。
+ * 可按分类浏览或关键词搜索，双列网格，点击进详情阅读。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,15 +81,35 @@ fun H2SearchScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
-    var token by remember { mutableStateOf(SettingsStore.bikaToken) }
+    var initializing by remember { mutableStateOf(SettingsStore.bikaToken.isBlank()) }
+    var initError by remember { mutableStateOf<String?>(null) }
 
-    if (token.isBlank()) {
-        BikaLoginPanel(
-            onLoggedIn = { t ->
-                SettingsStore.bikaToken = t
-                token = t
+    if (initializing) {
+        // 自动注册哔咔游客账号（无需手动登录/注册）
+        LaunchedEffect(Unit) {
+            runCatching { BikaClient.ensureGuestAccount() }
+                .onSuccess { initializing = false }
+                .onFailure { initError = it.message ?: "网络错误" }
+        }
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.fillMaxSize().padding(32.dp)
+        ) {
+            if (initError == null) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(10.dp))
+                Text("正在初始化哔咔账号…", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Text(
+                    "初始化失败：$initError",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = { initError = null }) { Text("重试") }
             }
-        )
+        }
         return
     }
 
@@ -110,12 +129,10 @@ fun H2SearchScreen(nav: NavHostController) {
     val gridState = rememberLazyGridState()
     val reqId = remember { mutableIntStateOf(0) } // 过期响应丢弃
 
-    /** 登录失效处理：清 token 回登录面板 */
+    /** 登录失效已由 BikaClient.withAuth 自动重新注册处理；二次失败按普通错误展示 */
     fun handleAuthError() {
-        SettingsStore.clearBikaToken()
-        token = ""
         items = emptyList()
-        Toast.makeText(context, "哔咔登录已失效，请重新登录", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "哔咔账号已自动重新注册，请重试", Toast.LENGTH_SHORT).show()
     }
 
     /** 加载一页：有关键词走搜索，否则走分类浏览（selectedCat=null 时为全站列表） */
@@ -131,10 +148,12 @@ fun H2SearchScreen(nav: NavHostController) {
         scope.launch {
             if (pg == 1) loading = true else loadingMore = true
             runCatching {
-                if (q.isNotBlank()) {
-                    BikaClient.searchComics(token, q, pg, sort)
-                } else {
-                    BikaClient.fetchComics(token, pg, cat, sort)
+                BikaClient.withAuth { t ->
+                    if (q.isNotBlank()) {
+                        BikaClient.searchComics(t, q, pg, sort)
+                    } else {
+                        BikaClient.fetchComics(t, pg, cat, sort)
+                    }
                 }
             }.onSuccess { resp ->
                 if (reqId.value != my) return@launch
@@ -166,9 +185,9 @@ fun H2SearchScreen(nav: NavHostController) {
         runLoad(q, null, 1)
     }
 
-    // 已登录时预加载分类列表
+    // 预加载分类列表
     LaunchedEffect(Unit) {
-        runCatching { BikaClient.fetchCategories(token) }
+        runCatching { BikaClient.withAuth { t -> BikaClient.fetchCategories(t) } }
             .onSuccess { categories = it }
             .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
     }
@@ -329,95 +348,6 @@ fun H2SearchScreen(nav: NavHostController) {
                 }
             }
         }
-    }
-}
-
-/** 登录面板：哔咔账号（邮箱 + 密码） */
-@Composable
-private fun BikaLoginPanel(onLoggedIn: (String) -> Unit) {
-    val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxSize().padding(32.dp)
-    ) {
-        Spacer(Modifier.weight(1f))
-        Text("哔咔漫画", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "使用哔咔漫画账号登录",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.height(24.dp))
-        OutlinedTextField(
-            value = email,
-            onValueChange = { email = it },
-            placeholder = { Text("邮箱") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = password,
-            onValueChange = { password = it },
-            placeholder = { Text("密码") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    if (!busy && email.isNotBlank() && password.isNotBlank()) {
-                        scope.launch {
-                            busy = true
-                            error = null
-                            runCatching { BikaClient.signIn(email.trim(), password) }
-                                .onSuccess { onLoggedIn(it) }
-                                .onFailure { error = "登录失败：${it.message ?: "网络错误"}" }
-                            busy = false
-                        }
-                    }
-                }
-            ),
-            modifier = Modifier.fillMaxWidth()
-        )
-        Spacer(Modifier.height(16.dp))
-        Button(
-            onClick = {
-                scope.launch {
-                    busy = true
-                    error = null
-                    runCatching { BikaClient.signIn(email.trim(), password) }
-                        .onSuccess { onLoggedIn(it) }
-                        .onFailure { error = "登录失败：${it.message ?: "网络错误"}" }
-                    busy = false
-                }
-            },
-            enabled = !busy && email.isNotBlank() && password.isNotBlank(),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            if (busy) {
-                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-            }
-            Text("登录")
-        }
-        error?.let {
-            Spacer(Modifier.height(8.dp))
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        Spacer(Modifier.weight(1f))
-        Text(
-            "需要哔咔漫画账号（可在哔咔官方 App 注册）\n登录信息仅保存在本机",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
     }
 }
 

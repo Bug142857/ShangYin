@@ -1,5 +1,6 @@
 package com.shangyin.app.data.bika
 
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -157,6 +158,47 @@ object BikaClient {
     }
 
     // ---------- 接口 ----------
+
+    /** 注册哔咔账号（接口无需验证码，与 haka_comic 注册表单一致；安全问题用固定值） */
+    private suspend fun register(email: String, password: String, name: String): Unit =
+        withContext(Dispatchers.IO) {
+            val body = """{"birthday":"2005-01-01","email":"${jsonEncode(email)}","gender":"m",""" +
+                """"name":"${jsonEncode(name)}","password":"${jsonEncode(password)}",""" +
+                """"question1":"1","question2":"2","question3":"3","answer1":"4","answer2":"5","answer3":"6"}"""
+            request("POST", "auth/register", token = "", bodyJson = body)
+            Unit
+        }
+
+    /** 生成随机账号并注册+登录，成功后 token 写入 SettingsStore */
+    suspend fun ensureGuestAccount(): String {
+        val t = System.currentTimeMillis()
+        val rand = java.security.SecureRandom()
+        val pw = buildString {
+            repeat(16) { append("abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"[rand.nextInt(56)]) }
+        }
+        val email = "lz$t"
+        val name = "lzfx${rand.nextInt(9000) + 1000}"
+        register(email, pw, name)
+        val token = signIn(email, pw)
+        SettingsStore.bikaToken = token
+        return token
+    }
+
+    /**
+     * 带 token 的调用包装：无 token 先自动注册游客账号；
+     * 调用中遇登录失效自动重新注册一次并重试原请求（对调用方透明）。
+     */
+    suspend fun <T> withAuth(block: suspend (String) -> T): T {
+        var token = SettingsStore.bikaToken
+        if (token.isBlank()) token = ensureGuestAccount()
+        return try {
+            block(token)
+        } catch (e: BikaAuthException) {
+            SettingsStore.clearBikaToken()
+            val fresh = ensureGuestAccount()
+            block(fresh)
+        }
+    }
 
     /** 登录，返回 JWT token */
     suspend fun signIn(email: String, password: String): String = withContext(Dispatchers.IO) {
