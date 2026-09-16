@@ -86,6 +86,12 @@ fun HomeScreen(nav: NavHostController) {
     val context = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(0) } // 0=表世界 1=里世界
 
+    // 两个世界的清单流在顶层收集：Tab 切换不重建流，避免闪一下"还没有清单"
+    val surfaceLists by Repo.observeRootListsWithMeta(0)
+        .collectAsStateWithLifecycle(initialValue = null)
+    val innerLists by Repo.observeRootListsWithMeta(1)
+        .collectAsStateWithLifecycle(initialValue = null)
+
     // 双击返回退出应用（2 秒内按两次）
     var lastBackAt by remember { mutableStateOf(0L) }
     BackHandler {
@@ -131,8 +137,8 @@ fun HomeScreen(nav: NavHostController) {
         }
     ) { pad ->
         when (tab) {
-            0 -> SurfaceWorld(nav, Modifier.padding(pad).fillMaxSize())
-            else -> InnerWorld(nav, Modifier.padding(pad).fillMaxSize())
+            0 -> SurfaceWorld(nav, surfaceLists, Modifier.padding(pad).fillMaxSize())
+            else -> InnerWorld(nav, innerLists, Modifier.padding(pad).fillMaxSize())
         }
     }
 }
@@ -144,7 +150,11 @@ private fun stringAppName() = androidx.compose.ui.res.stringResource(R.string.ap
 
 /** 表世界：搜索栏 + 收藏清单 */
 @Composable
-private fun SurfaceWorld(nav: NavHostController, modifier: Modifier = Modifier) {
+private fun SurfaceWorld(
+    nav: NavHostController,
+    lists: List<ListWithMeta>?,
+    modifier: Modifier = Modifier
+) {
     // 主页选中的搜索分类（跳搜索页时带上）
     var searchCat by rememberSaveable { mutableStateOf("影视") }
     var query by rememberSaveable { mutableStateOf("") }
@@ -197,7 +207,7 @@ private fun SurfaceWorld(nav: NavHostController, modifier: Modifier = Modifier) 
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         )
-        WorldListSection(nav, world = 0, modifier = Modifier.weight(1f))
+        WorldListSection(nav, world = 0, lists = lists, modifier = Modifier.weight(1f))
     }
 }
 
@@ -205,7 +215,11 @@ private fun SurfaceWorld(nav: NavHostController, modifier: Modifier = Modifier) 
 
 /** 里世界：番号 / 本子 / 漫画 入口 + 里世界清单 */
 @Composable
-private fun InnerWorld(nav: NavHostController, modifier: Modifier = Modifier, ) {
+private fun InnerWorld(
+    nav: NavHostController,
+    lists: List<ListWithMeta>?,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     Column(modifier) {
         Row(
@@ -217,27 +231,24 @@ private fun InnerWorld(nav: NavHostController, modifier: Modifier = Modifier, ) 
             InnerWorldEntry(
                 icon = Icons.Rounded.OndemandVideo,
                 title = "番号",
-                subtitle = "在线观影",
                 modifier = Modifier.weight(1f),
                 onClick = { nav.safeNavigate("h1search") }
             )
             InnerWorldEntry(
                 icon = Icons.Rounded.MenuBook,
                 title = "本子",
-                subtitle = "哔咔漫画",
                 modifier = Modifier.weight(1f),
                 onClick = { nav.safeNavigate("h2search") }
             )
             InnerWorldEntry(
                 icon = Icons.Rounded.AutoStories,
                 title = "漫画",
-                subtitle = "待开发",
                 modifier = Modifier.weight(1f),
                 onClick = { Toast.makeText(context, "漫画功能有待开发，敬请期待", Toast.LENGTH_SHORT).show() },
                 enabled = false
             )
         }
-        WorldListSection(nav, world = 1, modifier = Modifier.weight(1f))
+        WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))
     }
 }
 
@@ -246,7 +257,6 @@ private fun InnerWorld(nav: NavHostController, modifier: Modifier = Modifier, ) 
 private fun InnerWorldEntry(
     icon: ImageVector,
     title: String,
-    subtitle: String,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onClick: () -> Unit
@@ -254,7 +264,7 @@ private fun InnerWorldEntry(
     Card(modifier = modifier.clickable(enabled = enabled) { onClick() }) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp)
+            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
         ) {
             Icon(
                 icon,
@@ -270,11 +280,6 @@ private fun InnerWorldEntry(
                 color = if (enabled) MaterialTheme.colorScheme.onSurface
                 else MaterialTheme.colorScheme.outline
             )
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -282,13 +287,19 @@ private fun InnerWorldEntry(
 // ---------------- 清单区（两个世界共用） ----------------
 
 @Composable
-private fun WorldListSection(nav: NavHostController, world: Int, modifier: Modifier = Modifier) {
-    val lists by Repo.observeRootListsWithMeta(world)
-        .collectAsStateWithLifecycle(initialValue = emptyList())
+private fun WorldListSection(
+    nav: NavHostController,
+    world: Int,
+    lists: List<ListWithMeta>?,
+    modifier: Modifier = Modifier
+) {
+    // lists 由 HomeScreen 顶层收集传入：null=尚未加载（留白避免闪空态），空=真的没有清单
     var draggingId by remember { mutableStateOf<Long?>(null) }
-    val currentIds = rememberUpdatedState(lists.map { it.list.id })
+    val currentIds = rememberUpdatedState(lists?.map { it.list.id } ?: emptyList())
 
-    if (lists.isEmpty()) {
+    if (lists == null) {
+        Box(modifier)
+    } else if (lists.isEmpty()) {
         Column(
             modifier = modifier,
             verticalArrangement = Arrangement.Center,
@@ -367,35 +378,28 @@ private fun CategoryTile(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
-            // 有封面用封面，否则用渐变色块
-            if (meta.list.coverUrl.isNullOrBlank()) {
-                Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Brush.linearGradient(listOf(c1, c2))),
-                    contentAlignment = Alignment.Center
-                ) {
-                    val n = meta.list.name
-                    val fontSize = when {
-                        n.length <= 2 -> 16.sp
-                        n.length <= 4 -> 12.sp
-                        else -> 10.sp
-                    }
-                    Text(
-                        n,
-                        fontSize = fontSize,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White.copy(alpha = 0.95f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
+            // 统一用渐变色块 + 清单名（不展示封面图）
+            Box(
+                modifier = Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Brush.linearGradient(listOf(c1, c2))),
+                contentAlignment = Alignment.Center
+            ) {
+                val n = meta.list.name
+                val fontSize = when {
+                    n.length <= 2 -> 16.sp
+                    n.length <= 4 -> 12.sp
+                    else -> 10.sp
                 }
-            } else {
-                CoverImage(
-                    url = meta.list.coverUrl ?: "",
-                    modifier = Modifier.size(52.dp).clip(RoundedCornerShape(12.dp))
+                Text(
+                    n,
+                    fontSize = fontSize,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White.copy(alpha = 0.95f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 4.dp)
                 )
             }
             Spacer(Modifier.width(12.dp))

@@ -1,6 +1,7 @@
 package com.shangyin.app.ui.search
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +47,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,8 +62,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.bika.BikaChapter
 import com.shangyin.app.data.bika.BikaClient
 import com.shangyin.app.data.bika.BikaComic
+import com.shangyin.app.data.bika.BikaCategory
 import com.shangyin.app.data.bika.BikaComicsPage
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
@@ -69,6 +73,25 @@ import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
+
+/**
+ * 本子页会话内存缓存：会话内复用接口结果，避免每次进页/返回都重新请求（哔咔接口延迟高）。
+ * - 分类列表只拉一次
+ * - 列表按 分类|关键词|排序 维度缓存（切排序再切回、返回列表都即时呈现）
+ * - 详情/章节缓存，从阅读页返回详情即时
+ */
+object BikaUiCache {
+    var categories by mutableStateOf<List<BikaCategory>?>(null)
+
+    data class ComicsCache(val items: List<BikaComic>, val page: Int, val pages: Int)
+
+    val comics = mutableMapOf<String, ComicsCache>() // key = cat|kw|sort
+    val details = mutableMapOf<String, BikaComic>() // comicId -> 详情
+    val chapters = mutableMapOf<String, List<BikaChapter>>() // comicId -> 章节
+
+    fun comicsKey(category: String?, keyword: String?, sort: String): String =
+        "${category ?: ""}|${keyword ?: ""}|$sort"
+}
 
 /**
  * 本子（哔咔漫画）页，界面参考 haka_comic：
@@ -112,10 +135,16 @@ fun H2SearchScreen(nav: NavHostController) {
     }
 
     // null = 一级分类网格；非 null = 二级列表（分类名 / "最近更新"）
-    var viewCategory by remember { mutableStateOf<String?>(null) }
-    var searchKeyword by remember { mutableStateOf<String?>(null) } // 搜索模式列表
+    // rememberSaveable：进漫画详情返回后恢复当前分类/搜索状态
+    var viewCategory by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchKeyword by rememberSaveable { mutableStateOf<String?>(null) } // 搜索模式列表
 
     val isSearchMode = searchKeyword != null
+
+    // 系统返回键：在二级列表（分类/搜索）时先回到一级分类页，而非直接退回里世界
+    BackHandler(enabled = viewCategory != null || isSearchMode) {
+        if (isSearchMode) searchKeyword = null else viewCategory = null
+    }
 
     if (viewCategory == null && !isSearchMode) {
         CategoryGridPage(
@@ -145,15 +174,20 @@ private fun CategoryGridPage(
     onSearch: (String) -> Unit
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
-    var categories by remember { mutableStateOf<List<com.shangyin.app.data.bika.BikaCategory>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    // 优先用缓存：进过一次后秒开
+    var categories by remember { mutableStateOf(BikaUiCache.categories ?: emptyList()) }
+    var loading by remember { mutableStateOf(BikaUiCache.categories == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        loading = true
+        if (BikaUiCache.categories != null) return@LaunchedEffect // 已有缓存，不重复拉
         runCatching { BikaClient.withAuth { t -> BikaClient.fetchCategories(t) } }
-            .onSuccess { categories = it; error = null }
+            .onSuccess {
+                BikaUiCache.categories = it
+                categories = it
+                error = null
+            }
             .onFailure { error = it.message }
         loading = false
     }
@@ -245,14 +279,17 @@ private fun ComicListPage(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var items by remember { mutableStateOf<List<BikaComic>>(emptyList()) }
-    var page by remember { mutableIntStateOf(1) }
-    var pages by remember { mutableIntStateOf(1) }
-    var loading by remember { mutableStateOf(true) }
-    var loadingMore by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var sort by remember { mutableStateOf("dd") } // dd新到旧/da旧到新/ld最多喜欢/vd最多观看
+    var sort by rememberSaveable { mutableStateOf("dd") } // dd新到旧/da旧到新/ld最多喜欢/vd最多观看
     var sortMenu by remember { mutableStateOf(false) }
+    // 列表缓存：按 分类|关键词|排序 维度，命中直接呈现不重新请求（切排序/返回列表都即时）
+    val cacheKey = BikaUiCache.comicsKey(category, keyword, sort)
+    val cached = BikaUiCache.comics[cacheKey]
+    var items by remember(cacheKey) { mutableStateOf(cached?.items ?: emptyList()) }
+    var page by remember(cacheKey) { mutableIntStateOf(cached?.page ?: 1) }
+    var pages by remember(cacheKey) { mutableIntStateOf(cached?.pages ?: 1) }
+    var loading by remember(cacheKey) { mutableStateOf(cached == null) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var error by remember(cacheKey) { mutableStateOf<String?>(null) }
     val reqId = remember { mutableIntStateOf(0) }
 
     /** 加载一页 */
@@ -269,11 +306,14 @@ private fun ComicListPage(
                 }
             }.onSuccess { resp: BikaComicsPage ->
                 if (my == reqId.intValue) {
-                    if (pg == 1) items = resp.docs
-                    else items = (items + resp.docs).distinctBy { it.id }
+                    val merged = if (pg == 1) resp.docs else (items + resp.docs).distinctBy { it.id }
+                    items = merged
                     page = resp.page
                     pages = resp.pages
                     error = null
+                    // 会话缓存上限 12 组，超出丢最旧的
+                    if (BikaUiCache.comics.size > 12) BikaUiCache.comics.remove(BikaUiCache.comics.keys.first())
+                    BikaUiCache.comics[cacheKey] = BikaUiCache.ComicsCache(merged, resp.page, resp.pages)
                 }
             }.onFailure {
                 if (my == reqId.intValue) error = it.message
@@ -282,8 +322,10 @@ private fun ComicListPage(
         }
     }
 
-    // 进入页面 / 切排序 重新加载第一页
-    LaunchedEffect(category, keyword, sort) { load(1) }
+    // 缓存命中直接用，否则加载第一页
+    LaunchedEffect(category, keyword, sort) {
+        if (BikaUiCache.comics[cacheKey] == null) load(1)
+    }
 
     Scaffold(
         topBar = {

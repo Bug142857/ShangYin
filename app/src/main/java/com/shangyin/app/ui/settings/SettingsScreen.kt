@@ -20,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.outlined.Public
+import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -52,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -355,17 +358,21 @@ private fun ListManagerDialog(
     val scope = rememberCoroutineScope()
     val lists by Repo.observeListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // 父子层级 → 深度优先扁平化（支持任意级子清单，逐级缩进）
+    // 父子层级 → 深度优先扁平化（支持任意级子清单，逐级缩进），按表/里世界分两组
     val childrenMap = lists.groupBy { it.list.parentId }
-    val flatTree: List<Pair<com.shangyin.app.data.db.ListWithMeta, Int>> = buildList {
+    fun buildTree(world: Int): List<Pair<com.shangyin.app.data.db.ListWithMeta, Int>> = buildList {
         fun push(parentId: Long?, depth: Int) {
-            childrenMap[parentId].orEmpty().forEach { m ->
-                add(m to depth)
-                if (depth < 5) push(m.list.id, depth + 1) // 深度上限防环
-            }
+            childrenMap[parentId].orEmpty()
+                .filter { it.list.world == world }
+                .forEach { m ->
+                    add(m to depth)
+                    if (depth < 5) push(m.list.id, depth + 1) // 深度上限防环
+                }
         }
         push(null, 0)
     }
+    val surfaceTree = buildTree(0)
+    val innerTree = buildTree(1)
 
     var showCreate by remember { mutableStateOf(false) }
     var createWorld by remember { mutableStateOf(0) } // 新建清单归属：0=表世界 1=里世界
@@ -377,23 +384,40 @@ private fun ListManagerDialog(
         title = { Text("清单管理") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                if (lists.isEmpty()) {
+                if (surfaceTree.isEmpty() && innerTree.isEmpty()) {
                     Text(
-                        "还没有清单，点 + 创建一个",
+                        "还没有清单，点「新建清单」创建一个",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline
                     )
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        flatTree.forEach { (meta, depth) ->
-                            ListManagerRow(
-                                name = meta.list.name,
-                                count = meta.itemCount,
-                                depth = depth,
-                                world = meta.list.world,
-                                onRename = { renameTarget = meta.list },
-                                onDelete = { deleteTarget = meta }
-                            )
+                    if (surfaceTree.isNotEmpty()) {
+                        WorldSectionHeader("表世界", Icons.Outlined.Public, surfaceTree.size)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            surfaceTree.forEach { (meta, depth) ->
+                                ListManagerRow(
+                                    name = meta.list.name,
+                                    count = meta.itemCount,
+                                    depth = depth,
+                                    onRename = { renameTarget = meta.list },
+                                    onDelete = { deleteTarget = meta }
+                                )
+                            }
+                        }
+                    }
+                    if (innerTree.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        WorldSectionHeader("里世界", Icons.Outlined.Visibility, innerTree.size)
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            innerTree.forEach { (meta, depth) ->
+                                ListManagerRow(
+                                    name = meta.list.name,
+                                    count = meta.itemCount,
+                                    depth = depth,
+                                    onRename = { renameTarget = meta.list },
+                                    onDelete = { deleteTarget = meta }
+                                )
+                            }
                         }
                     }
                 }
@@ -514,13 +538,41 @@ private fun ListManagerDialog(
     }
 }
 
-/** 清单管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨；里世界清单带标记 */
+/** 清单管理的分节标题：表世界 / 里世界 */
+@Composable
+private fun WorldSectionHeader(label: String, icon: ImageVector, count: Int) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(bottom = 6.dp)
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            "$count 个清单",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline
+        )
+    }
+}
+
+/** 清单管理里的一行：按 depth 缩进（0=父清单，1=子清单，2=子子清单…），层级一眼可辨 */
 @Composable
 private fun ListManagerRow(
     name: String,
     count: Int,
     depth: Int = 0,
-    world: Int = 0,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -533,11 +585,7 @@ private fun ListManagerRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                buildString {
-                    append(if (depth > 0) "└ " else "")
-                    append(name)
-                    if (world == 1 && depth == 0) append("  ·里世界")
-                },
+                if (depth > 0) "└ $name" else name,
                 modifier = Modifier.weight(1f),
                 style = if (depth == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
                 fontWeight = if (depth == 0) FontWeight.SemiBold else FontWeight.Normal,

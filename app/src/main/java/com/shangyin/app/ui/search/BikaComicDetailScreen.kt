@@ -65,10 +65,11 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var comic by remember { mutableStateOf<BikaComic?>(null) }
+    // 优先用会话缓存：从阅读页返回详情秒开
+    var comic by remember { mutableStateOf(BikaUiCache.details[id]) }
     var detailError by remember { mutableStateOf<String?>(null) }
-    var chapters by remember { mutableStateOf<List<BikaChapter>>(emptyList()) }
-    var chaptersLoading by remember { mutableStateOf(true) }
+    var chapters by remember { mutableStateOf(BikaUiCache.chapters[id] ?: emptyList()) }
+    var chaptersLoading by remember { mutableStateOf(!BikaUiCache.chapters.containsKey(id)) }
 
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
@@ -88,7 +89,10 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     LaunchedEffect(id) {
         scope.launch {
             runCatching { BikaClient.withAuth { t -> BikaClient.fetchComicDetail(t, id) } }
-                .onSuccess { comic = it }
+                .onSuccess {
+                    comic = it
+                    BikaUiCache.details[id] = it
+                }
                 .onFailure {
                     if (it is BikaClient.BikaAuthException) handleAuthError()
                     else detailError = it.message ?: "加载失败"
@@ -96,7 +100,10 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         }
         scope.launch {
             runCatching { BikaClient.withAuth { t -> BikaClient.fetchChapters(t, id) } }
-                .onSuccess { chapters = it }
+                .onSuccess {
+                    chapters = it
+                    BikaUiCache.chapters[id] = it
+                }
                 .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
             chaptersLoading = false
         }
@@ -344,7 +351,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                         category = "本子", doubanId = id, title = c.title,
                         coverUrl = c.thumbUrl, subTitle = c.author
                     )
-                    if (itemId > 0) { Repo.addItemToList(itemId, listId); true } else false
+                    if (itemId > 0) { Repo.addItemToList(listId, itemId); true } else false
                 }
             }
         )

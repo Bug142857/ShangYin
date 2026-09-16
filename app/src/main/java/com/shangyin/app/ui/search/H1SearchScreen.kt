@@ -74,6 +74,17 @@ private data class SrcState(
     val page: Int             // 已加载到的页码
 )
 
+/**
+ * 番号页会话缓存：跨页面导航（进播放页/详情页再返回）保留搜索词与已加载结果，
+ * 返回时不再重新加载（stateKeyword 记录 stateMap 对应的关键词）。
+ */
+private object H1Cache {
+    var stateKeyword: String? = null
+    var keyword: String = ""
+    var input: String = ""
+    var stateMap: Map<String, SrcState> = emptyMap()
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
@@ -88,13 +99,25 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         SettingsStore.getVodSources().filter { it.enabled && it.region == "proxy" }
     }
 
-    var keyword by remember { mutableStateOf(initialKw.trim()) }
-    var input by remember { mutableStateOf(initialKw.trim()) }
+    // 从会话缓存恢复（首次进入用路由关键词初始化）
+    if (H1Cache.stateKeyword == null) {
+        H1Cache.keyword = initialKw.trim()
+        H1Cache.input = initialKw.trim()
+    }
+    var keyword by remember { mutableStateOf(H1Cache.keyword) }
+    var input by remember { mutableStateOf(H1Cache.input) }
     // srcId -> 每源加载状态
-    var stateMap by remember { mutableStateOf<Map<String, SrcState>>(emptyMap()) }
+    var stateMap by remember { mutableStateOf(H1Cache.stateMap) }
     val loadingKeys = remember { mutableSetOf<String>() } // "srcId:page" 防重复加载
     // 点击后正在取详情播放的影片 id（防重复点击）
     var openingId by remember { mutableStateOf<Long?>(null) }
+
+    // 状态变化实时写回缓存（进播放页后返回可完整恢复）
+    LaunchedEffect(keyword, input, stateMap) {
+        H1Cache.keyword = keyword
+        H1Cache.input = input
+        H1Cache.stateMap = stateMap
+    }
 
     /** 加载某源某页（kw 变化后返回的旧响应会被丢弃） */
     fun load(src: VodSource, page: Int, kw: String) {
@@ -121,11 +144,18 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         }
     }
 
-    // 关键词变化（首次进入 / 页内搜索）→ 全部源并行加载第一页
+    // 关键词变化：新关键词全部源并行重载；恢复场景只补加载缺失的源
     LaunchedEffect(keyword) {
         if (sources.isEmpty()) return@LaunchedEffect
-        coroutineScope {
-            sources.forEach { src -> launch { load(src, 1, keyword) } }
+        if (H1Cache.stateKeyword == keyword) {
+            sources.filter { it.id !in stateMap }.forEach { src -> load(src, 1, keyword) }
+        } else {
+            H1Cache.stateKeyword = keyword
+            loadingKeys.clear()
+            stateMap = emptyMap()
+            coroutineScope {
+                sources.forEach { src -> launch { load(src, 1, keyword) } }
+            }
         }
     }
 
@@ -295,7 +325,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                     coverUrl = item.vod_pic,
                     subTitle = src.name
                 )
-                if (itemId > 0) { Repo.addItemToList(itemId, listId); true } else false
+                if (itemId > 0) { Repo.addItemToList(listId, itemId); true } else false
             }
         )
     }

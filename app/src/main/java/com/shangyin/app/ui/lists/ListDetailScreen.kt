@@ -592,7 +592,7 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
                                 .fillMaxWidth()
                                 .clickable {
                                     scope.launch {
-                                        Repo.addItemToList(e.id, listId)
+                                        Repo.addItemToList(listId, e.id)
                                         onDismiss()
                                     }
                                 }
