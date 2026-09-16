@@ -30,6 +30,7 @@ import com.shangyin.app.ui.item.ItemDetailScreen
 import com.shangyin.app.ui.lists.ListDetailScreen
 import com.shangyin.app.ui.player.PlayerScreen
 import com.shangyin.app.ui.search.H1SearchScreen
+import com.shangyin.app.ui.search.H2SearchScreen
 import com.shangyin.app.ui.search.SearchScreen
 import com.shangyin.app.ui.search.SourceBrowseScreen
 import com.shangyin.app.ui.settings.CloudSyncScreen
@@ -153,6 +154,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             ) { entry ->
                 SourceBrowseScreen(nav, entry.arguments?.getString("srcId").orEmpty())
             }
+            // H2 = Pixiv 搜图（数据来自 pixiv-viewer-app 同款 HibiAPI 镜像）
+            composable("h2search") { H2SearchScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

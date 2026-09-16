@@ -112,9 +112,11 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
             Toast.makeText(context, "请先选择要搜索的分类", Toast.LENGTH_SHORT).show()
             return
         }
-        // H2 分类预留（待开发）
+        // H2 = Pixiv 搜图：直接进入搜图页（页内搜索）
         if (selectedCat == "H2") {
-            Toast.makeText(context, "H2 分类开发中，敬请期待", Toast.LENGTH_SHORT).show()
+            keyboard?.hide()
+            query = ""
+            nav.safeNavigate("h2search")
             return
         }
         // H1 = 外网片源目录：直接进入浏览页（页内可搜索），按源分组展示资源
@@ -212,6 +214,12 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                                     query = ""
                                     nav.safeNavigate("h1search")
                                 }
+                                // 点 H2 直接进入 Pixiv 搜图页，无需再点搜索
+                                "H2" -> {
+                                    keyboard?.hide()
+                                    query = ""
+                                    nav.safeNavigate("h2search")
+                                }
                                 else -> selectedCat = if (selectedCat == label) "" else label
                             }
                         },
@@ -232,7 +240,7 @@ fun SearchScreen(nav: NavHostController, targetListId: Long = -1L) {
                             when {
                                 selectedCat.isEmpty() -> "先选分类，再输入关键词"
                                 selectedCat == "H1" -> "选 H1 后点标签即可直接进入"
-                                selectedCat == "H2" -> "H2 分类开发中"
+                                selectedCat == "H2" -> "选 H2 后点标签即可直接搜图"
                                 else -> "在${selectedCat}中搜索…"
                             }
                         )
