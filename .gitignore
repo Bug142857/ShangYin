@@ -72,3 +72,5 @@ _testsources_*.py
 # Build outputs
 app-debug.apk
 老郑分享-debug.apk
+.kotlin/
+.trae/
