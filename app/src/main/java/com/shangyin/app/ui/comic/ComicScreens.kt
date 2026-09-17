@@ -145,7 +145,7 @@ fun ComicHomeScreen(nav: NavHostController) {
                 )
             }.onFailure {
                 if (reset) items = emptyList()
-                error = it.message ?: "网络错误"
+                error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "网络错误"
             }
             loading = false
         }
@@ -374,12 +374,17 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     LaunchedEffect(retryKey) {
         loading = true
         error = null
+        // 串行请求：避免并行协程取消连锁导致错误信息丢失（message=null 只能显示"网络错误"）
         runCatching {
-            coroutineScope {
-                launch { detail = KomiicClient.comicById(comicId) }
-                launch { chapters = KomiicClient.chapters(comicId) }
+            val d = KomiicClient.comicById(comicId)
+            detail = d
+            chapters = KomiicClient.chapters(comicId)
+        }.onFailure {
+            error = buildString {
+                append(it::class.simpleName ?: "Exception")
+                it.message?.takeIf { m -> m.isNotBlank() }?.let { m -> append(": $m") }
             }
-        }.onFailure { error = it.message ?: "网络错误" }
+        }
         loading = false
     }
 
@@ -391,7 +396,10 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                     if (urls.isEmpty()) Toast.makeText(context, "该章节暂无图片", Toast.LENGTH_SHORT).show()
                     else viewerUrls = urls
                 }
-                .onFailure { Toast.makeText(context, "获取图片失败：${it.message ?: "网络错误"}", Toast.LENGTH_SHORT).show() }
+                .onFailure {
+                    val msg = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "网络错误"
+                    Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
+                }
         }
     }
 
@@ -409,7 +417,10 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
             }.onSuccess {
                 if (list.isEmpty()) Toast.makeText(context, "暂无图片", Toast.LENGTH_SHORT).show()
                 else allImages = list
-            }.onFailure { Toast.makeText(context, "获取图片失败：${it.message ?: "网络错误"}", Toast.LENGTH_SHORT).show() }
+            }.onFailure {
+                val msg = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "网络错误"
+                Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
+            }
             loadingAll = false
         }
     }

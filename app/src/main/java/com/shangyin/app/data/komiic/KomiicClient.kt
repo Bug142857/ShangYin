@@ -129,8 +129,11 @@ object KomiicClient {
                     root["data"]?.jsonObject ?: throw Exception("响应数据为空")
                 }
             } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 if (e.message?.contains("HTTP") == true || e.message?.contains("接口") == true) throw e
-                throw Exception("连接 Komiic 失败，可能需要外网环境：${e.message ?: "网络错误"}")
+                // message 为空时附异常类名，便于定位（如 SocketTimeoutException/UnknownHostException）
+                val detail = e.message?.takeIf { m -> m.isNotBlank() } ?: e::class.simpleName ?: "未知异常"
+                throw Exception("连接 Komiic 失败，可能需要外网环境：$detail")
             }
         }
 
