@@ -62,14 +62,14 @@ class App : Application(), ImageLoaderFactory {
                                 "Version/16.0 Mobile/15E148 Safari/604.1"
                         )
                         .build()
-                } else if (host == "komiic.com" && req.url.encodedPath.startsWith("/api/image/")) {
-                    // Komiic 章节图防盗链：fragment "#c/{comicId}/{chapterId}" → 完整路径 Referer
+                } else if ((host == "komiic.com" || host == "komiic.cc") && req.url.encodedPath.startsWith("/api/image/")) {
+                    // Komiic 章节图防盗链（主/镜像域）：fragment "#c/{comicId}/{chapterId}" → 完整路径 Referer
                     // （fragment 不会发送到服务器，仅本地编码归属信息）；UA 与 KomiicClient 同款 Chrome/119
                     req.url.fragment?.takeIf { it.startsWith("c/") }?.let { f ->
                         val p = f.removePrefix("c/").split('/')
                         if (p.size == 2) {
                             req.newBuilder()
-                                .header("Referer", "https://komiic.com/comic/${p[0]}/chapter/${p[1]}")
+                                .header("Referer", "https://${req.url.host}/comic/${p[0]}/chapter/${p[1]}")
                                 .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
                                 .build()
                         } else req

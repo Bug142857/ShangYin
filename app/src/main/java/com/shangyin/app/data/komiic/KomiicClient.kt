@@ -63,8 +63,10 @@ data class KomiicChapter(
  *  2. Chrome/119 移动端 UA（与 Cronet 版本一致，防 UA-指纹交叉校验）+ Accept-Language
  *  3. 强制 HTTP/1.1 仅作为 Cronet 不可用时的 OkHttp 兜底行为
  *  4. DoH 加密 DNS（阿里 dns.alidns.com）：直连场景下系统 DNS 解析可能被污染；Cronet 激活时用它自带的 DNS，DoH 仅兜底路径生效
- * 诊断：详情空数据错误附带 cf-ray（Cloudflare 边缘节点），可定位用户命中哪个边缘/是否被缓解
- * 封面在 public.komiic.com（无需 Referer）；章节图 https://komiic.com/api/image/{kid}
+ *  5. 双主机自动切换（komiic.com → komiic.cc，同服务镜像 2026-09-17 实测等价）：传输失败自动轮换；详情空数据逐主机重试并记忆可用主机
+ *  6. API 请求带浏览器同源上下文头（Origin/Referer/Sec-Fetch-*）：与站点网页 fetch 完全一致，规避对非浏览器上下文的软拒
+ * 诊断：详情空数据错误附带 网络栈/边缘节点/失败主机 与浏览器对比指引
+ * 封面在 public.komiic.com（无需 Referer）；章节图 {主/镜像域}/api/image/{kid}（双域均可，2026-09-17 实测）
  * 防盗链实测必须带完整路径 Referer：https://komiic.com/comic/{comicId}/chapter/{chapterId}
  * —— 因此章节图 URL 末尾追加 fragment "#c/{comicId}/{chapterId}" 编码归属信息，
  * 由 App 全局拦截器 / ImageDownloader 提取后转成 Referer（fragment 不会发送到服务器）。
@@ -72,7 +74,9 @@ data class KomiicChapter(
  */
 object KomiicClient {
 
-    private const val API = "https://komiic.com/api/query"
+    /** 双主机：com/komiic.com 为主，cc=komiic.cc 为同服务镜像（2026-09-17 实测 API/章节图完全等价），
+     *  传输失败或返回空数据时自动切换 */
+    private val HOSTS = listOf("https://komiic.com", "https://komiic.cc")
     private const val PAGE_SIZE = 20
 
     /** Chrome/119 移动端 UA（与 cronet-embedded 119 版本一致）；章节图加载（App.kt）也复用 */
@@ -102,6 +106,13 @@ object KomiicClient {
 
     /** 最近一次响应的 Cloudflare 边缘节点（cf-ray，如 xxxx-HKG），用于空数据诊断 */
     @Volatile private var lastEdge: String? = null
+
+    /** 当前活跃主机下标（会话内记忆，成功后更新） */
+    @Volatile private var activeHostIdx = 0
+
+    /** 传输栈名（诊断用）：Cronet 是否可用在 client 构建时已确定 */
+    private val transportName: String
+        get() = if (cronetEngine != null) "Cronet" else "OkHttp兜底"
 
     /**
      * Cronet（Chromium 同款网络栈）：TLS 指纹/HTTP2 与真实 Chrome 完全一致，
@@ -176,36 +187,60 @@ object KomiicClient {
         })
     }
 
-    /** 发送 GraphQL 请求，返回 data 对象（errors 时抛异常，提示需外网环境） */
-    private suspend fun post(operation: String, query: String, variables: kotlinx.serialization.json.JsonObject) =
+    /** 发送 GraphQL 请求：按 活跃主机→备用主机 顺序尝试，传输失败自动切换；成功后记忆活跃主机 */
+    private suspend fun post(operation: String, query: String, variables: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+        var lastErr: Exception? = null
+        for (i in HOSTS.indices) {
+            val idx = (activeHostIdx + i) % HOSTS.size
+            try {
+                val data = postOnce(HOSTS[idx], operation, query, variables)
+                activeHostIdx = idx
+                return data
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastErr = e
+            }
+        }
+        throw lastErr ?: Exception("接口错误：所有主机均失败")
+    }
+
+    /** 对指定主机发一次 GraphQL 请求（带浏览器同源上下文头：Origin/Referer/Sec-Fetch，与站点网页 fetch 完全一致） */
+    private suspend fun postOnce(base: String, operation: String, query: String, variables: kotlinx.serialization.json.JsonObject) =
         withContext(Dispatchers.IO) {
             val body = buildJsonObject {
                 put("operationName", operation)
                 put("query", query)
                 put("variables", variables)
             }.toString()
-            val req = Request.Builder().url(API)
+            val req = Request.Builder().url("$base/api/query")
+                .header("Origin", base)
+                .header("Referer", "$base/")
+                .header("Accept", "*/*")
+                .header("Sec-Fetch-Dest", "empty")
+                .header("Sec-Fetch-Mode", "cors")
+                .header("Sec-Fetch-Site", "same-origin")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
             try {
                 client.newCall(req).execute().use { resp ->
                     lastEdge = resp.header("cf-ray")
                     val text = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) throw Exception("接口错误 HTTP ${resp.code}")
+                    if (!resp.isSuccessful) throw Exception("接口错误 HTTP ${resp.code}（$base）")
                     val root = json.parseToJsonElement(text).jsonObject
                     root["errors"]?.jsonArray?.firstOrNull()?.let { e ->
                         throw Exception(
-                            e.jsonObject["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误"
+                            e.jsonObject["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误（$base）"
                         )
                     }
-                    root["data"]?.jsonObject ?: throw Exception("响应数据为空")
+                    root["data"]?.jsonObject ?: throw Exception("响应数据为空（$base）")
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 if (e.message?.contains("HTTP") == true || e.message?.contains("接口") == true) throw e
                 // message 为空时附异常类名，便于定位（如 SocketTimeoutException/UnknownHostException）
                 val detail = e.message?.takeIf { m -> m.isNotBlank() } ?: e::class.simpleName ?: "未知异常"
-                throw Exception("连接 Komiic 失败，可能需要外网环境：$detail")
+                throw Exception("连接 $base 失败，可能需要外网环境：$detail")
             }
         }
 
@@ -241,16 +276,33 @@ object KomiicClient {
         (post("allCategory", Q_ALL_CATEGORY, buildJsonObject { })["allCategory"] as? kotlinx.serialization.json.JsonArray)
             ?.let { json.decodeFromJsonElement<List<KomiicCategory>>(it) } ?: emptyList()
 
-    /** 漫画详情（防御性：data.comicById 缺失/null 时给出有意义错误而非 NPE） */
+    /** 漫画详情（逐主机尝试：某主机返回 null 时切换备用主机，全部失败才报错并附诊断信息） */
     suspend fun comicById(id: String): KomiicComic {
-        val data = post("comicById", Q_COMIC_BY_ID, buildJsonObject { put("comicId", id) })
-        val obj = data["comicId"] as? kotlinx.serialization.json.JsonObject
-            ?: throw Exception(
-                "站点返回空数据（id=$id，边缘节点=${lastEdge ?: "未知"}）。" +
-                    "请用手机浏览器打开 komiic.com 对比测试：浏览器正常→请截图反馈此错误；" +
-                    "浏览器也异常→当前网络/VPN 节点被站点限制，请更换节点或切换 WiFi/流量"
-            )
-        return json.decodeFromJsonElement(obj)
+        var firstFailMsg: String? = null
+        for (i in HOSTS.indices) {
+            val idx = (activeHostIdx + i) % HOSTS.size
+            val base = HOSTS[idx]
+            val data = try {
+                postOnce(base, "comicById", Q_COMIC_BY_ID, buildJsonObject { put("comicId", id) })
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (firstFailMsg == null) firstFailMsg = e.message ?: "连接失败"
+                continue
+            }
+            val obj = data["comicId"] as? kotlinx.serialization.json.JsonObject
+            if (obj != null) {
+                activeHostIdx = idx
+                return json.decodeFromJsonElement(obj)
+            }
+            if (firstFailMsg == null)
+                firstFailMsg = "${base.removePrefix("https://")} 返回空数据（边缘节点=${lastEdge ?: "未知"}）"
+        }
+        throw Exception(
+            "站点返回空数据（id=$id，网络栈=$transportName）：$firstFailMsg，备用主机同样失败。" +
+                "请用手机浏览器打开 komiic.cc 测试：浏览器正常→请截图反馈此错误；" +
+                "浏览器也异常→当前网络/VPN 节点被站点限制，请更换节点或切换 WiFi/流量"
+        )
     }
 
     /** 章节列表（type: chapter/book 等，serial 为话数） */
@@ -270,7 +322,7 @@ object KomiicClient {
         return images.map { img ->
             val kid = img["kid"]?.jsonPrimitive?.contentOrNull ?: ""
             if (kid.isBlank()) null
-            else "https://komiic.com/api/image/$kid#c/$comicId/$chapterId"
+            else "${HOSTS[activeHostIdx]}/api/image/$kid#c/$comicId/$chapterId"
         }.filterNotNull()
     }
 }

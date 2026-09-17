@@ -47,12 +47,12 @@ object ImageDownloader {
             val finalReq = when {
                 host.endsWith("doubanio.com") || host.endsWith("douban.com") ->
                     req.newBuilder().header("Referer", "https://m.douban.com/").build()
-                host == "komiic.com" && url.contains("/api/image/") -> {
+                (host == "komiic.com" || host == "komiic.cc") && url.contains("/api/image/") -> {
                     val frag = url.substringAfter('#', "")
                     val p = frag.removePrefix("c/").split('/')
                     if (p.size == 2) {
                         req.newBuilder()
-                            .header("Referer", "https://komiic.com/comic/${p[0]}/chapter/${p[1]}")
+                            .header("Referer", "https://$host/comic/${p[0]}/chapter/${p[1]}")
                             .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
                             .build()
                     } else req
