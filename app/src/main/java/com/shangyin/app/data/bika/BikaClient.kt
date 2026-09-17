@@ -66,10 +66,12 @@ object BikaClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    // 快速失败：连接 6s / 读写 15s，每域名只试 1 次，两域名总耗时上限约 27s 出错误态（可重试），
+    // 避免 8s+20s×2次×2域名 最坏 2 分钟的"一直转圈"
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
-        .writeTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
+        .writeTimeout(15, TimeUnit.SECONDS)
         .build()
 
     /** 双域名：官方主域名优先（需外网），失败再试备用中转 go2778；成功域名会话内记忆优先 */
@@ -129,25 +131,23 @@ object BikaClient {
         var text: String? = null
         var okHost = ""
         var lastNetErr: Exception? = null
-        // 每个域名失败重试一次（连接抖动），全部域名失败才报错（提示需外网环境）
+        // 每域名只试 1 次（快速失败），全部域名失败才报错（提示需外网环境）
         outer@ for (host in ordered) {
-            for (attempt in 0 until 2) {
-                val builder = Request.Builder().url(host + pathWithQuery)
-                headers.forEach { (k, v) -> builder.header(k, v) }
-                if (bodyJson != null) {
-                    builder.method(method, bodyJson.toRequestBody("application/json; charset=UTF-8".toMediaType()))
-                } else {
-                    builder.get()
+            val builder = Request.Builder().url(host + pathWithQuery)
+            headers.forEach { (k, v) -> builder.header(k, v) }
+            if (bodyJson != null) {
+                builder.method(method, bodyJson.toRequestBody("application/json; charset=UTF-8".toMediaType()))
+            } else {
+                builder.get()
+            }
+            try {
+                text = client.newCall(builder.build()).execute().use { resp ->
+                    resp.body?.string().orEmpty()
                 }
-                try {
-                    text = client.newCall(builder.build()).execute().use { resp ->
-                        resp.body?.string().orEmpty()
-                    }
-                    okHost = host
-                    break@outer
-                } catch (e: Exception) {
-                    lastNetErr = e
-                }
+                okHost = host
+                break@outer
+            } catch (e: Exception) {
+                lastNetErr = e
             }
         }
         if (text == null) {

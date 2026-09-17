@@ -15,8 +15,9 @@ import com.shangyin.app.ui.settings.SettingsStore
  * 外网片源点击播放公共流程：
  * 补全详情（无播放地址时）→ 解析线路（parsePlayGroups 内部默认只留 3u8）→
  * 按播放地址定位断点续播（itemId 用 0）→ 跳播放页。
- * popCurrent=true 时进播放器前先弹出当前页（收藏条目详情页自动跳播场景），
- * 这样播放器按返回键直接回到来源列表，不会落回过渡残页。
+ * popCurrent=true 时用单次原子导航（navigate + popUpTo 当前页）进入播放器：
+ * 播放器返回直接回到来源列表。⚠️ 不能 safePopBackStack()+safeNavigate() 连调两次——
+ * NavGuard 300ms 节流会把第二次调用静默吞掉，导致播放器永远打不开。
  * 返回 true 表示已发起播放（导航离开），false 表示无地址等失败。
  */
 suspend fun openVodAndPlay(
@@ -53,7 +54,17 @@ suspend fun openVodAndPlay(
     PlayerSession.groupIndex = 0
     PlayerSession.startIndex = idx
     PlayerSession.startPosMs = pos
-    if (popCurrent) nav.safePopBackStack()
-    nav.safeNavigate("player")
+    if (popCurrent) {
+        // 单次原子导航：弹出当前页并进入播放器（绕开 NavGuard 双调用节流冲突）
+        val curId = nav.currentBackStackEntry?.destination?.id
+        runCatching {
+            nav.navigate("player") {
+                curId?.let { popUpTo(it) { inclusive = true } }
+                launchSingleTop = true
+            }
+        }
+    } else {
+        nav.safeNavigate("player")
+    }
     return true
 }

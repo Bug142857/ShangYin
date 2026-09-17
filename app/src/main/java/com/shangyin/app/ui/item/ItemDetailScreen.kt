@@ -198,13 +198,18 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
             return@Scaffold
         }
-        // 本子：跳哔咔详情
+        // 本子：跳哔咔详情（单次原子导航弹出本页，NavGuard 节流会吞掉连续两次调用）
         if (entity.category == "本子") {
             LaunchedEffect(entity.id) {
                 if (forwarded) return@LaunchedEffect
                 forwarded = true
-                nav.safePopBackStack()
-                nav.safeNavigate("bikaComic/${android.net.Uri.encode(entity.doubanId)}")
+                val curId = nav.currentBackStackEntry?.destination?.id
+                runCatching {
+                    nav.navigate("bikaComic/${android.net.Uri.encode(entity.doubanId)}") {
+                        curId?.let { popUpTo(it) { inclusive = true } }
+                        launchSingleTop = true
+                    }
+                }
             }
             Column(Modifier.padding(pad).fillMaxSize()) {}
             return@Scaffold
