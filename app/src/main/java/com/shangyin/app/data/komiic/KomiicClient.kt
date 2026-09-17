@@ -65,6 +65,14 @@ object KomiicClient {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            // 默认 okhttp UA 易被站点 WAF 拦截（返回 200 空数据而非报错），伪装浏览器 UA
+            chain.proceed(
+                chain.request().newBuilder()
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
+                    .build()
+            )
+        }
         .build()
 
     private val P = "\$"
@@ -173,7 +181,7 @@ object KomiicClient {
     suspend fun comicById(id: String): KomiicComic {
         val data = post("comicById", Q_COMIC_BY_ID, buildJsonObject { put("comicId", id) })
         val obj = data["comicId"] as? kotlinx.serialization.json.JsonObject
-            ?: throw Exception("漫画数据为空（id=$id，可能已被删除或接口限流）")
+            ?: throw Exception("站点返回空数据（id=$id）。漫画未删除，多为当前网络被站点限制：请尝试关闭 VPN/代理或切换 WiFi/流量")
         return json.decodeFromJsonElement(obj)
     }
 
