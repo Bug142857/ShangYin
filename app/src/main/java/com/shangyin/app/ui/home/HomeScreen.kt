@@ -244,8 +244,7 @@ private fun InnerWorld(
                 icon = Icons.Rounded.AutoStories,
                 title = "漫画",
                 modifier = Modifier.weight(1f),
-                onClick = { Toast.makeText(context, "漫画功能有待开发，敬请期待", Toast.LENGTH_SHORT).show() },
-                enabled = false
+                onClick = { nav.safeNavigate("comicHome") }
             )
         }
         WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))

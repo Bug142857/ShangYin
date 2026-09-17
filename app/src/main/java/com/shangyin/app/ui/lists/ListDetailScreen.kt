@@ -568,7 +568,7 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val all by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
     val innerItems = remember(all) {
-        all.filter { it.category == "番号" || it.category == "本子" }
+        all.filter { it.category == "番号" || it.category == "本子" || it.category == "漫画" }
             .sortedByDescending { it.updatedAt }
     }
     androidx.compose.material3.AlertDialog(
@@ -613,7 +613,11 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    if (e.category == "番号") "番号 · ${e.subTitle}" else "本子 · ${e.subTitle}",
+                                    when (e.category) {
+                                        "番号" -> "番号 · ${e.subTitle}"
+                                        "本子" -> "本子 · ${e.subTitle}"
+                                        else -> "漫画 · ${e.subTitle}"
+                                    },
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.outline,
                                     maxLines = 1,

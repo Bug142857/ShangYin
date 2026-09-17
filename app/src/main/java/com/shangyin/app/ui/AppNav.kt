@@ -178,6 +178,17 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             ) { entry ->
                 BikaComicDetailScreen(nav, entry.arguments?.getString("id").orEmpty())
             }
+            // 漫画 = Komiic（里世界第三入口）
+            composable("comicHome") { com.shangyin.app.ui.comic.ComicHomeScreen(nav) }
+            composable(
+                route = "comicDetail/{comicId}",
+                arguments = listOf(navArgument("comicId") { type = NavType.StringType })
+            ) { entry ->
+                com.shangyin.app.ui.comic.ComicDetailScreen(
+                    nav,
+                    entry.arguments?.getString("comicId").orEmpty()
+                )
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

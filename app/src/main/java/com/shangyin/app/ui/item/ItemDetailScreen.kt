@@ -142,7 +142,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 actions = {
                     // 表世界条目：右上角显示收藏状态（已在清单=对号）/加号添加
                     val cur = it_
-                    if (cur != null && cur.category != "番号" && cur.category != "本子") {
+                    if (cur != null && cur.category != "番号" && cur.category != "本子" && cur.category != "漫画") {
                         CollectStatusAction(
                             itemId = cur.id,
                             onAdd = { showAddToList = true }
@@ -206,6 +206,23 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 val curId = nav.currentBackStackEntry?.destination?.id
                 runCatching {
                     nav.navigate("bikaComic/${android.net.Uri.encode(entity.doubanId)}") {
+                        curId?.let { popUpTo(it) { inclusive = true } }
+                        launchSingleTop = true
+                    }
+                }
+            }
+            Column(Modifier.padding(pad).fillMaxSize()) {}
+            return@Scaffold
+        }
+
+        // 漫画条目（Komiic）：doubanId = komiic 漫画 id，原子导航弹出本过渡页
+        if (entity.category == "漫画") {
+            LaunchedEffect(entity.id) {
+                if (forwarded) return@LaunchedEffect
+                forwarded = true
+                val curId = nav.currentBackStackEntry?.destination?.id
+                runCatching {
+                    nav.navigate("comicDetail/${android.net.Uri.encode(entity.doubanId)}") {
                         curId?.let { popUpTo(it) { inclusive = true } }
                         launchSingleTop = true
                     }

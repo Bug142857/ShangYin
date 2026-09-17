@@ -41,11 +41,23 @@ object ImageDownloader {
                 )
                 .build()
 
-            // 豆瓣图片需要 Referer 绕过防盗链
+            // 豆瓣图片需要 Referer 绕过防盗链；
+            // Komiic 章节图防盗链需完整路径 Referer，从 fragment "#c/{comicId}/{chapterId}" 还原
             val host = url.substringAfter("://").substringBefore('/').substringBefore('?')
-            val finalReq = if (host.endsWith("doubanio.com") || host.endsWith("douban.com")) {
-                req.newBuilder().header("Referer", "https://m.douban.com/").build()
-            } else req
+            val finalReq = when {
+                host.endsWith("doubanio.com") || host.endsWith("douban.com") ->
+                    req.newBuilder().header("Referer", "https://m.douban.com/").build()
+                host == "komiic.com" && url.contains("/api/image/") -> {
+                    val frag = url.substringAfter('#', "")
+                    val p = frag.removePrefix("c/").split('/')
+                    if (p.size == 2) {
+                        req.newBuilder()
+                            .header("Referer", "https://komiic.com/comic/${p[0]}/chapter/${p[1]}")
+                            .build()
+                    } else req
+                }
+                else -> req
+            }
 
             val resp = client.newCall(finalReq).execute()
             if (!resp.isSuccessful) throw Exception("下载失败 HTTP ${resp.code}")
