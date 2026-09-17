@@ -161,6 +161,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         // ---- 里世界条目：不走豆瓣详情 ----
         // 自动跳转只执行一次：rememberSaveable 状态在从播放器/漫画页返回时会恢复，
         // 若用普通 LaunchedEffect 重进本页会再次自动跳转，导致播放器永远退不出去（死循环）
+        // 番号/本子跳转时都会先弹出本页，播放器/漫画按返回键直接回到来源列表
         var forwarded by rememberSaveable(entity.id) { mutableStateOf(false) }
         // 番号视频：直接恢复播放（doubanId = "srcId|vodId"）
         if (entity.category == "番号") {
@@ -184,7 +185,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 }
                 val ok = com.shangyin.app.ui.search.openVodAndPlay(
                     nav, context, src,
-                    com.shangyin.app.data.vod.VodItem(vod_id = vid, vod_name = entity.title)
+                    com.shangyin.app.data.vod.VodItem(vod_id = vid, vod_name = entity.title),
+                    popCurrent = true
                 )
                 if (!ok) nav.safePopBackStack()
             }

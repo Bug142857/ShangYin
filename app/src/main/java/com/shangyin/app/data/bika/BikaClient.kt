@@ -53,11 +53,12 @@ data class BikaComicsPage(val docs: List<BikaComic>, val page: Int, val pages: I
  * 哔咔漫画客户端。
  * 数据源来自 haka_comic（raoxwup/haka_comic）内置的哔咔 API：
  * - 双域名自动回退（与 haka_comic 一致）：
- *   go2778（https://picaapi.go2778.com/，哔咔官方备用域名，大陆可直连，默认先试）
- *   picacomic（https://picaapi.picacomic.com/，官方主域名，被墙需外网环境）
+ *   picacomic（https://picaapi.picacomic.com/，官方主域名，需外网环境，默认优先）
+ *   go2778（https://picaapi.go2778.com/，CDN 中转备用域名，速度较慢，官方失败时兜底）
  *   网络失败自动换域名重试，成功域名会话内记忆优先使用
  * - 请求签名：HmacSHA256(secret, lowercase(path+query + time + nonce + METHOD + api-key))，不含域名
- * - 图片防盗链：thumb/media 的 fileServer+path 拼接，域名 picacomic→go2778（与 haka 的 proxyUrl 一致）
+ * - 图片防盗链：thumb/media 的 fileServer+path 拼接，图片域名跟随 API 域名
+ *   （走官方 picacomic → 保留原图床；走 go2778 → 图片同换 go2778，与 haka 的 directUrl/proxyUrl 一致）
  * - 需要哔咔账号登录（POST auth/sign-in → JWT token）
  * - 哔咔在大陆属于被墙资源，网络层失败时提示"需外网环境"（与番号外网源规则一致）
  */
@@ -71,8 +72,8 @@ object BikaClient {
         .writeTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    /** 双域名：先备用（可直连），失败再试主域名（需外网） */
-    private val HOSTS = listOf("https://picaapi.go2778.com/", "https://picaapi.picacomic.com/")
+    /** 双域名：官方主域名优先（需外网），失败再试备用中转 go2778；成功域名会话内记忆优先 */
+    private val HOSTS = listOf("https://picaapi.picacomic.com/", "https://picaapi.go2778.com/")
 
     /** 会话内记住的成功域名：后续请求优先走它 */
     @Volatile
@@ -174,7 +175,8 @@ object BikaClient {
      * - fileServer 已含 static：直接拼 path
      * - 否则插一段 /static/
      * - 多余斜杠规范化（保护 scheme://）
-     * - 域名 picacomic → go2778（主站走备用域名时图片同样走备用，防被墙）
+     * - 图片域名跟随 API 域名（与 haka_comic 的 url 逻辑一致）：
+     *   走官方 picacomic → 保留原图床（需外网）；走 go2778 中转 → 图片同换 go2778
      */
     fun imageUrl(fileServer: String, path: String): String {
         if (fileServer.isBlank() || path.isBlank()) return ""
@@ -185,7 +187,7 @@ object BikaClient {
         } else {
             raw.replace(Regex("/{2,}"), "/")
         }
-        return normalized.replaceFirst("picacomic", "go2778")
+        return if (activeHost.contains("go2778")) normalized.replaceFirst("picacomic", "go2778") else normalized
     }
 
     // ---------- 接口 ----------

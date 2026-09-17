@@ -8,19 +8,23 @@ import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
+import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 
 /**
  * 外网片源点击播放公共流程：
  * 补全详情（无播放地址时）→ 解析线路（parsePlayGroups 内部默认只留 3u8）→
  * 按播放地址定位断点续播（itemId 用 0）→ 跳播放页。
+ * popCurrent=true 时进播放器前先弹出当前页（收藏条目详情页自动跳播场景），
+ * 这样播放器按返回键直接回到来源列表，不会落回过渡残页。
  * 返回 true 表示已发起播放（导航离开），false 表示无地址等失败。
  */
 suspend fun openVodAndPlay(
     nav: NavHostController,
     context: Context,
     src: VodSource,
-    item: VodItem
+    item: VodItem,
+    popCurrent: Boolean = false
 ): Boolean {
     val full = if (item.vod_play_url.isBlank()) {
         runCatching { VodClient.fetchDetail(src, item.vod_id) }.getOrDefault(item)
@@ -49,6 +53,7 @@ suspend fun openVodAndPlay(
     PlayerSession.groupIndex = 0
     PlayerSession.startIndex = idx
     PlayerSession.startPosMs = pos
+    if (popCurrent) nav.safePopBackStack()
     nav.safeNavigate("player")
     return true
 }
