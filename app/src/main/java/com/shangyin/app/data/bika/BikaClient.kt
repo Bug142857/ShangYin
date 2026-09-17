@@ -166,7 +166,8 @@ object BikaClient {
         if (code == 401) throw BikaAuthException("哔咔登录已失效")
         // 成功码：1（部分接口）/ 200（auth/register、categories 等实测均为 200）
         if (code != 1 && code != 200) {
-            throw Exception(root["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误(code=$code)")
+            // message 缺失时附带原始响应片段（如 code=0 无 message 的异常响应），便于定位
+            throw Exception(root["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误(code=$code)：${text.take(120)}")
         }
         root["data"]?.jsonObject
             ?: (if (requireData) throw Exception("哔咔接口未返回数据，可能登录已失效，请到 设置 → 账号管理 重新登录哔咔") else JsonObject(emptyMap()))

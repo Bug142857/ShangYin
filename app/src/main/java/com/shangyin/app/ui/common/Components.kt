@@ -17,8 +17,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +29,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -33,11 +38,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -309,25 +316,78 @@ fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -
             dismissOnClickOutside = false
         )
     ) {
+        // 阅读方向：false=左右翻页（默认，支持双击/双指缩放） / true=上下连续滑动
+        var vertical by rememberSaveable { mutableStateOf(false) }
         val pagerState = rememberPagerState(
             initialPage = initialIndex.coerceIn(0, urls.size - 1),
             initialPageOffsetFraction = 0f,
             pageCount = { urls.size }
         )
+        val listState = rememberLazyListState()
+        // 切换方向时跳回当前页（LaunchedEffect 首次运行时 jumpIndex 为 null 不动作）
+        var jumpIndex by remember { mutableStateOf<Int?>(null) }
+        LaunchedEffect(vertical) {
+            jumpIndex?.let { idx ->
+                val i = idx.coerceIn(0, urls.size - 1)
+                if (vertical) listState.scrollToItem(i) else pagerState.scrollToPage(i)
+                jumpIndex = null
+            }
+        }
+        val saveRequester = rememberImageSaveRequester()
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
         ) {
-            val saveRequester = rememberImageSaveRequester()
-            HorizontalPager(
-                state = pagerState,
-                modifier = Modifier.fillMaxSize()
-            ) { pageIdx ->
-                ZoomableImage(
-                    urls[pageIdx],
-                    onClose = onDismiss,
-                    onLongPress = { imgUrl -> saveRequester(imgUrl) }
+            if (vertical) {
+                // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(urls.size) { pageIdx ->
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(urls[pageIdx])
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.FillWidth,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .pointerInput(pageIdx) {
+                                    detectTapGestures(onLongPress = { saveRequester(urls[pageIdx]) })
+                                }
+                        )
+                    }
+                }
+            } else {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize()
+                ) { pageIdx ->
+                    ZoomableImage(
+                        urls[pageIdx],
+                        onClose = onDismiss,
+                        onLongPress = { imgUrl -> saveRequester(imgUrl) }
+                    )
+                }
+            }
+            // 左上角：阅读方向切换
+            IconButton(
+                onClick = {
+                    jumpIndex = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
+                    vertical = !vertical
+                },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+            ) {
+                Icon(
+                    if (vertical) Icons.Rounded.SwapHoriz else Icons.Rounded.SwapVert,
+                    contentDescription = if (vertical) "切换为左右翻页" else "切换为上下滑动",
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp)
                 )
             }
             // 右上角 X 关闭按钮
@@ -346,8 +406,9 @@ fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -
             }
             // 顶部页码
             if (urls.size > 1) {
+                val cur = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
                 Text(
-                    "${pagerState.currentPage + 1} / ${urls.size}",
+                    "${cur + 1} / ${urls.size}",
                     color = Color.White,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier

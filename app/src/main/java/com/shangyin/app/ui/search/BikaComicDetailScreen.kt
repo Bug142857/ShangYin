@@ -1,12 +1,15 @@
 package com.shangyin.app.ui.search
 
 import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,11 +17,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.Button
@@ -30,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,12 +47,17 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavHostController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.bika.BikaChapter
 import com.shangyin.app.data.bika.BikaClient
@@ -73,6 +85,12 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
 
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
+
+    // 查看全部：按章节顺序取全部图片，网格浏览 + 点击进入阅读器放大
+    var allImages by remember { mutableStateOf<List<String>?>(null) }
+    var loadingAll by remember { mutableStateOf(false) }
+    var allProgress by remember { mutableStateOf("") }
+    var openIndex by remember { mutableStateOf(-1) }
 
     // 收藏到里世界清单（category="本子"）
     var showCollect by remember { mutableStateOf(false) }
@@ -128,6 +146,28 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     if (it is BikaClient.BikaAuthException) handleAuthError()
                 }
             loadingEp = null
+        }
+    }
+
+    /** 查看全部：按章节顺序拉取全部图片（无章节=单本），成功后打开网格浏览 */
+    fun fetchAllImages() {
+        if (loadingAll) return
+        scope.launch {
+            loadingAll = true
+            val list = mutableListOf<String>()
+            val orders = if (chapters.isEmpty()) listOf(1) else chapters.map { it.order }.sorted()
+            runCatching {
+                orders.forEachIndexed { i, order ->
+                    allProgress = "${i + 1}/${orders.size}"
+                    list.addAll(BikaClient.withAuth { t -> BikaClient.fetchChapterImages(t, id, order) })
+                }
+            }.onSuccess {
+                if (list.isEmpty()) Toast.makeText(context, "暂无图片", Toast.LENGTH_SHORT).show()
+                else allImages = list
+            }.onFailure {
+                Toast.makeText(context, "获取图片失败：${it.message ?: "网络错误"}", Toast.LENGTH_SHORT).show()
+            }
+            loadingAll = false
         }
     }
 
@@ -262,17 +302,26 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                             )
                         }
                     }
-                    // 章节区
+                    // 章节区 + 查看全部
                     item {
-                        Text(
-                            when {
-                                chaptersLoading -> "章节加载中…"
-                                chapters.isEmpty() -> "本篇"
-                                else -> "章节（${chapters.size}）"
-                            },
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                when {
+                                    chaptersLoading -> "章节加载中…"
+                                    chapters.isEmpty() -> "本篇"
+                                    else -> "章节（${chapters.size}）"
+                                },
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = { fetchAllImages() },
+                                enabled = !loadingAll
+                            ) {
+                                Text(if (loadingAll) "获取中 $allProgress" else "查看全部")
+                            }
+                        }
                     }
                     if (!chaptersLoading && chapters.isEmpty()) {
                         // 无章节：单本漫画，直接开始阅读
@@ -334,9 +383,53 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         }
     }
 
-    // 全屏阅读器（可缩放/翻页/长按保存当前页）
+    // 全屏阅读器（可缩放/翻页/长按保存当前页/切换上下连续滑动）
     viewerUrls?.let { urls ->
         PhotoViewerDialog(urls = urls, initialIndex = 0, onDismiss = { viewerUrls = null })
+    }
+
+    // 查看全部：全屏网格浏览，点击单张进入阅读器（支持缩放/长按保存/阅读方向切换）
+    allImages?.let { urls ->
+        Dialog(
+            onDismissRequest = { allImages = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true)
+        ) {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(urls.size) { i ->
+                        AsyncImage(
+                            model = urls[i],
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .aspectRatio(0.75f)
+                                .clickable { openIndex = i }
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = { allImages = null },
+                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
+                ) {
+                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
+                }
+                Text(
+                    "共 ${urls.size} 张 · 点击放大",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp)
+                )
+            }
+        }
+        if (openIndex >= 0) {
+            PhotoViewerDialog(urls = urls, initialIndex = openIndex, onDismiss = { openIndex = -1 })
+        }
     }
 
     // 收藏对话框：存为 category="本子" 条目并挂入所选里世界清单
