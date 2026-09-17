@@ -169,11 +169,13 @@ object KomiicClient {
         (post("allCategory", Q_ALL_CATEGORY, buildJsonObject { })["allCategory"] as? kotlinx.serialization.json.JsonArray)
             ?.let { json.decodeFromJsonElement<List<KomiicCategory>>(it) } ?: emptyList()
 
-    /** 漫画详情 */
-    suspend fun comicById(id: String): KomiicComic =
-        json.decodeFromJsonElement(
-            post("comicById", Q_COMIC_BY_ID, buildJsonObject { put("comicId", id) })["comicId"]!!.jsonObject
-        )
+    /** 漫画详情（防御性：data.comicById 缺失/null 时给出有意义错误而非 NPE） */
+    suspend fun comicById(id: String): KomiicComic {
+        val data = post("comicById", Q_COMIC_BY_ID, buildJsonObject { put("comicId", id) })
+        val obj = data["comicId"] as? kotlinx.serialization.json.JsonObject
+            ?: throw Exception("漫画数据为空（id=$id，可能已被删除或接口限流）")
+        return json.decodeFromJsonElement(obj)
+    }
 
     /** 章节列表（type: chapter/book 等，serial 为话数） */
     suspend fun chapters(comicId: String): List<KomiicChapter> =

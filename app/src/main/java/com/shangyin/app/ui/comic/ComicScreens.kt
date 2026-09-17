@@ -363,6 +363,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
+    var retried by remember { mutableStateOf(false) }
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
     var showCollect by remember { mutableStateOf(false) }
     // 查看全部
@@ -374,6 +375,11 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     LaunchedEffect(retryKey) {
         loading = true
         error = null
+        if (comicId.isBlank()) {
+            error = "参数异常：漫画 ID 为空，请返回后重新进入"
+            loading = false
+            return@LaunchedEffect
+        }
         // 串行请求：避免并行协程取消连锁导致错误信息丢失（message=null 只能显示"网络错误"）
         runCatching {
             val d = KomiicClient.comicById(comicId)
@@ -383,6 +389,12 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
             error = buildString {
                 append(it::class.simpleName ?: "Exception")
                 it.message?.takeIf { m -> m.isNotBlank() }?.let { m -> append(": $m") }
+            }
+            // 网络抖动自动重试一次
+            if (!retried) {
+                retried = true
+                kotlinx.coroutines.delay(1000)
+                retryKey++
             }
         }
         loading = false
