@@ -53,6 +53,7 @@ object ImageDownloader {
                     if (p.size == 2) {
                         req.newBuilder()
                             .header("Referer", "https://komiic.com/comic/${p[0]}/chapter/${p[1]}")
+                            .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
                             .build()
                     } else req
                 }

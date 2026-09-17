@@ -14,8 +14,8 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 104
-        versionName = "2.18.0"
+        versionCode = 105
+        versionName = "2.19.0"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
@@ -99,6 +99,10 @@ dependencies {
     implementation(libs.okhttp)
     // Komiic DoH：绕过 DNS 污染（直连场景下 komiic.com 解析被污染导致无法访问）
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
+    // Komiic Cronet（Chromium 同款网络栈，v2.19.0）：TLS 指纹/HTTP2 与真实 Chrome 完全一致，
+    // 绕过 Cloudflare 对 OkHttp 客户端指纹的软拒（200 空数据）
+    implementation("org.chromium.net:cronet-embedded:119.6045.31")
+    implementation("com.google.net.cronet:cronet-okhttp:0.1.1")
     implementation(libs.kotlinx.serialization.json)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.coil.compose)
