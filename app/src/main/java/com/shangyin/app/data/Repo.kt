@@ -239,6 +239,9 @@ object Repo {
 
     fun observeMemberships(itemId: Long): Flow<List<Long>> = listDao.observeMemberships(itemId)
 
+    /** 全量清单-条目关联（搜索结果显示"已收藏在某某清单"用） */
+    fun observeAllMemberships(): Flow<List<ListItemEntity>> = listDao.observeAllMemberships()
+
     fun observeAllLists(): Flow<List<ItemListEntity>> = listDao.observeAllLists()
 
     suspend fun createList(name: String, parentId: Long? = null, world: Int = 0): Long =

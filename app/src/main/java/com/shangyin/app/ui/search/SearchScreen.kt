@@ -22,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -100,11 +99,20 @@ fun SearchScreen(
     var navigating by remember { mutableStateOf(false) }
 
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val savedKeys = remember(allItems) { allItems.map { it.category to it.doubanId }.toSet() }
-
     // 添加到哪个分类
     var pendingAdd by remember { mutableStateOf<DoubanResult?>(null) }
     val lists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
+    // (category, doubanId) → 已收藏在的清单名（"、" 连接）。
+    // ⚠️ key 必须用 item.category（中文 label 如"影视"），不能用 Category.name（"MOVIE"），否则永远匹配不上
+    val memberships by Repo.observeAllMemberships().collectAsStateWithLifecycle(initialValue = emptyList())
+    val savedInByKey = remember(allItems, memberships, lists) {
+        val itemIdByKey = allItems.associate { (it.category to it.doubanId) to it.id }
+        val nameById = lists.associate { it.id to it.name }
+        val listIdsByItem = memberships.groupBy({ it.itemId }, { it.listId })
+        itemIdByKey.mapValues { (_, id) ->
+            listIdsByItem[id].orEmpty().mapNotNull { nameById[it] }.distinct().joinToString("、")
+        }
+    }
 
     // 返回时重置 navigating 状态
     val navBackStackEntry by nav.currentBackStackEntryAsState()
@@ -326,7 +334,7 @@ fun SearchScreen(
                     items(results, key = { it.category.name + it.doubanId }) { r ->
                         ResultRow(
                             r = r,
-                            saved = (r.category.name to r.doubanId) in savedKeys,
+                            savedIn = savedInByKey[r.category.label to r.doubanId].orEmpty(),
                             enabled = !navigating,
                             onClick = {
                                 if (!navigating) {
@@ -413,7 +421,7 @@ fun SearchScreen(
 @Composable
 private fun ResultRow(
     r: DoubanResult,
-    saved: Boolean,
+    savedIn: String,
     enabled: Boolean = true,
     onClick: () -> Unit,
     onAdd: () -> Unit
@@ -459,11 +467,16 @@ private fun ResultRow(
                     DoubanRating(r.rating)
                 }
             }
-            if (saved) {
-                Icon(
-                    Icons.Rounded.CheckCircle,
-                    contentDescription = "已收藏",
-                    tint = MaterialTheme.colorScheme.primary
+            if (savedIn.isNotBlank()) {
+                // 已收藏：显示收藏在哪个清单（替代加号）
+                Text(
+                    "已收藏在 $savedIn",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.width(92.dp)
                 )
             } else {
                 IconButton(onClick = onAdd) {

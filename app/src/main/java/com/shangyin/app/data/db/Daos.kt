@@ -184,6 +184,10 @@ interface ListDao {
     @Query("SELECT listId FROM list_items WHERE itemId = :itemId")
     fun observeMemberships(itemId: Long): Flow<List<Long>>
 
+    /** 全量清单-条目关联（搜索结果显示"已收藏在某某清单"用） */
+    @Query("SELECT listId, itemId, orderIndex FROM list_items")
+    fun observeAllMemberships(): Flow<List<ListItemEntity>>
+
     @Query("SELECT * FROM lists")
     fun observeAllLists(): Flow<List<ItemListEntity>>
 

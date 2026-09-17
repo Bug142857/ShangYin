@@ -90,6 +90,7 @@ private object H1Cache {
 fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
     val initialKw = remember {
         runCatching { java.net.URLDecoder.decode(kwEncoded, "UTF-8") }.getOrDefault(kwEncoded)
     }
@@ -224,7 +225,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                     .padding(pad)
                     .fillMaxSize()
             ) {
-                // 页内搜索框
+                // 页内搜索框：输入法确认键（搜索）直接触发，无需再点右侧放大镜
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -236,6 +237,15 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                         onValueChange = { input = it },
                         placeholder = { Text("搜索外网片源，留空浏览全部") },
                         singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Search
+                        ),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onSearch = {
+                                keyboard?.hide()
+                                keyword = input.trim()
+                            }
+                        ),
                         shape = RoundedCornerShape(24.dp),
                         trailingIcon = {
                             if (input.isNotEmpty()) {

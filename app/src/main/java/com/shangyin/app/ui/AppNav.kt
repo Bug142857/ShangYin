@@ -28,6 +28,7 @@ import com.shangyin.app.ui.celebrity.CelebrityScreen
 import com.shangyin.app.ui.home.HomeScreen
 import com.shangyin.app.ui.item.ItemDetailScreen
 import com.shangyin.app.ui.lists.ListDetailScreen
+import com.shangyin.app.ui.lists.ListManagerScreen
 import com.shangyin.app.ui.player.PlayerScreen
 import com.shangyin.app.ui.search.BikaComicDetailScreen
 import com.shangyin.app.ui.search.H1SearchScreen
@@ -183,6 +184,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             ) { entry ->
                 ListDetailScreen(nav, entry.arguments?.getLong("id") ?: 0L)
             }
+            composable("listManager") { ListManagerScreen(nav) }
         }
     }
 

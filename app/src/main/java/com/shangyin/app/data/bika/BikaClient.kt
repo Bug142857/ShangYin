@@ -52,22 +52,32 @@ data class BikaComicsPage(val docs: List<BikaComic>, val page: Int, val pages: I
 /**
  * 哔咔漫画客户端。
  * 数据源来自 haka_comic（raoxwup/haka_comic）内置的哔咔 API：
- * - 主站 https://picaapi.go2778.com/（哔咔官方备用域名，大陆可直连；picaapi.picacomic.com 被墙）
- * - 请求签名：HmacSHA256(secret, lowercase(path+query + time + nonce + METHOD + api-key))
+ * - 双域名自动回退（与 haka_comic 一致）：
+ *   go2778（https://picaapi.go2778.com/，哔咔官方备用域名，大陆可直连，默认先试）
+ *   picacomic（https://picaapi.picacomic.com/，官方主域名，被墙需外网环境）
+ *   网络失败自动换域名重试，成功域名会话内记忆优先使用
+ * - 请求签名：HmacSHA256(secret, lowercase(path+query + time + nonce + METHOD + api-key))，不含域名
  * - 图片防盗链：thumb/media 的 fileServer+path 拼接，域名 picacomic→go2778（与 haka 的 proxyUrl 一致）
  * - 需要哔咔账号登录（POST auth/sign-in → JWT token）
+ * - 哔咔在大陆属于被墙资源，网络层失败时提示"需外网环境"（与番号外网源规则一致）
  */
 object BikaClient {
 
     private val json = Json { ignoreUnknownKeys = true }
 
     private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .writeTimeout(20, TimeUnit.SECONDS)
         .build()
 
-    private const val HOST = "https://picaapi.go2778.com/"
+    /** 双域名：先备用（可直连），失败再试主域名（需外网） */
+    private val HOSTS = listOf("https://picaapi.go2778.com/", "https://picaapi.picacomic.com/")
+
+    /** 会话内记住的成功域名：后续请求优先走它 */
+    @Volatile
+    private var activeHost: String = HOSTS.first()
+
     private const val API_KEY = "C69BAF41DA5ABD1FFEDC6D2FEA56B"
     private const val SECRET = "~d}\$Q7\$eIni=V)9\\RK/P.RM4;9[7|@/CA}b~OW!3?EV`:<>M7pddUBL5n|0/*Cn"
     private const val NONCE = "4ce7a7aa759b40f794d189a88b84aba8"
@@ -112,20 +122,38 @@ object BikaClient {
         bodyJson: String? = null,
         requireData: Boolean = true
     ): JsonObject = withContext(Dispatchers.IO) {
-        val builder = Request.Builder()
-            .url(HOST + pathWithQuery)
-        headers(pathWithQuery, method, token).forEach { (k, v) -> builder.header(k, v) }
-        if (bodyJson != null) {
-            builder.method(method, bodyJson.toRequestBody("application/json; charset=UTF-8".toMediaType()))
-        } else {
-            builder.get()
-        }
-        val text = runCatching {
-            client.newCall(builder.build()).execute().use { resp ->
-                resp.body?.string().orEmpty()
+        // 成功域名优先，其余域名兜底；签名只含 path 不含域名，跨域名复用合法
+        val ordered = (listOf(activeHost) + HOSTS).distinct()
+        val headers = headers(pathWithQuery, method, token)
+        var text: String? = null
+        var okHost = ""
+        var lastNetErr: Exception? = null
+        // 每个域名失败重试一次（连接抖动），全部域名失败才报错（提示需外网环境）
+        outer@ for (host in ordered) {
+            for (attempt in 0 until 2) {
+                val builder = Request.Builder().url(host + pathWithQuery)
+                headers.forEach { (k, v) -> builder.header(k, v) }
+                if (bodyJson != null) {
+                    builder.method(method, bodyJson.toRequestBody("application/json; charset=UTF-8".toMediaType()))
+                } else {
+                    builder.get()
+                }
+                try {
+                    text = client.newCall(builder.build()).execute().use { resp ->
+                        resp.body?.string().orEmpty()
+                    }
+                    okHost = host
+                    break@outer
+                } catch (e: Exception) {
+                    lastNetErr = e
+                }
             }
-        }.getOrElse { throw Exception("网络错误：${it.message ?: it.javaClass.simpleName}") }
-        if (text.isBlank()) throw Exception("空响应")
+        }
+        if (text == null) {
+            throw Exception("连接哔咔失败，可能需要外网环境：${lastNetErr?.message ?: lastNetErr?.javaClass?.simpleName ?: "网络异常"}")
+        }
+        activeHost = okHost
+        if (text!!.isBlank()) throw Exception("空响应")
         val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrElse {
             throw Exception("响应解析失败")
         }

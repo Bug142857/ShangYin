@@ -134,32 +134,39 @@ fun H2SearchScreen(nav: NavHostController) {
         return
     }
 
-    // null = 一级分类网格；非 null = 二级列表（分类名 / "最近更新"）
-    // rememberSaveable：进漫画详情返回后恢复当前分类/搜索状态
+    // inList=false=一级分类网格；true=二级列表（viewCategory：null=最近更新，其余=分类名）。
+    // ⚠️ 不能用 viewCategory==null 判断是否在一级页：点「最近更新」就是 null，会被误判回一级页没反应
+    var inList by rememberSaveable { mutableStateOf(false) }
     var viewCategory by rememberSaveable { mutableStateOf<String?>(null) }
     var searchKeyword by rememberSaveable { mutableStateOf<String?>(null) } // 搜索模式列表
 
-    val isSearchMode = searchKeyword != null
-
-    // 系统返回键：在二级列表（分类/搜索）时先回到一级分类页，而非直接退回里世界
-    BackHandler(enabled = viewCategory != null || isSearchMode) {
-        if (isSearchMode) searchKeyword = null else viewCategory = null
+    // 系统返回键：在二级列表（分类/最近更新/搜索）时先回到一级分类页，而非直接退回里世界
+    fun backToGrid() {
+        searchKeyword = null
+        inList = false
     }
+    BackHandler(enabled = inList) { backToGrid() }
 
-    if (viewCategory == null && !isSearchMode) {
+    if (!inList) {
         CategoryGridPage(
             nav = nav,
-            onOpenCategory = { viewCategory = it },
-            onSearch = { searchKeyword = it }
+            onOpenCategory = { cat ->
+                viewCategory = cat
+                searchKeyword = null
+                inList = true
+            },
+            onSearch = { kw ->
+                searchKeyword = kw
+                viewCategory = null
+                inList = true
+            }
         )
     } else {
         ComicListPage(
             nav = nav,
-            category = viewCategory,
+            category = viewCategory?.takeIf { it.isNotBlank() },
             keyword = searchKeyword,
-            onBack = {
-                if (isSearchMode) searchKeyword = null else viewCategory = null
-            }
+            onBack = { backToGrid() }
         )
     }
 }
@@ -179,8 +186,9 @@ private fun CategoryGridPage(
     var loading by remember { mutableStateOf(BikaUiCache.categories == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var query by remember { mutableStateOf("") }
+    var retryKey by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(retryKey) {
         if (BikaUiCache.categories != null) return@LaunchedEffect // 已有缓存，不重复拉
         runCatching { BikaClient.withAuth { t -> BikaClient.fetchCategories(t) } }
             .onSuccess {
@@ -237,7 +245,10 @@ private fun CategoryGridPage(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     EmptyView("加载失败：$error")
-                    TextButton(onClick = { nav.safePopBackStack() }) { Text("返回") }
+                    Row {
+                        TextButton(onClick = { retryKey++; loading = true }) { Text("重试") }
+                        TextButton(onClick = { nav.safePopBackStack() }) { Text("返回") }
+                    }
                 }
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
@@ -376,7 +387,10 @@ private fun ComicListPage(
                     "哔咔登录已失效，请到 设置 → 账号管理 重新登录"
                 } else "加载失败：$error"
                 EmptyView(msg)
-                TextButton(onClick = onBack) { Text("返回") }
+                Row {
+                    TextButton(onClick = { load(1) }) { Text("重试") }
+                    TextButton(onClick = onBack) { Text("返回") }
+                }
             }
             items.isEmpty() -> Box(Modifier.padding(pad).fillMaxSize()) {
                 EmptyView("没有找到漫画")

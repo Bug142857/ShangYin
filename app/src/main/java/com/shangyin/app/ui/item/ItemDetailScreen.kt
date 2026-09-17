@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,14 +31,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -109,6 +114,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
     var viewerUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var viewerIndex by remember { mutableStateOf(0) }
     var showVodSearch by remember(itemId) { mutableStateOf(false) }
+    // 添加到清单（分类）对话框
+    var showAddToList by remember(itemId) { mutableStateOf(false) }
 
     // 系统返回键：先关"全部"覆盖页，再退出详情
     BackHandler(enabled = showAllPhotos || showAllCelebrities) {
@@ -131,6 +138,16 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
+                },
+                actions = {
+                    // 表世界条目：右上角显示收藏状态（已在清单=对号）/加号添加
+                    val cur = it_
+                    if (cur != null && cur.category != "番号" && cur.category != "本子") {
+                        CollectStatusAction(
+                            itemId = cur.id,
+                            onAdd = { showAddToList = true }
+                        )
+                    }
                 }
             )
         }
@@ -142,10 +159,15 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         val entity = it_!!
 
         // ---- 里世界条目：不走豆瓣详情 ----
+        // 自动跳转只执行一次：rememberSaveable 状态在从播放器/漫画页返回时会恢复，
+        // 若用普通 LaunchedEffect 重进本页会再次自动跳转，导致播放器永远退不出去（死循环）
+        var forwarded by rememberSaveable(entity.id) { mutableStateOf(false) }
         // 番号视频：直接恢复播放（doubanId = "srcId|vodId"）
         if (entity.category == "番号") {
             val context = LocalContext.current
             LaunchedEffect(entity.id) {
+                if (forwarded) return@LaunchedEffect
+                forwarded = true
                 val parts = entity.doubanId.split("|")
                 val vid = parts.getOrNull(1)?.toLongOrNull()
                 if (parts.size != 2 || vid == null || vid <= 0L) {
@@ -177,6 +199,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
         // 本子：跳哔咔详情
         if (entity.category == "本子") {
             LaunchedEffect(entity.id) {
+                if (forwarded) return@LaunchedEffect
+                forwarded = true
                 nav.safePopBackStack()
                 nav.safeNavigate("bikaComic/${android.net.Uri.encode(entity.doubanId)}")
             }
@@ -573,7 +597,99 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 onDismiss = { showVodSearch = false }
             )
         }
+
+        // 添加到清单对话框（表世界条目）
+        if (showAddToList) {
+            AddToListDialog(
+                item = entity,
+                onDismiss = { showAddToList = false }
+            )
+        }
     }
+}
+
+/** 顶栏收藏状态：已在任意清单 → 对号（点按提示所在清单）；未收藏 → 加号打开添加对话框 */
+@Composable
+private fun CollectStatusAction(itemId: Long, onAdd: () -> Unit) {
+    val context = LocalContext.current
+    val memberships by Repo.observeMemberships(itemId).collectAsStateWithLifecycle(initialValue = emptyList())
+    val lists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
+    val names = remember(memberships, lists) {
+        memberships.mapNotNull { m -> lists.firstOrNull { it.id == m }?.name }
+    }
+    if (names.isEmpty()) {
+        IconButton(onClick = onAdd) {
+            Icon(Icons.Rounded.Add, contentDescription = "添加到分类")
+        }
+    } else {
+        IconButton(onClick = {
+            Toast.makeText(context, "已收藏在 ${names.joinToString("、")}", Toast.LENGTH_SHORT).show()
+        }) {
+            Icon(
+                Icons.Rounded.CheckCircle,
+                contentDescription = "已收藏",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
+/** 表世界条目"添加到分类"对话框：列出全部清单单选加入 */
+@Composable
+private fun AddToListDialog(item: com.shangyin.app.data.db.CollectionItemEntity, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val lists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
+    var selectedId by remember(lists) { mutableStateOf(lists.firstOrNull()?.id ?: -1L) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("添加到分类") },
+        text = {
+            if (lists.isEmpty()) {
+                Text(
+                    "还没有清单，请先到 设置 → 清单管理 创建",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            } else {
+                Column(
+                    Modifier
+                        .heightIn(max = 300.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        "把《${item.title}》放到哪个分类？",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    lists.forEach { l ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = selectedId == l.id,
+                                onClick = { selectedId = l.id }
+                            )
+                            Text(l.name, modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = selectedId > 0,
+                onClick = {
+                    scope.launch {
+                        Repo.addItemToList(selectedId, item.id)
+                        Toast.makeText(context, "已添加《${item.title}》", Toast.LENGTH_SHORT).show()
+                    }
+                    onDismiss()
+                }
+            ) { Text("添加") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 /** 演职员卡片：头像 + 名字 + 导演/饰演角色 */
