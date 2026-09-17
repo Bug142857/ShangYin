@@ -141,7 +141,11 @@ object BikaClient {
                 builder.get()
             }
             try {
-                text = client.newCall(builder.build()).execute().use { resp ->
+                // 单次调用 deadline 20s：覆盖 DNS 解析→连接→读取全程（connectTimeout 不含 DNS，
+                // 域名被污染时 DNS 可能长时间挂起导致"一直转圈"）
+                val call = client.newCall(builder.build())
+                call.timeout().deadline(20, TimeUnit.SECONDS)
+                text = call.execute().use { resp ->
                     resp.body?.string().orEmpty()
                 }
                 okHost = host
@@ -165,7 +169,7 @@ object BikaClient {
             throw Exception(root["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误(code=$code)")
         }
         root["data"]?.jsonObject
-            ?: (if (requireData) throw Exception("响应缺少 data") else JsonObject(emptyMap()))
+            ?: (if (requireData) throw Exception("哔咔接口未返回数据，可能登录已失效，请到 设置 → 账号管理 重新登录哔咔") else JsonObject(emptyMap()))
     }
 
     // ---------- 图片 URL 拼接（与 haka_comic 一致） ----------

@@ -305,7 +305,10 @@ private fun ComicListPage(
 
     /** 加载一页 */
     fun load(pg: Int) {
-        if (loading || loadingMore) return
+        // ⚠️ 首页加载（pg==1）永远放行：loading 初值就是 true（无缓存时），
+        // 若在此被拦，LaunchedEffect 的首次 load(1) 会被静默吞掉 → 永远转圈且无错误提示。
+        // 旧请求由 reqId 失效机制丢弃，重复 load(1) 无副作用。guard 只用于拦截加载更多的连点。
+        if (pg != 1 && (loading || loadingMore)) return
         val my = ++reqId.intValue
         scope.launch {
             if (pg == 1) loading = true else loadingMore = true
