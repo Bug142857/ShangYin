@@ -31,48 +31,10 @@ object ImageDownloader {
         withContext(Dispatchers.IO) {
             require(url.isNotBlank()) { "图片地址为空" }
 
-            val req = Request.Builder()
-                .url(url)
-                .header(
-                    "User-Agent",
-                    "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) " +
-                        "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-                        "Version/16.0 Mobile/15E148 Safari/604.1"
-                )
-                .build()
-
-            // 豆瓣图片需要 Referer 绕过防盗链；
-            // Komiic 章节图防盗链需完整路径 Referer，从 fragment "#c/{comicId}/{chapterId}" 还原
-            val host = url.substringAfter("://").substringBefore('/').substringBefore('?')
-            val finalReq = when {
-                host.endsWith("doubanio.com") || host.endsWith("douban.com") ->
-                    req.newBuilder().header("Referer", "https://m.douban.com/").build()
-                (host == "komiic.com" || host == "komiic.cc") && url.contains("/api/image/") -> {
-                    val frag = url.substringAfter('#', "")
-                    val p = frag.removePrefix("c/").split('/')
-                    if (p.size == 2) {
-                        req.newBuilder()
-                            .header("Referer", "https://$host/comic/${p[0]}/chapter/${p[1]}")
-                            .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
-                            .build()
-                    } else req
-                }
-                else -> req
-            }
-
-            val resp = client.newCall(finalReq).execute()
-            if (!resp.isSuccessful) throw Exception("下载失败 HTTP ${resp.code}")
-            val bytes = resp.body?.bytes() ?: throw Exception("响应体为空")
+            val (bytes, contentType) = fetchBytes(url)
 
             // 生成文件名
-            val ext = when {
-                url.endsWith(".jpg", true) || url.endsWith(".jpeg", true) -> "jpg"
-                url.endsWith(".png", true) -> "png"
-                url.endsWith(".webp", true) -> "webp"
-                url.endsWith(".gif", true) -> "gif"
-                else -> (resp.header("Content-Type") ?: "image/jpeg").substringAfterLast('/').substringBefore(';')
-                    .ifBlank { "jpg" }
-            }
+            val ext = extOf(url, contentType)
             val safeName = (suggestedName ?: "img_${System.currentTimeMillis()}")
                 .replace(Regex("[\\\\/:*?\"<>|]"), "")
                 .take(40)
@@ -110,4 +72,52 @@ object ImageDownloader {
             }
             fileName
         }
+
+    /**
+     * 抓取图片字节（带防盗链 Referer / UA），返回 (字节, Content-Type)。
+     * 相册保存（download）与漫画离线下载（ComicDownloadStore）共用同一套请求头逻辑。
+     */
+    suspend fun fetchBytes(url: String): Pair<ByteArray, String?> = withContext(Dispatchers.IO) {
+        require(url.isNotBlank()) { "图片地址为空" }
+        val req = Request.Builder().url(url).header("User-Agent", DEFAULT_UA)
+        val resp = client.newCall(withAntiLeech(req, url)).execute()
+        resp.use {
+            if (!it.isSuccessful) throw Exception("下载失败 HTTP ${it.code}")
+            val bytes = it.body?.bytes() ?: throw Exception("响应体为空")
+            bytes to it.header("Content-Type")
+        }
+    }
+
+    /** 根据扩展名 / Content-Type 推断图片后缀 */
+    fun extOf(url: String, contentType: String?): String = when {
+        url.endsWith(".jpg", true) || url.endsWith(".jpeg", true) -> "jpg"
+        url.endsWith(".png", true) -> "png"
+        url.endsWith(".webp", true) -> "webp"
+        url.endsWith(".gif", true) -> "gif"
+        else -> (contentType ?: "image/jpeg").substringAfterLast('/').substringBefore(';').ifBlank { "jpg" }
+    }
+
+    /** 防盗链请求头：豆瓣 / Komiic 章节图需要 Referer */
+    private fun withAntiLeech(req: Request.Builder, url: String): Request {
+        val host = url.substringAfter("://").substringBefore('/').substringBefore('?')
+        return when {
+            host.endsWith("doubanio.com") || host.endsWith("douban.com") ->
+                req.header("Referer", "https://m.douban.com/").build()
+            (host == "komiic.com" || host == "komiic.cc") && url.contains("/api/image/") -> {
+                // Komiic 章节图防盗链需完整路径 Referer，从 fragment "#c/{comicId}/{chapterId}" 还原
+                val p = url.substringAfter('#', "").removePrefix("c/").split('/')
+                if (p.size == 2) {
+                    req.header("Referer", "https://$host/comic/${p[0]}/chapter/${p[1]}")
+                        .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
+                        .build()
+                } else req.build()
+            }
+            else -> req.build()
+        }
+    }
+
+    private const val DEFAULT_UA =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) " +
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+            "Version/16.0 Mobile/15E148 Safari/604.1"
 }

@@ -25,8 +25,11 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -41,9 +44,12 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,9 +68,13 @@ import com.shangyin.app.data.Repo
 import com.shangyin.app.data.bika.BikaChapter
 import com.shangyin.app.data.bika.BikaClient
 import com.shangyin.app.data.bika.BikaComic
+import com.shangyin.app.data.download.ComicDownloadManager
+import com.shangyin.app.data.download.DownloadedChapter
+import com.shangyin.app.data.download.DownloadedComic
 import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.PhotoViewerDialog
+import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
@@ -85,6 +95,8 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
 
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
+    var viewerIdx by remember { mutableIntStateOf(-1) }        // viewerUrls 对应 ordered 下标（-1=单本无章节）
+    var sortDesc by rememberSaveable { mutableStateOf(false) }
 
     // 查看全部：按章节顺序取全部图片，网格浏览 + 点击进入阅读器放大
     var allImages by remember { mutableStateOf<List<String>?>(null) }
@@ -96,6 +108,26 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     var showCollect by remember { mutableStateOf(false) }
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
     val collected = remember(allItems, id) { allItems.any { it.category == "本子" && it.doubanId == id } }
+
+    // 离线下载状态（本子：source="bika"，章节 key = order）
+    val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
+    val activeTasks by ComicDownloadManager.active.collectAsStateWithLifecycle()
+    val downloadedKeys = remember(library, id) {
+        library.firstOrNull { it.source == "bika" && it.id == id }
+            ?.chapters?.map { it.key }?.toSet() ?: emptySet()
+    }
+    LaunchedEffect(id) { ComicDownloadManager.refresh(context) }
+
+    val ordered = remember(chapters, sortDesc) { if (sortDesc) chapters.reversed() else chapters }
+
+    /** 章节显示名（行内用） */
+    fun epLabel(ch: BikaChapter) = "第 ${ch.order} 话"
+
+    /** 下载用章节名（带标题） */
+    fun epName(ch: BikaChapter) = buildString {
+        append(epLabel(ch))
+        ch.title?.takeIf { it.isNotBlank() }?.let { append(" ").append(it) }
+    }
 
     /** 登录失效已由 BikaClient.withAuth 自动重新注册，二次失败提示返回 */
     fun handleAuthError() {
@@ -128,14 +160,17 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     }
 
     /** 取某章节全部图片并打开阅读器 */
-    fun readChapter(order: Int) {
+    fun readChapter(order: Int, idx: Int = -1) {
         if (loadingEp != null) return
         scope.launch {
             loadingEp = order
             runCatching { BikaClient.withAuth { t -> BikaClient.fetchChapterImages(t, id, order) } }
                 .onSuccess { urls ->
                     if (urls.isEmpty()) Toast.makeText(context, "该章节暂无图片", Toast.LENGTH_SHORT).show()
-                    else viewerUrls = urls
+                    else {
+                        viewerIdx = idx
+                        viewerUrls = urls
+                    }
                 }
                 .onFailure {
                     Toast.makeText(
@@ -147,6 +182,20 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 }
             loadingEp = null
         }
+    }
+
+    /** 下载指定章节（1 章或整套）；无章节的单本按 order=1 下载 */
+    fun download(targets: List<BikaChapter>) {
+        val c = comic ?: return
+        val single = targets.isEmpty()
+        val list = if (single) listOf(BikaChapter("1", null, 1)) else targets
+        val meta = DownloadedComic(source = "bika", id = id, title = c.title, cover = c.thumbUrl)
+        ComicDownloadManager.enqueue(
+            context,
+            meta,
+            list.map { DownloadedChapter(it.order.toString(), if (single) "本篇" else epName(it), 0) }
+        ) { key -> BikaClient.withAuth { t -> BikaClient.fetchChapterImages(t, id, key.toInt()) } }
+        Toast.makeText(context, "已加入下载（${list.size} 章），可在「我的下载」查看", Toast.LENGTH_SHORT).show()
     }
 
     /** 查看全部：按章节顺序拉取全部图片（无章节=单本），成功后打开网格浏览 */
@@ -187,6 +236,9 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                        Icon(Icons.Rounded.DownloadDone, contentDescription = "我的下载")
+                    }
                     IconButton(onClick = { showCollect = true }) {
                         Icon(
                             if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
@@ -302,7 +354,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                             )
                         }
                     }
-                    // 章节区 + 查看全部
+                    // 章节区：正序/倒序 + 下载全部 + 查看全部
                     item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
@@ -316,10 +368,24 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                 modifier = Modifier.weight(1f)
                             )
                             TextButton(
+                                onClick = { sortDesc = !sortDesc },
+                                enabled = chapters.size > 1
+                            ) {
+                                Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text(if (sortDesc) "倒序" else "正序", style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(
+                                onClick = { download(chapters) },
+                                enabled = !chaptersLoading
+                            ) {
+                                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text(if (chapters.isEmpty()) "下载本篇" else "下载全部", style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(
                                 onClick = { fetchAllImages() },
                                 enabled = !loadingAll
                             ) {
-                                Text(if (loadingAll) "获取中 $allProgress" else "查看全部")
+                                Text(if (loadingAll) "获取中 $allProgress" else "查看全部", style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
@@ -335,21 +401,23 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                             }
                         }
                     } else {
-                        items(chapters.size) { i ->
-                            val ch = chapters[i]
+                        items(ordered.size) { i ->
+                            val ch = ordered[i]
                             val reading = loadingEp == ch.order
+                            val task = activeTasks[ComicDownloadManager.key("bika", id, ch.order.toString())]
+                            val done = ch.order.toString() in downloadedKeys
                             Surface(
                                 shape = MaterialTheme.shapes.medium,
                                 color = MaterialTheme.colorScheme.surfaceVariant,
-                                onClick = { if (!reading) readChapter(ch.order) },
+                                onClick = { if (!reading) readChapter(ch.order, i) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp)
+                                    modifier = Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp)
                                 ) {
                                     Text(
-                                        "第 ${ch.order} 话",
+                                        epLabel(ch),
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.Medium
                                     )
@@ -365,14 +433,31 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                         )
                                     }
                                     Spacer(Modifier.weight(1f))
-                                    if (reading) {
-                                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    } else {
-                                        Text(
-                                            "阅读",
-                                            style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.primary
+                                    when {
+                                        reading -> CircularProgressIndicator(
+                                            modifier = Modifier.padding(10.dp).size(16.dp),
+                                            strokeWidth = 2.dp
                                         )
+                                        task != null && task.error == null -> CircularProgressIndicator(
+                                            modifier = Modifier.padding(10.dp).size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        done -> IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                                            Icon(
+                                                Icons.Rounded.DownloadDone,
+                                                contentDescription = "已下载",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                        else -> IconButton(onClick = { download(listOf(ch)) }) {
+                                            Icon(
+                                                Icons.Rounded.Download,
+                                                contentDescription = "下载本章",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -383,9 +468,22 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         }
     }
 
-    // 全屏阅读器（可缩放/翻页/长按保存当前页/切换上下连续滑动）
+    // 全屏阅读器（可缩放/翻页/长按保存当前页/切换上下连续滑动 + 末页询问下一章）
     viewerUrls?.let { urls ->
-        PhotoViewerDialog(urls = urls, initialIndex = 0, onDismiss = { viewerUrls = null })
+        val label = ordered.getOrNull(viewerIdx)?.let { epLabel(it) }
+        key(viewerIdx) {
+            PhotoViewerDialog(
+                urls = urls,
+                initialIndex = 0,
+                onDismiss = { viewerUrls = null; viewerIdx = -1 },
+                chapterLabel = label,
+                hasNextChapter = viewerIdx >= 0 && viewerIdx < ordered.size - 1,
+                onOpenNextChapter = {
+                    Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
+                    ordered.getOrNull(viewerIdx + 1)?.let { next -> readChapter(next.order, viewerIdx + 1) }
+                }
+            )
+        }
     }
 
     // 查看全部：全屏网格浏览，点击单张进入阅读器（支持缩放/长按保存/阅读方向切换）

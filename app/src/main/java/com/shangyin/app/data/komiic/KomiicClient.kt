@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonArray
@@ -107,8 +108,9 @@ object KomiicClient {
     private val Q_HOT = """query hotComics(${P}pagination: Pagination!) {
   hotComics(pagination: ${P}pagination) { $FIELDS __typename }
 }"""
-    private val Q_BY_CATEGORY = """query comicByCategory(${P}categoryId: ID!, ${P}pagination: Pagination!) {
-  comicByCategory(categoryId: ${P}categoryId, pagination: ${P}pagination) { $FIELDS __typename }
+    // 注意：字段名是 comicByCategories（复数），参数 categoryId 类型为 [ID!]!（数组）
+    private val Q_BY_CATEGORY = """query comicByCategories(${P}categoryId: [ID!]!, ${P}pagination: Pagination!) {
+  comicByCategories(categoryId: ${P}categoryId, pagination: ${P}pagination) { $FIELDS __typename }
 }"""
     private val Q_SEARCH = """query searchComics(${P}keyword: String!, ${P}pagination: Pagination!) {
   searchComics(keyword: ${P}keyword, pagination: ${P}pagination) { $FIELDS __typename }
@@ -209,12 +211,16 @@ object KomiicClient {
     suspend fun hotComics(offset: Int, status: String = ""): List<KomiicComic> =
         post("hotComics", Q_HOT, paginationVars(offset, "MONTH_VIEWS", status)).comics("hotComics")
 
-    /** 分类筛选 */
+    /**
+     * 分类筛选。
+     * 注意：服务端会忽略 pagination.status（实测 2026-09-17：status=END 仍返回 ONGOING），
+     * 因此连载/完结筛选由 UI 侧本地过滤，这里仍带上 status 以防服务端后续支持。
+     */
     suspend fun comicByCategory(categoryId: String, offset: Int, status: String = ""): List<KomiicComic> =
-        post("comicByCategory", Q_BY_CATEGORY, buildJsonObject {
-            put("categoryId", categoryId)
+        post("comicByCategories", Q_BY_CATEGORY, buildJsonObject {
+            put("categoryId", buildJsonArray { add(kotlinx.serialization.json.JsonPrimitive(categoryId)) })
             put("pagination", paginationVars(offset, "DATE_UPDATED", status)["pagination"]!!)
-        }).comics("comicByCategory")
+        }).comics("comicByCategories")
 
     /** 关键词搜索（实测中文可用，如"高達"） */
     suspend fun search(keyword: String, offset: Int): List<KomiicComic> =

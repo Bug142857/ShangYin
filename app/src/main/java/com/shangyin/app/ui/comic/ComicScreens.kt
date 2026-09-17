@@ -7,13 +7,18 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -22,11 +27,17 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -42,6 +53,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,9 +73,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.shangyin.app.data.Repo
+import com.shangyin.app.data.download.ComicDownloadManager
+import com.shangyin.app.data.download.DownloadedChapter
+import com.shangyin.app.data.download.DownloadedComic
 import com.shangyin.app.data.komiic.KomiicCategory
 import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.komiic.KomiicChapter
@@ -72,13 +88,19 @@ import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 private val komiicJson = Json { ignoreUnknownKeys = true }
+
+private const val COMIC_PAGE_SIZE = 20
+
+/** 状态筛选本地最多翻的页数（服务端忽略 status 参数，需本地过滤凑满一屏） */
+private const val STATUS_FILTER_MAX_ROUNDS = 6
 
 @Serializable
 private data class ComicHomeCache(
@@ -98,10 +120,10 @@ private fun statusLabel(s: String?) = when (s) {
 }
 
 /**
- * 漫画主页（Komiic）：搜索框 + 最近更新/热门 + 分类/状态筛选 + 3 列封面网格。
+ * 漫画主页（Komiic）：搜索框 + 最近更新/热门/连载/完结（同一行）+ 可展开分类筛选 + 3 列封面网格。
  * 会话级缓存：返回里世界再进不重新加载（rememberSaveable 存 JSON）。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ComicHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
@@ -120,32 +142,57 @@ fun ComicHomeScreen(nav: NavHostController) {
     var error by remember { mutableStateOf<String?>(null) }
     var categories by remember { mutableStateOf<List<KomiicCategory>>(emptyList()) }
     var loadedKey by remember { mutableStateOf<String?>(null) }
+    var catExpanded by rememberSaveable { mutableStateOf(false) }  // 分类展开/收起
+    var loadJob by remember { mutableStateOf<Job?>(null) }         // 进行中的请求（切换筛选时取消）
 
     val cacheKey = "$tab|$catId|$status|$keyword"
 
+    suspend fun fetchPage(off: Int): List<KomiicComic> = when {
+        keyword.isNotBlank() -> KomiicClient.search(keyword, off)
+        catId != "0" -> KomiicClient.comicByCategory(catId, off, status)
+        tab == 0 -> KomiicClient.recentUpdate(off, status)
+        else -> KomiicClient.hotComics(off, status)
+    }
+
+    /** 切换筛选 / 搜索时取消上一次请求，避免"点了分类没反应" */
     fun load(reset: Boolean) {
-        if (loading) return
-        scope.launch {
-            loading = true
-            if (reset) offset = 0
-            val next = if (reset) 0 else offset
+        loadJob?.cancel()
+        if (reset) {
+            offset = 0
+            items = emptyList()
+        }
+        error = null
+        loading = true
+        loadJob = scope.launch {
+            var next = if (reset) 0 else offset
             runCatching {
-                when {
-                    keyword.isNotBlank() -> KomiicClient.search(keyword, next)
-                    catId != "0" -> KomiicClient.comicByCategory(catId, next, status)
-                    tab == 0 -> KomiicClient.recentUpdate(next, status)
-                    else -> KomiicClient.hotComics(next, status)
+                if (status.isBlank() || keyword.isNotBlank()) {
+                    val page = fetchPage(next)
+                    next += page.size
+                    page
+                } else {
+                    // 服务端忽略 status → 本地过滤，必要时多翻几页凑满一屏
+                    val out = mutableListOf<KomiicComic>()
+                    var rounds = 0
+                    while (rounds < STATUS_FILTER_MAX_ROUNDS && out.size < COMIC_PAGE_SIZE) {
+                        val page = fetchPage(next)
+                        if (page.isEmpty()) break
+                        next += page.size
+                        out += page.filter { it.status == status }
+                        rounds++
+                        if (page.size < COMIC_PAGE_SIZE) break
+                    }
+                    out
                 }
             }.onSuccess { list ->
                 items = if (reset) list else items + list
-                offset = next + list.size
-                error = null
+                offset = next
                 cacheJson = komiicJson.encodeToString(
                     ComicHomeCache(tab, catId, status, keyword, offset, items)
                 )
-            }.onFailure {
-                if (reset) items = emptyList()
-                error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "网络错误"
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                error = (e.message?.takeIf { m -> m.isNotBlank() } ?: e::class.simpleName) ?: "网络错误"
             }
             loading = false
         }
@@ -158,6 +205,9 @@ fun ComicHomeScreen(nav: NavHostController) {
         }
         if (cacheJson != null) {
             runCatching { komiicJson.decodeFromString<ComicHomeCache>(cacheJson!!) }.onSuccess { c ->
+                // 缓存恢复优先：取消首帧发起的那次请求，避免结果覆盖已恢复的列表
+                loadJob?.cancel()
+                loading = false
                 tab = c.tab; catId = c.catId; status = c.status; keyword = c.keyword
                 input = c.keyword; offset = c.nextOffset; items = c.items
                 loadedKey = "$tab|$catId|$status|$keyword"
@@ -179,6 +229,11 @@ fun ComicHomeScreen(nav: NavHostController) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                        Icon(Icons.Rounded.DownloadDone, contentDescription = "我的下载")
                     }
                 }
             )
@@ -208,8 +263,13 @@ fun ComicHomeScreen(nav: NavHostController) {
                 }
             )
             if (keyword.isBlank()) {
-                // Tab：最近更新 / 热门
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
+                // 最近更新 / 热门 / 连载中 / 完结 同一行
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp)
+                ) {
                     listOf("最近更新" to 0, "热门" to 1).forEach { (label, t) ->
                         FilterChip(
                             selected = tab == t,
@@ -218,34 +278,81 @@ fun ComicHomeScreen(nav: NavHostController) {
                             modifier = Modifier.padding(horizontal = 4.dp)
                         )
                     }
-                    Spacer(Modifier.width(8.dp))
-                }
-                // 分类 chips（全部 + 服务端动态分类）
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
-                    FilterChip(
-                        selected = catId == "0",
-                        onClick = { catId = "0" },
-                        label = { Text("全部") },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                    categories.forEach { c ->
+                    listOf("连载" to "ONGOING", "完结" to "END").forEach { (label, s) ->
                         FilterChip(
-                            selected = catId == c.id,
-                            onClick = { catId = c.id },
-                            label = { Text(c.name) },
+                            selected = status == s,
+                            onClick = { status = if (status == s) "" else s },
+                            label = { Text(label) },
                             modifier = Modifier.padding(horizontal = 4.dp)
                         )
                     }
                 }
-                // 状态 chips
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp)) {
-                    listOf("全部" to "", "连载中" to "ONGOING", "完结" to "END").forEach { (label, s) ->
-                        FilterChip(
-                            selected = status == s,
-                            onClick = { status = s },
-                            label = { Text(label) },
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        )
+                // 分类：收起=横滑一行 + 展开箭头；展开=换行 chips（限高可滚）
+                if (!catExpanded) {
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            FilterChip(
+                                selected = catId == "0",
+                                onClick = { catId = "0" },
+                                label = { Text("全部") },
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            categories.forEach { c ->
+                                FilterChip(
+                                    selected = catId == c.id,
+                                    onClick = { catId = c.id },
+                                    label = { Text(c.name) },
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = { catExpanded = true }) {
+                            Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开分类")
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .padding(horizontal = 12.dp, vertical = 2.dp)
+                            .heightIn(max = 260.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("全部分类", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { catExpanded = false }) {
+                                Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起分类")
+                            }
+                        }
+                        FlowRow(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            FilterChip(
+                                selected = catId == "0",
+                                onClick = { catId = "0"; catExpanded = false },
+                                label = { Text("全部") }
+                            )
+                            categories.forEach { c ->
+                                FilterChip(
+                                    selected = catId == c.id,
+                                    onClick = { catId = c.id; catExpanded = false },
+                                    label = { Text(c.name) }
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -349,10 +456,10 @@ fun ComicHomeScreen(nav: NavHostController) {
 }
 
 /**
- * 漫画详情（Komiic）：封面信息 + 章节列表 + 查看全部（合并全部章节图片网格）+ 收藏到里世界清单。
+ * 漫画详情（Komiic）：封面信息 + 章节列表（正序/倒序、单章/整套下载）+ 查看全部 + 收藏到里世界清单。
  * 章节图片 URL 由 KomiicClient 追加 fragment，全局拦截器转 Referer，PhotoViewerDialog 零改动。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     val context = LocalContext.current
@@ -365,12 +472,31 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     var retryKey by remember { mutableIntStateOf(0) }
     var retried by remember { mutableStateOf(false) }
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
+    var viewerIdx by remember { mutableIntStateOf(-1) }
     var showCollect by remember { mutableStateOf(false) }
+    var sortDesc by rememberSaveable { mutableStateOf(false) }
     // 查看全部
     var allImages by remember { mutableStateOf<List<String>?>(null) }
     var loadingAll by remember { mutableStateOf(false) }
     var allProgress by remember { mutableStateOf("") }
     var openIndex by remember { mutableIntStateOf(-1) }
+
+    val ordered = remember(chapters, sortDesc) { if (sortDesc) chapters.reversed() else chapters }
+
+    // 收藏状态（右上角心形高亮）
+    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
+    val collected = remember(allItems, comicId) {
+        allItems.any { it.category == "漫画" && it.doubanId == comicId }
+    }
+
+    // 离线下载状态
+    val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
+    val activeTasks by ComicDownloadManager.active.collectAsStateWithLifecycle()
+    val downloadedKeys = remember(library, comicId) {
+        library.firstOrNull { it.source == "komiic" && it.id == comicId }
+            ?.chapters?.map { it.key }?.toSet() ?: emptySet()
+    }
+    LaunchedEffect(comicId) { ComicDownloadManager.refresh(context) }
 
     LaunchedEffect(retryKey) {
         loading = true
@@ -400,19 +526,43 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
         loading = false
     }
 
-    /** 打开章节阅读器 */
-    fun readChapter(ch: KomiicChapter) {
+    fun chapterName(i: Int, ch: KomiicChapter) = ch.serial ?: "第 ${i + 1} 话"
+
+    /** 打开第 idx 章（基于当前排序） */
+    fun openChapter(idx: Int) {
+        val ch = ordered.getOrNull(idx) ?: return
         scope.launch {
             runCatching { KomiicClient.fetchChapterImages(comicId, ch.id) }
                 .onSuccess { urls ->
                     if (urls.isEmpty()) Toast.makeText(context, "该章节暂无图片", Toast.LENGTH_SHORT).show()
-                    else viewerUrls = urls
+                    else {
+                        viewerIdx = idx
+                        viewerUrls = urls
+                    }
                 }
                 .onFailure {
                     val msg = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "网络错误"
                     Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
                 }
         }
+    }
+
+    /** 下载指定章节（1 章或整套） */
+    fun download(targets: List<Int>) {
+        val list = targets.mapNotNull { ordered.getOrNull(it)?.let { ch -> it to ch } }
+        if (list.isEmpty()) return
+        val meta = DownloadedComic(
+            source = "komiic",
+            id = comicId,
+            title = detail?.title ?: "漫画",
+            cover = detail?.imageUrl
+        )
+        ComicDownloadManager.enqueue(
+            context,
+            meta,
+            list.map { (i, ch) -> DownloadedChapter(ch.id, chapterName(i, ch), ch.size) }
+        ) { key -> KomiicClient.fetchChapterImages(comicId, key) }
+        Toast.makeText(context, "已加入下载（${list.size} 章），可在「我的下载」查看", Toast.LENGTH_SHORT).show()
     }
 
     /** 查看全部：按章节顺序合并全部图片，网格浏览 */
@@ -447,11 +597,14 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                        Icon(Icons.Rounded.DownloadDone, contentDescription = "我的下载")
+                    }
                     IconButton(onClick = { showCollect = true }) {
                         Icon(
-                            Icons.Rounded.FavoriteBorder,
+                            if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                             contentDescription = "收藏",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = if (collected) Color(0xFFEF5350) else MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }
@@ -525,31 +678,50 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                             }
                         }
                     }
-                    // 章节区 + 查看全部
+                    // 章节区：正序/倒序 + 下载全部 + 查看全部
                     item {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             Text(
                                 if (chapters.isEmpty()) "章节" else "章节（${chapters.size}）",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f).padding(start = 8.dp)
                             )
+                            TextButton(
+                                onClick = { sortDesc = !sortDesc },
+                                enabled = chapters.size > 1
+                            ) {
+                                Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text(if (sortDesc) "倒序" else "正序", style = MaterialTheme.typography.labelMedium)
+                            }
+                            TextButton(
+                                onClick = { download(ordered.indices.toList()) },
+                                enabled = chapters.isNotEmpty()
+                            ) {
+                                Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Text("下载全部", style = MaterialTheme.typography.labelMedium)
+                            }
                             TextButton(
                                 onClick = { fetchAllImages() },
                                 enabled = !loadingAll && chapters.isNotEmpty()
                             ) {
-                                Text(if (loadingAll) "获取中 $allProgress" else "查看全部")
+                                Text(if (loadingAll) "获取中 $allProgress" else "查看全部", style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     }
-                    items(chapters.size) { i ->
-                        val ch = chapters[i]
+                    items(ordered.size) { i ->
+                        val ch = ordered[i]
+                        val task = activeTasks[ComicDownloadManager.key("komiic", comicId, ch.id)]
+                        val done = ch.id in downloadedKeys
                         Row(
-                            Modifier.fillMaxWidth().clickable { readChapter(ch) }.padding(horizontal = 16.dp, vertical = 10.dp),
+                            Modifier.fillMaxWidth().clickable { openChapter(i) }.padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                ch.serial ?: "第 ${i + 1} 话",
+                                chapterName(i, ch),
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.weight(1f)
                             )
@@ -566,6 +738,31 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            when {
+                                task != null && task.error == null -> CircularProgressIndicator(
+                                    modifier = Modifier.padding(12.dp).size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                done -> IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                                    Icon(
+                                        Icons.Rounded.DownloadDone,
+                                        contentDescription = "已下载",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                else -> IconButton(
+                                    onClick = { download(listOf(i)) },
+                                    enabled = ordered.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Download,
+                                        contentDescription = "下载本章",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                     item { Spacer(Modifier.height(24.dp)) }
@@ -574,9 +771,22 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
         }
     }
 
-    // 全屏阅读器（双模式 + 缩放 + 长按保存）
+    // 全屏阅读器（双模式 + 缩放 + 长按保存 + 末页询问下一章）
     viewerUrls?.let { urls ->
-        PhotoViewerDialog(urls = urls, initialIndex = 0, onDismiss = { viewerUrls = null })
+        val label = ordered.getOrNull(viewerIdx)?.let { chapterName(viewerIdx, it) }
+        key(viewerIdx) {
+            PhotoViewerDialog(
+                urls = urls,
+                initialIndex = 0,
+                onDismiss = { viewerUrls = null; viewerIdx = -1 },
+                chapterLabel = label,
+                hasNextChapter = viewerIdx >= 0 && viewerIdx < ordered.size - 1,
+                onOpenNextChapter = {
+                    Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
+                    openChapter(viewerIdx + 1)
+                }
+            )
+        }
     }
 
     // 查看全部网格
@@ -588,7 +798,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(3),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
+                    contentPadding = PaddingValues(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     modifier = Modifier.fillMaxSize()

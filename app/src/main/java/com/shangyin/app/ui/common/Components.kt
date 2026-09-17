@@ -303,10 +303,19 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
  * - 未放大：大幅度左右滑动切换上一张/下一张（手势交给 Pager），单击关闭
  * - 放大后：单指拖动看图（带边界限制），双击/双指可缩放
  * - 顶部页码指示，右上角 X 关闭
+ * - 单章阅读时若还有下一章：翻到本章最后一页询问是否继续查看下一章
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -> Unit) {
+fun PhotoViewerDialog(
+    urls: List<String>,
+    initialIndex: Int = 0,
+    onDismiss: () -> Unit,
+    /** 当前章节名（末页提示用，如"第 3 话"）；配合 hasNextChapter 使用 */
+    chapterLabel: String? = null,
+    hasNextChapter: Boolean = false,
+    onOpenNextChapter: (() -> Unit)? = null
+) {
     if (urls.isEmpty()) return
     Dialog(
         onDismissRequest = onDismiss,
@@ -334,6 +343,18 @@ fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -
             }
         }
         val saveRequester = rememberImageSaveRequester()
+
+        // 末页询问下一章（同一章只问一次）
+        var showNextPrompt by remember { mutableStateOf(false) }
+        var askedNext by remember(urls) { mutableStateOf(false) }
+        val curPage = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
+        LaunchedEffect(curPage, urls.size, vertical) {
+            if (!askedNext && hasNextChapter && onOpenNextChapter != null && curPage >= urls.size - 1) {
+                askedNext = true
+                showNextPrompt = true
+            }
+        }
+
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -416,6 +437,31 @@ fun PhotoViewerDialog(urls: List<String>, initialIndex: Int = 0, onDismiss: () -
                         .padding(top = 18.dp)
                 )
             }
+        }
+
+        // 本章最后一页：询问是否继续查看下一章
+        if (showNextPrompt) {
+            AlertDialog(
+                onDismissRequest = { showNextPrompt = false },
+                title = { Text("本章已看完") },
+                text = {
+                    Text(
+                        buildString {
+                            append(chapterLabel?.takeIf { it.isNotBlank() } ?: "本章")
+                            append(" 已到最后一页，是否继续查看下一章？")
+                        }
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showNextPrompt = false
+                        onOpenNextChapter?.invoke()
+                    }) { Text("下一章") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showNextPrompt = false }) { Text("留在本章") }
+                }
+            )
         }
     }
 }

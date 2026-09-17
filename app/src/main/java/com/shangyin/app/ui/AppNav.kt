@@ -196,6 +196,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 ListDetailScreen(nav, entry.arguments?.getLong("id") ?: 0L)
             }
             composable("listManager") { ListManagerScreen(nav) }
+            // 我的下载（漫画 / 本子离线阅读）
+            composable("downloads") { com.shangyin.app.ui.download.DownloadScreen(nav) }
         }
     }
 
