@@ -16,6 +16,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.dnsoverhttps.DnsOverHttps
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 @Serializable
@@ -49,7 +52,10 @@ data class KomiicChapter(
 
 /**
  * Komiic 漫画 API（komiic.com，GraphQL）。
- * 已实测（2026-09-17）：POST https://komiic.com/api/query，匿名可访问，无特殊请求头要求。
+ * 已实测（2026-09-17）：POST https://komiic.com/api/query，匿名可访问。
+ * 连接策略（实测 PC curl 通、手机 OkHttp 被软拒的现象）：
+ *  1. 强制 HTTP/1.1 + Chrome 浏览器 UA：服务器 WAF 对 OkHttp 的 HTTP/2 指纹/默认 UA 会软拒绝（200 空数据）
+ *  2. DoH 加密 DNS（阿里 dns.alidns.com）：直连场景下 komiic.com 的系统 DNS 解析可能被污染，加密查询绕过
  * 封面在 public.komiic.com（无需 Referer）；章节图 https://komiic.com/api/image/{kid}
  * 防盗链实测必须带完整路径 Referer：https://komiic.com/comic/{comicId}/chapter/{chapterId}
  * —— 因此章节图 URL 末尾追加 fragment "#c/{comicId}/{chapterId}" 编码归属信息，
@@ -62,9 +68,32 @@ object KomiicClient {
     private const val PAGE_SIZE = 20
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    /** DoH（阿里，国内可直连）：绕过 DNS 污染；DoH 失败自动回退系统 DNS，不影响可用性 */
+    private val doh = DnsOverHttps.Builder()
+        .client(OkHttpClient.Builder().connectTimeout(5, TimeUnit.SECONDS).build())
+        .url("https://dns.alidns.com/dns-query".toHttpUrl())
+        .bootstrapDnsHosts(
+            InetAddress.getByName("223.5.5.5"),
+            InetAddress.getByName("223.6.6.6")
+        )
+        .build()
+
+    private val smartDns = object : okhttp3.Dns {
+        override fun lookup(hostname: String): List<InetAddress> =
+            try {
+                doh.lookup(hostname)
+            } catch (e: Exception) {
+                okhttp3.Dns.SYSTEM.lookup(hostname)
+            }
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        .dns(smartDns)
+        // 服务器对 OkHttp 默认的 HTTP/2 指纹软拒绝（200 空数据），强制 HTTP/1.1 与 curl 行为一致
+        .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
         .addInterceptor { chain ->
             // 默认 okhttp UA 易被站点 WAF 拦截（返回 200 空数据而非报错），伪装浏览器 UA
             chain.proceed(

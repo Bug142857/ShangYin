@@ -14,8 +14,8 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 103
-        versionName = "2.17.3"
+        versionCode = 104
+        versionName = "2.18.0"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
@@ -97,6 +97,8 @@ dependencies {
     ksp(libs.androidx.room.compiler)
 
     implementation(libs.okhttp)
+    // Komiic DoH：绕过 DNS 污染（直连场景下 komiic.com 解析被污染导致无法访问）
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     implementation(libs.kotlinx.serialization.json)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.coil.compose)
