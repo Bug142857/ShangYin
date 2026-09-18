@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.SwapVert
@@ -87,6 +88,8 @@ import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.komiic.KomiicChapter
 import com.shangyin.app.data.komiic.KomiicComic
 import com.shangyin.app.ui.common.CollectDialog
+import com.shangyin.app.ui.common.LoadingPill
+import com.shangyin.app.ui.common.PhotoGridDialog
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -477,11 +480,14 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     var viewerIdx by remember { mutableIntStateOf(-1) }
     var showCollect by remember { mutableStateOf(false) }
     var sortDesc by rememberSaveable { mutableStateOf(false) }
-    // 查看全部
+    // 查看全部（合并全部章节）
     var allImages by remember { mutableStateOf<List<String>?>(null) }
     var loadingAll by remember { mutableStateOf(false) }
     var allProgress by remember { mutableStateOf("") }
-    var openIndex by remember { mutableIntStateOf(-1) }
+    var allJob by remember { mutableStateOf<Job?>(null) }
+    // 单章图片总览（章节行网格按钮）
+    var gridIdx by remember { mutableIntStateOf(-1) }
+    var gridUrls by remember { mutableStateOf<List<String>?>(null) }
 
     val ordered = remember(chapters, sortDesc) { if (sortDesc) chapters.reversed() else chapters }
 
@@ -567,10 +573,10 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
         Toast.makeText(context, "已加入下载（${list.size} 章），可在「我的下载」查看", Toast.LENGTH_SHORT).show()
     }
 
-    /** 查看全部：按章节顺序合并全部图片，网格浏览 */
+    /** 查看全部：按章节顺序合并全部图片，网格浏览（可中途关闭取消剩余获取） */
     fun fetchAllImages() {
         if (loadingAll) return
-        scope.launch {
+        allJob = scope.launch {
             loadingAll = true
             val list = mutableListOf<String>()
             runCatching {
@@ -581,11 +587,37 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
             }.onSuccess {
                 if (list.isEmpty()) Toast.makeText(context, "暂无图片", Toast.LENGTH_SHORT).show()
                 else allImages = list
-            }.onFailure {
-                val msg = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "网络错误"
-                Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                if (e !is CancellationException) {
+                    val msg = (e.message?.takeIf { m -> m.isNotBlank() } ?: e::class.simpleName) ?: "网络错误"
+                    Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
+                }
             }
             loadingAll = false
+        }
+    }
+
+    /** 单章图片总览：获取指定章节图片并打开网格（不合并其他章节） */
+    fun openChapterGrid(idx: Int) {
+        if (gridIdx >= 0) return
+        val ch = ordered.getOrNull(idx) ?: return
+        gridIdx = idx
+        gridUrls = null
+        scope.launch {
+            runCatching { KomiicClient.fetchChapterImages(comicId, ch.id) }
+                .onSuccess { urls ->
+                    if (idx != gridIdx) return@launch
+                    if (urls.isEmpty()) {
+                        Toast.makeText(context, "该章节暂无图片", Toast.LENGTH_SHORT).show()
+                        gridIdx = -1
+                    } else gridUrls = urls
+                }
+                .onFailure { e ->
+                    if (idx != gridIdx) return@launch
+                    val msg = (e.message?.takeIf { m -> m.isNotBlank() } ?: e::class.simpleName) ?: "网络错误"
+                    Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
+                    gridIdx = -1
+                }
         }
     }
 
@@ -628,8 +660,9 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
             }
             else -> {
                 val c = detail
-                LazyColumn(Modifier.padding(pad).fillMaxSize()) {
-                    if (c == null) return@LazyColumn
+                Box(Modifier.padding(pad).fillMaxSize()) {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        if (c == null) return@LazyColumn
                     // 头部
                     item {
                         Row(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -740,6 +773,18 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            // 本章图片总览（网格浏览本章，不合并其他章节）
+                            IconButton(
+                                onClick = { openChapterGrid(i) },
+                                enabled = gridIdx < 0
+                            ) {
+                                Icon(
+                                    Icons.Rounded.GridView,
+                                    contentDescription = "本章图片总览",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                             when {
                                 task != null && task.error == null -> if (task.total > 0) {
                                     // 下载中：进度条 + 已完成张数
@@ -797,6 +842,18 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                         }
                     }
                     item { Spacer(Modifier.height(24.dp)) }
+                    }
+                    // 底部加载提示：让用户知道"查看全部/本章总览"点击已生效
+                    when {
+                        loadingAll -> LoadingPill(
+                            "正在获取全部图片 $allProgress",
+                            Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp)
+                        )
+                        gridIdx >= 0 && gridUrls == null -> LoadingPill(
+                            "正在获取本章图片…",
+                            Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp)
+                        )
+                    }
                 }
             }
         }
@@ -815,54 +872,32 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                 onOpenNextChapter = {
                     Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
                     openChapter(viewerIdx + 1)
-                },
-                onViewAll = { fetchAllImages() }
+                }
             )
         }
     }
 
-    // 查看全部网格
-    allImages?.let { urls ->
-        Dialog(
-            onDismissRequest = { allImages = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true)
-        ) {
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(urls.size) { i ->
-                        AsyncImage(
-                            model = urls[i],
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .aspectRatio(0.75f)
-                                .clickable { openIndex = i }
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { allImages = null },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
-                ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
-                }
-                Text(
-                    "共 ${urls.size} 张 · 点击放大",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp)
-                )
+    // 单章图片总览网格（images=null 时内部显示加载占位）
+    if (gridIdx >= 0) {
+        val gTitle = ordered.getOrNull(gridIdx)?.let { chapterName(gridIdx, it) } ?: "本章"
+        PhotoGridDialog(
+            title = gridUrls?.let { u -> "$gTitle · 共 ${u.size} 张" } ?: "$gTitle · 获取中…",
+            images = gridUrls,
+            onDismiss = { gridIdx = -1; gridUrls = null }
+        )
+    }
+
+    // 查看全部网格（images=null 时内部显示加载占位；关闭即取消剩余获取）
+    if (loadingAll || allImages != null) {
+        PhotoGridDialog(
+            title = if (allImages == null) "查看全部 · 正在获取 $allProgress"
+            else "查看全部 · 共 ${allImages?.size ?: 0} 张",
+            images = allImages,
+            onDismiss = {
+                if (loadingAll) allJob?.cancel()
+                allImages = null
             }
-        }
-        if (openIndex >= 0) {
-            PhotoViewerDialog(urls = urls, initialIndex = openIndex, onDismiss = { openIndex = -1 })
-        }
+        )
     }
 
     // 收藏到里世界清单

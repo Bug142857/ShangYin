@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -75,9 +76,13 @@ import com.shangyin.app.data.download.DownloadedChapter
 import com.shangyin.app.data.download.DownloadedComic
 import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.common.LoadingPill
+import com.shangyin.app.ui.common.PhotoGridDialog
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 /**
@@ -100,11 +105,14 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     var viewerIdx by remember { mutableIntStateOf(-1) }        // viewerUrls 对应 ordered 下标（-1=单本无章节）
     var sortDesc by rememberSaveable { mutableStateOf(false) }
 
-    // 查看全部：按章节顺序取全部图片，网格浏览 + 点击进入阅读器放大
+    // 查看全部：按章节顺序取全部图片，网格浏览 + 点击进入阅读器放大（可中途关闭取消）
     var allImages by remember { mutableStateOf<List<String>?>(null) }
     var loadingAll by remember { mutableStateOf(false) }
     var allProgress by remember { mutableStateOf("") }
-    var openIndex by remember { mutableStateOf(-1) }
+    var allJob by remember { mutableStateOf<Job?>(null) }
+    // 单章图片总览（章节行网格按钮）
+    var gridIdx by remember { mutableIntStateOf(-1) }
+    var gridUrls by remember { mutableStateOf<List<String>?>(null) }
 
     // 收藏到里世界清单（category="本子"）
     var showCollect by remember { mutableStateOf(false) }
@@ -200,10 +208,10 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         Toast.makeText(context, "已加入下载（${list.size} 章），可在「我的下载」查看", Toast.LENGTH_SHORT).show()
     }
 
-    /** 查看全部：按章节顺序拉取全部图片（无章节=单本），成功后打开网格浏览 */
+    /** 查看全部：按章节顺序拉取全部图片（无章节=单本），成功后打开网格浏览（可中途关闭取消剩余获取） */
     fun fetchAllImages() {
         if (loadingAll) return
-        scope.launch {
+        allJob = scope.launch {
             loadingAll = true
             val list = mutableListOf<String>()
             val orders = if (chapters.isEmpty()) listOf(1) else chapters.map { it.order }.sorted()
@@ -215,10 +223,40 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
             }.onSuccess {
                 if (list.isEmpty()) Toast.makeText(context, "暂无图片", Toast.LENGTH_SHORT).show()
                 else allImages = list
-            }.onFailure {
-                Toast.makeText(context, "获取图片失败：${it.message ?: "网络错误"}", Toast.LENGTH_SHORT).show()
+            }.onFailure { e ->
+                if (e !is CancellationException && e !is BikaClient.BikaAuthException) {
+                    Toast.makeText(context, "获取图片失败：${e.message ?: "网络错误"}", Toast.LENGTH_SHORT).show()
+                }
             }
             loadingAll = false
+        }
+    }
+
+    /** 单章图片总览：获取指定章节图片并打开网格（不合并其他章节） */
+    fun openChapterGrid(idx: Int) {
+        if (gridIdx >= 0) return
+        val ch = ordered.getOrNull(idx) ?: return
+        gridIdx = idx
+        gridUrls = null
+        scope.launch {
+            runCatching { BikaClient.withAuth { t -> BikaClient.fetchChapterImages(t, id, ch.order) } }
+                .onSuccess { urls ->
+                    if (idx != gridIdx) return@launch
+                    if (urls.isEmpty()) {
+                        Toast.makeText(context, "该章节暂无图片", Toast.LENGTH_SHORT).show()
+                        gridIdx = -1
+                    } else gridUrls = urls
+                }
+                .onFailure { e ->
+                    if (idx != gridIdx) return@launch
+                    Toast.makeText(
+                        context,
+                        if (e is BikaClient.BikaAuthException) "哔咔账号异常，请重新进入" else "获取图片失败：${e.message ?: "网络错误"}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    if (e is BikaClient.BikaAuthException) handleAuthError()
+                    gridIdx = -1
+                }
         }
     }
 
@@ -272,11 +310,12 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
             }
             else -> {
                 val c = comic!!
-                LazyColumn(
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.padding(pad).fillMaxSize()
-                ) {
+                Box(Modifier.padding(pad).fillMaxSize()) {
+                    LazyColumn(
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
                     // 头部：封面 + 信息
                     item {
                         Row {
@@ -435,6 +474,19 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                         )
                                     }
                                     Spacer(Modifier.weight(1f))
+                                    // 本章图片总览（网格浏览本章，不合并其他章节）
+                                    IconButton(
+                                        onClick = { openChapterGrid(i) },
+                                        enabled = gridIdx < 0,
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.GridView,
+                                            contentDescription = "本章图片总览",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
                                     when {
                                         reading -> CircularProgressIndicator(
                                             modifier = Modifier.padding(10.dp).size(16.dp),
@@ -494,6 +546,18 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                             }
                         }
                     }
+                    }
+                    // 底部加载提示：让用户知道"查看全部/本章总览"点击已生效
+                    when {
+                        loadingAll -> LoadingPill(
+                            "正在获取全部图片 $allProgress",
+                            Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp)
+                        )
+                        gridIdx >= 0 && gridUrls == null -> LoadingPill(
+                            "正在获取本章图片…",
+                            Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp)
+                        )
+                    }
                 }
             }
         }
@@ -512,54 +576,32 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 onOpenNextChapter = {
                     Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
                     ordered.getOrNull(viewerIdx + 1)?.let { next -> readChapter(next.order, viewerIdx + 1) }
-                },
-                onViewAll = { fetchAllImages() }
+                }
             )
         }
     }
 
-    // 查看全部：全屏网格浏览，点击单张进入阅读器（支持缩放/长按保存/阅读方向切换）
-    allImages?.let { urls ->
-        Dialog(
-            onDismissRequest = { allImages = null },
-            properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true)
-        ) {
-            Box(Modifier.fillMaxSize().background(Color.Black)) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(urls.size) { i ->
-                        AsyncImage(
-                            model = urls[i],
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .aspectRatio(0.75f)
-                                .clickable { openIndex = i }
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = { allImages = null },
-                    modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)
-                ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
-                }
-                Text(
-                    "共 ${urls.size} 张 · 点击放大",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp)
-                )
+    // 单章图片总览网格（images=null 时内部显示加载占位）
+    if (gridIdx >= 0) {
+        val gTitle = ordered.getOrNull(gridIdx)?.let { epLabel(it) } ?: "本章"
+        PhotoGridDialog(
+            title = gridUrls?.let { u -> "$gTitle · 共 ${u.size} 张" } ?: "$gTitle · 获取中…",
+            images = gridUrls,
+            onDismiss = { gridIdx = -1; gridUrls = null }
+        )
+    }
+
+    // 查看全部网格（images=null 时内部显示加载占位；关闭即取消剩余获取）
+    if (loadingAll || allImages != null) {
+        PhotoGridDialog(
+            title = if (allImages == null) "查看全部 · 正在获取 $allProgress"
+            else "查看全部 · 共 ${allImages?.size ?: 0} 张",
+            images = allImages,
+            onDismiss = {
+                if (loadingAll) allJob?.cancel()
+                allImages = null
             }
-        }
-        if (openIndex >= 0) {
-            PhotoViewerDialog(urls = urls, initialIndex = openIndex, onDismiss = { openIndex = -1 })
-        }
+        )
     }
 
     // 收藏对话框：存为 category="本子" 条目并挂入所选里世界清单

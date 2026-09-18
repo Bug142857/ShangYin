@@ -15,24 +15,31 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.SwapVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -308,7 +315,7 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
  * 全屏图片浏览器（统一入口）：HorizontalPager 左右滑动翻页 + 每页双指缩放/双击放大。
  * - 未放大：大幅度左右滑动切换上一张/下一张（手势交给 Pager），单击关闭
  * - 放大后：单指拖动看图（带边界限制），双击/双指可缩放
- * - 顶部页码指示，右上角 X 关闭（可选「查看全部」网格入口）
+ * - 顶部页码指示，右上角 X 关闭
  * - 单章阅读时若还有下一章：在末页继续向前滑动（越界滚动）询问是否继续查看下一章
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -320,9 +327,7 @@ fun PhotoViewerDialog(
     /** 当前章节名（末页提示用，如"第 3 话"）；配合 hasNextChapter 使用 */
     chapterLabel: String? = null,
     hasNextChapter: Boolean = false,
-    onOpenNextChapter: (() -> Unit)? = null,
-    /** 「查看全部」网格入口（漫画/本子阅读器内跳全部图片总览）；null 则不显示 */
-    onViewAll: (() -> Unit)? = null
+    onOpenNextChapter: (() -> Unit)? = null
 ) {
     if (urls.isEmpty()) return
     Dialog(
@@ -399,6 +404,32 @@ fun PhotoViewerDialog(
                 .fillMaxSize()
                 .background(Color.Black)
                 .nestedScroll(nextChapterGate)
+                // 双保险：指针级观察兜底（末页 + 单指前向大幅滑动）。NestedScrollConnection 理论上已覆盖，
+                // 此处防止个别机型/滚动容器未派发未消费增量的边缘情况
+                .pointerInput(vertical, urls.size, hasNextChapter) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        var dx = 0f
+                        var dy = 0f
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            // 只统计单指位移（双指缩放不参与判断）
+                            ev.changes.singleOrNull()?.let { c ->
+                                dx += c.positionChange().x
+                                dy += c.positionChange().y
+                            }
+                            if (ev.changes.all { !it.pressed }) break
+                        }
+                        val atEnd = if (vertical) !listState.canScrollForward
+                        else pagerState.currentPage >= urls.size - 1
+                        val forward = if (vertical) dy < -forwardThreshold else dx < -forwardThreshold
+                        if (atEnd && forward && !pageZoomed && hasNextChapter &&
+                            onOpenNextChapter != null && !showNextPrompt
+                        ) {
+                            showNextPrompt = true
+                        }
+                    }
+                }
         ) {
             if (vertical) {
                 // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图
@@ -452,29 +483,19 @@ fun PhotoViewerDialog(
                     modifier = Modifier.size(26.dp)
                 )
             }
-            // 右上角：查看全部（网格总览）+ X 关闭
-            Row(
-                modifier = Modifier.align(Alignment.TopEnd),
-                verticalAlignment = Alignment.CenterVertically
+            // 右上角 X 关闭按钮
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
             ) {
-                if (onViewAll != null) {
-                    IconButton(onClick = { onViewAll?.invoke() }) {
-                        Icon(
-                            Icons.Rounded.GridView,
-                            contentDescription = "查看全部",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                }
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        Icons.Rounded.Close,
-                        contentDescription = "关闭",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "关闭",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
             }
             // 顶部页码
             if (urls.size > 1) {
@@ -513,6 +534,102 @@ fun PhotoViewerDialog(
                     TextButton(onClick = { showNextPrompt = false }) { Text("留在本章") }
                 }
             )
+        }
+    }
+}
+
+/**
+ * 全屏图片网格总览（「查看全部」/ 单章图片总览共用）：3 列缩略图，点击进入阅读器放大。
+ * images 为 null 时居中显示加载占位（页面底部还有 LoadingPill 进度提示）。
+ */
+@Composable
+fun PhotoGridDialog(
+    title: String,
+    images: List<String>?,
+    onDismiss: () -> Unit
+) {
+    var openIndex by remember { mutableStateOf(-1) }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true)
+    ) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            if (images == null) {
+                Column(
+                    Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp, color = Color.White)
+                    Spacer(Modifier.height(10.dp))
+                    Text("正在获取图片…", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                }
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    contentPadding = PaddingValues(4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(images.size) { i ->
+                        AsyncImage(
+                            model = images[i],
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .aspectRatio(0.75f)
+                                .clickable { openIndex = i }
+                        )
+                    }
+                }
+                Text(
+                    "共 ${images.size} 张 · 点击放大",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp)
+                )
+            }
+            // 左上角标题（如"查看全部 · 获取中 3/12"或"第 3 话 · 共 45 张"）
+            Text(
+                title,
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 60.dp, top = 20.dp)
+            )
+            // 右上角关闭
+            IconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd)
+            ) {
+                Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = Color.White)
+            }
+        }
+    }
+    // 点击缩略图 → 阅读器（后组合的 Dialog 显示在上层）
+    if (openIndex >= 0) {
+        images?.let {
+            PhotoViewerDialog(urls = it, initialIndex = openIndex, onDismiss = { openIndex = -1 })
+        }
+    }
+}
+
+/** 底部居中加载提示胶囊（如"正在获取图片 3/12"），让用户知道点击已生效 */
+@Composable
+fun LoadingPill(text: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .background(Color(0xCC1C1B1F), RoundedCornerShape(50))
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = Color.White)
+            Spacer(Modifier.width(8.dp))
+            Text(text, style = MaterialTheme.typography.labelSmall, color = Color.White)
         }
     }
 }

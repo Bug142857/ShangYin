@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -38,6 +39,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -68,7 +70,11 @@ fun DownloadScreen(nav: NavHostController) {
     val active by ComicDownloadManager.active.collectAsStateWithLifecycle()
 
     var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var viewer by remember { mutableStateOf<List<String>?>(null) }
+    // 离线阅读：漫画 + 章节 key + 页面（支持"下一章"继续阅读已下载章节）
+    var viewer by remember { mutableStateOf<Triple<DownloadedComic, String, List<String>>?>(null) }
+    // 删除确认（避免误触直接删除文件）
+    var pendingComicDelete by remember { mutableStateOf<DownloadedComic?>(null) }
+    var pendingChapterDelete by remember { mutableStateOf<Pair<DownloadedComic, String>?>(null) }
 
     LaunchedEffect(Unit) { ComicDownloadManager.refresh(context) }
 
@@ -187,17 +193,15 @@ fun DownloadScreen(nav: NavHostController) {
                             expanded = if (k in expanded) expanded - k else expanded + k
                         },
                         onDeleteComic = {
-                            ComicDownloadManager.deleteComic(context, comic.source, comic.id)
-                            Toast.makeText(context, "已删除《${comic.title}》全部下载", Toast.LENGTH_SHORT).show()
+                            pendingComicDelete = comic
                         },
                         onReadChapter = { key ->
                             val pages = ComicDownloadStore.chapterPages(context, comic.source, comic.id, key)
                             if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
-                            else viewer = pages.map { "file://$it" }
+                            else viewer = Triple(comic, key, pages.map { "file://$it" })
                         },
                         onDeleteChapter = { key ->
-                            ComicDownloadManager.deleteChapter(context, comic.source, comic.id, key)
-                            Toast.makeText(context, "已删除该章下载", Toast.LENGTH_SHORT).show()
+                            pendingChapterDelete = comic to key
                         }
                     )
                 }
@@ -205,8 +209,66 @@ fun DownloadScreen(nav: NavHostController) {
         }
     }
 
-    viewer?.let { urls ->
-        PhotoViewerDialog(urls = urls, initialIndex = 0, onDismiss = { viewer = null })
+    // 离线阅读器：末页"下一章"跳到下一个已下载章节（未下载则提示）
+    viewer?.let { (c, chapterKey, urls) ->
+        val chapters = remember(c.id) { c.chapters.sortedBy { it.name } }
+        val idx = chapters.indexOfFirst { it.key == chapterKey }
+        key(idx) {
+            PhotoViewerDialog(
+                urls = urls,
+                initialIndex = 0,
+                onDismiss = { viewer = null },
+                chapterLabel = chapters.getOrNull(idx)?.name,
+                hasNextChapter = idx in 0 until chapters.lastIndex,
+                onOpenNextChapter = {
+                    val next = chapters.getOrNull(idx + 1)
+                    val pages = next?.let { ComicDownloadStore.chapterPages(context, c.source, c.id, it.key) }
+                    if (next == null || pages.isNullOrEmpty()) {
+                        Toast.makeText(context, "下一章尚未下载：${next?.name ?: "没有更多章节"}", Toast.LENGTH_SHORT).show()
+                    } else {
+                        viewer = Triple(c, next.key, pages.map { "file://$it" })
+                    }
+                }
+            )
+        }
+    }
+
+    // 删除整本确认
+    pendingComicDelete?.let { c ->
+        AlertDialog(
+            onDismissRequest = { pendingComicDelete = null },
+            title = { Text("删除整本下载") },
+            text = { Text("确定删除《${c.title}》的全部 ${c.chapters.size} 章下载文件吗？此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    ComicDownloadManager.deleteComic(context, c.source, c.id)
+                    Toast.makeText(context, "已删除《${c.title}》全部下载", Toast.LENGTH_SHORT).show()
+                    pendingComicDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingComicDelete = null }) { Text("取消") }
+            }
+        )
+    }
+    // 删除单章确认
+    pendingChapterDelete?.let { (c, key0) ->
+        val name = c.chapters.firstOrNull { it.key == key0 }?.name ?: "该章"
+        AlertDialog(
+            onDismissRequest = { pendingChapterDelete = null },
+            title = { Text("删除章节下载") },
+            text = { Text("确定删除《${c.title}》「$name」的下载文件吗？此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    ComicDownloadManager.deleteChapter(context, c.source, c.id, key0)
+                    Toast.makeText(context, "已删除「$name」下载", Toast.LENGTH_SHORT).show()
+                    pendingChapterDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingChapterDelete = null }) { Text("取消") }
+            }
+        )
     }
 }
 
