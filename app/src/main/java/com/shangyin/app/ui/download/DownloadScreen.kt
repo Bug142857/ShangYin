@@ -225,7 +225,10 @@ fun DownloadScreen(nav: NavHostController) {
                 initialIndex = 0,
                 onDismiss = { viewer = null },
                 chapterLabel = chapters.getOrNull(idx)?.name,
-                hasNextChapter = idx in 0 until chapters.lastIndex,
+                // 下一章话数必须严格递增（chapterNo 解析不到数字的章节视为排在最后），
+                // 防止重复/特殊章节导致从"真正的最后一章"误跳
+                hasNextChapter = idx in 0 until chapters.lastIndex &&
+                    chapterNo(chapters[idx + 1].name) > chapterNo(chapters[idx].name),
                 onOpenNextChapter = {
                     val next = chapters.getOrNull(idx + 1)
                     val pages = next?.let { ComicDownloadStore.chapterPages(context, c.source, c.id, it.key) }

@@ -889,10 +889,15 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     // 全屏阅读器（双模式 + 缩放 + 长按保存 + 末页询问下一章）
     viewerUrls?.let { urls ->
         val label = ordered.getOrNull(viewerIdx)?.let { chapterName(viewerIdx, it) }
-        // 下一章 = 按话数正序的下一话（与界面正/倒序无关，1192 的下一章是 1193）
+        // 下一章 = 按话数正序的下一话（与界面正/倒序无关，1192 的下一章是 1193）；
+        // 话数必须严格递增——防止尾部非数字序号章节（特别篇等排到最后）、重复话数、
+        // 或当前章查找失败（indexOfFirst=-1 会取到第一章）导致从"真正的最后一章"误跳
         val nextCh = ordered.getOrNull(viewerIdx)?.let { cur ->
             val i = bySerial.indexOfFirst { it.id == cur.id }
-            bySerial.getOrNull(i + 1)
+            val cand = bySerial.getOrNull(i + 1) ?: return@let null
+            val curNo = cur.serial?.toIntOrNull()
+            val candNo = cand.serial?.toIntOrNull()
+            if (curNo != null && (candNo == null || candNo <= curNo)) null else cand
         }
         key(viewerIdx) {
             PhotoViewerDialog(

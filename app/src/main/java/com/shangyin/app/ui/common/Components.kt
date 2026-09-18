@@ -376,20 +376,22 @@ fun PhotoViewerDialog(
                 pagerState.scrollToPage(urls.size - 1)
             }
         }
-        // 上下滑动：末页占位项滚入超过一半 → 有下一章弹窗询问并弹回最后一页；
+        // 上下滑动：滚动停止（松手/惯性结束）时若"末页占位"已滚入超过一半 → 有下一章弹窗询问并弹回；
         // 没有下一章则停留，占位项本身就显示"已经是最后一页了"（纯告知，无任何跳转）。
-        // 结构化触发：任意手指位置、慢拖或惯性抛掷都成立，与左右模式虚拟页同思路
+        // 监听 isScrollInProgress 翻转而非滚动位移——即使停在末页后原地再滑（布局无变化）也能重新触发
         LaunchedEffect(vertical, listState, lastImgReady, hasNext) {
-            snapshotFlow {
-                val info = listState.layoutInfo
-                val footer = info.visibleItemsInfo.firstOrNull { it.index >= urls.size }
-                if (footer == null) 0f
-                else ((info.viewportEndOffset - footer.offset).toFloat() / footer.size)
-                    .coerceIn(0f, 1f)
-            }.collect { frac ->
-                if (frac >= 0.5f && lastImgReady && hasNext && !showNextPrompt) {
-                    showNextPrompt = true
-                    listState.scrollToItem((urls.size - 1).coerceAtLeast(0))
+            snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+                if (vertical && !scrolling && !showNextPrompt) {
+                    val info = listState.layoutInfo
+                    val footer = info.visibleItemsInfo.firstOrNull { it.index >= urls.size }
+                    if (footer != null) {
+                        val frac = ((info.viewportEndOffset - footer.offset).toFloat() / footer.size)
+                            .coerceIn(0f, 1f)
+                        if (frac >= 0.5f && lastImgReady && hasNext) {
+                            showNextPrompt = true
+                            listState.scrollToItem((urls.size - 1).coerceAtLeast(0))
+                        }
+                    }
                 }
             }
         }

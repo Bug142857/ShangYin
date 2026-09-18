@@ -590,10 +590,12 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     // 全屏阅读器（可缩放/翻页/长按保存当前页/切换上下连续滑动 + 末页询问下一章）
     viewerUrls?.let { urls ->
         val label = ordered.getOrNull(viewerIdx)?.let { epLabel(it) }
-        // 下一章 = 按话数正序的下一话（与界面正/倒序无关，1192 的下一章是 1193）
+        // 下一章 = 按话数正序的下一话（与界面正/倒序无关，1192 的下一章是 1193）；
+        // order 必须严格递增——防止重复/异常 order 导致从"真正的最后一章"误跳
         val nextCh = ordered.getOrNull(viewerIdx)?.let { cur ->
             val i = byOrder.indexOfFirst { it.order == cur.order }
-            byOrder.getOrNull(i + 1)
+            val cand = byOrder.getOrNull(i + 1) ?: return@let null
+            if (cand.order <= cur.order) null else cand
         }
         key(viewerIdx) {
             PhotoViewerDialog(
