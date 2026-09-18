@@ -35,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -54,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -237,7 +239,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 },
                 actions = {
                     IconButton(onClick = { nav.safeNavigate("downloads") }) {
-                        Icon(Icons.Rounded.DownloadDone, contentDescription = "我的下载")
+                        Icon(Icons.Rounded.Download, contentDescription = "我的下载")
                     }
                     IconButton(onClick = { showCollect = true }) {
                         Icon(
@@ -438,10 +440,39 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                             modifier = Modifier.padding(10.dp).size(16.dp),
                                             strokeWidth = 2.dp
                                         )
-                                        task != null && task.error == null -> CircularProgressIndicator(
-                                            modifier = Modifier.padding(10.dp).size(16.dp),
-                                            strokeWidth = 2.dp
-                                        )
+                                        task != null && task.error == null -> if (task.total > 0) {
+                                            // 下载中：进度条 + 已完成张数
+                                            Column(
+                                                horizontalAlignment = Alignment.End,
+                                                modifier = Modifier.padding(start = 10.dp, end = 10.dp, top = 4.dp, bottom = 4.dp)
+                                            ) {
+                                                Text(
+                                                    "${task.done}/${task.total} 张",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(Modifier.height(3.dp))
+                                                LinearProgressIndicator(
+                                                    progress = { task.done.toFloat() / task.total },
+                                                    modifier = Modifier.width(72.dp).height(4.dp),
+                                                    strokeCap = StrokeCap.Round
+                                                )
+                                            }
+                                        } else {
+                                            // 还在获取图片列表
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                modifier = Modifier.padding(horizontal = 10.dp)
+                                            ) {
+                                                CircularProgressIndicator(Modifier.size(10.dp), strokeWidth = 1.5.dp)
+                                                Spacer(Modifier.width(4.dp))
+                                                Text(
+                                                    "获取中",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
                                         done -> IconButton(onClick = { nav.safeNavigate("downloads") }) {
                                             Icon(
                                                 Icons.Rounded.DownloadDone,
@@ -481,7 +512,8 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 onOpenNextChapter = {
                     Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
                     ordered.getOrNull(viewerIdx + 1)?.let { next -> readChapter(next.order, viewerIdx + 1) }
-                }
+                },
+                onViewAll = { fetchAllImages() }
             )
         }
     }

@@ -236,7 +236,11 @@ object ComicDownloadManager {
                     refresh(ctx)
                     _active.update { it - k }
                 }.onFailure { e ->
-                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    if (e is kotlinx.coroutines.CancellationException) {
+                        // 主动取消：清掉下载到一半的章节文件，不留半成品
+                        runCatching { ComicDownloadStore.deleteChapter(ctx, comic.source, comic.id, ch.key) }
+                        throw e
+                    }
                     _active.update { m ->
                         m[k]?.let { cur -> m + (k to cur.copy(error = e.message ?: "下载失败")) } ?: m
                     }
@@ -246,12 +250,14 @@ object ComicDownloadManager {
         }
     }
 
+    /** 取消下载（同时清理该章已下载到一半的文件） */
     fun cancel(source: String, id: String, chapterKey: String) {
         val k = key(source, id, chapterKey)
         jobs.remove(k)?.cancel()
         _active.update { it - k }
     }
 
+    /** 全部取消（同时清理各任务下载到一半的文件） */
     fun cancelAll() {
         jobs.values.forEach { it.cancel() }
         jobs.clear()

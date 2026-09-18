@@ -19,7 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.DownloadDone
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Person
@@ -254,7 +254,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        Icons.Rounded.DownloadDone, contentDescription = null,
+                        Icons.Rounded.Download, contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.width(16.dp))

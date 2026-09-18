@@ -27,6 +27,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -50,9 +51,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
@@ -304,8 +308,8 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
  * 全屏图片浏览器（统一入口）：HorizontalPager 左右滑动翻页 + 每页双指缩放/双击放大。
  * - 未放大：大幅度左右滑动切换上一张/下一张（手势交给 Pager），单击关闭
  * - 放大后：单指拖动看图（带边界限制），双击/双指可缩放
- * - 顶部页码指示，右上角 X 关闭
- * - 单章阅读时若还有下一章：翻到本章最后一页询问是否继续查看下一章
+ * - 顶部页码指示，右上角 X 关闭（可选「查看全部」网格入口）
+ * - 单章阅读时若还有下一章：在末页继续向前滑动（越界滚动）询问是否继续查看下一章
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -316,7 +320,9 @@ fun PhotoViewerDialog(
     /** 当前章节名（末页提示用，如"第 3 话"）；配合 hasNextChapter 使用 */
     chapterLabel: String? = null,
     hasNextChapter: Boolean = false,
-    onOpenNextChapter: (() -> Unit)? = null
+    onOpenNextChapter: (() -> Unit)? = null,
+    /** 「查看全部」网格入口（漫画/本子阅读器内跳全部图片总览）；null 则不显示 */
+    onViewAll: (() -> Unit)? = null
 ) {
     if (urls.isEmpty()) return
     Dialog(
@@ -346,41 +352,53 @@ fun PhotoViewerDialog(
         }
         val saveRequester = rememberImageSaveRequester()
 
-        // 末页询问下一章：滑到最后一页后，再往前滑一下（越界滑动）才弹窗；
-        // 点「否」后可再次滑动再次触发；「下一章」= 当前排序下的下一章（n+1，倒序时即序号更小一章）
+        // 末页询问下一章：本章最后一页继续向前滑动/抛掷（越界滚动）→ 弹窗询问；
+        // 实现：NestedScrollConnection 捕获列表/Pager 在边界处"未消费"的前向滚动增量——
+        // 只有滚到尽头才会出现未消费增量，天然等价于"已到末页"，左右翻页与上下滑动两种模式通用。
+        // 点「留在本章」后需等本次滚动结束（isScrollInProgress 变 false）才可再次触发。
         var showNextPrompt by remember { mutableStateOf(false) }
         var pageZoomed by remember { mutableStateOf(false) }
         LaunchedEffect(pagerState.currentPage) { pageZoomed = false }
-        val overscrollPx = with(LocalDensity.current) { 48.dp.toPx() }
+        val forwardThreshold = with(LocalDensity.current) { 48.dp.toPx() }
+        val nextChapterGate = remember(hasNextChapter, forwardThreshold) {
+            object : NestedScrollConnection {
+                var acc = 0f
+                var spent = false
+                override fun onPostScroll(
+                    consumed: Offset,
+                    available: Offset,
+                    source: NestedScrollSource
+                ): Offset {
+                    if (!hasNextChapter || onOpenNextChapter == null) return Offset.Zero
+                    if (pageZoomed || showNextPrompt || spent) return Offset.Zero
+                    // 前向滚动 = x 向左 / y 向上（负值）
+                    val d = if (vertical) available.y else available.x
+                    if (d < 0f) {
+                        acc -= d
+                        if (acc >= forwardThreshold) {
+                            spent = true
+                            acc = 0f
+                            showNextPrompt = true
+                        }
+                    } else if (d > 0f) {
+                        acc = 0f
+                    }
+                    return Offset.Zero
+                }
+            }
+        }
+        // 滚动结束（手指松开且惯性停止）后重置，允许再次滑动触发
+        LaunchedEffect(pagerState.isScrollInProgress, listState.isScrollInProgress) {
+            if (!pagerState.isScrollInProgress && !listState.isScrollInProgress) {
+                nextChapterGate.spent = false
+                nextChapterGate.acc = 0f
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .pointerInput(vertical, urls.size, hasNextChapter) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                        var dx = 0f
-                        var dy = 0f
-                        while (true) {
-                            val ev = awaitPointerEvent(PointerEventPass.Final)
-                            // 只统计单指位移（双指缩放不参与判断）
-                            ev.changes.singleOrNull()?.let { c ->
-                                dx += c.positionChange().x
-                                dy += c.positionChange().y
-                            }
-                            if (ev.changes.all { !it.pressed }) break
-                        }
-                        val atEnd = if (vertical) !listState.canScrollForward
-                        else pagerState.currentPage >= urls.size - 1
-                        val forward = if (vertical) dy < -overscrollPx && abs(dy) > abs(dx) * 1.2f
-                        else dx < -overscrollPx && abs(dx) > abs(dy) * 1.2f
-                        if (atEnd && forward && !pageZoomed && hasNextChapter &&
-                            onOpenNextChapter != null && !showNextPrompt
-                        ) {
-                            showNextPrompt = true
-                        }
-                    }
-                }
+                .nestedScroll(nextChapterGate)
         ) {
             if (vertical) {
                 // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图
@@ -434,19 +452,29 @@ fun PhotoViewerDialog(
                     modifier = Modifier.size(26.dp)
                 )
             }
-            // 右上角 X 关闭按钮
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(12.dp)
+            // 右上角：查看全部（网格总览）+ X 关闭
+            Row(
+                modifier = Modifier.align(Alignment.TopEnd),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Rounded.Close,
-                    contentDescription = "关闭",
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp)
-                )
+                if (onViewAll != null) {
+                    IconButton(onClick = { onViewAll?.invoke() }) {
+                        Icon(
+                            Icons.Rounded.GridView,
+                            contentDescription = "查看全部",
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "关闭",
+                        tint = Color.White,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
             // 顶部页码
             if (urls.size > 1) {

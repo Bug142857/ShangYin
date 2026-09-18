@@ -1,6 +1,7 @@
 package com.shangyin.app.ui.lists
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -143,6 +144,17 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var isSearching by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<com.shangyin.app.data.db.ItemWithOwnerList>>(emptyList()) }
+
+    // 系统返回键：编辑/搜索状态先取消当前状态，而不是退出页面
+    BackHandler(enabled = isSearching || isEditMode) {
+        if (isSearching) {
+            isSearching = false
+            searchQuery = ""
+        } else {
+            isEditMode = false
+        }
+    }
+
     // 全部清单名映射（搜索结果显示"来自哪个子清单"）
     val allLists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
     val listNameById = remember(allLists) { allLists.associate { it.id to it.name } }

@@ -92,13 +92,9 @@ fun HomeScreen(nav: NavHostController) {
     val innerLists by Repo.observeRootListsWithMeta(1)
         .collectAsStateWithLifecycle(initialValue = null)
 
-    // 双击返回退出应用（2 秒内按两次）
+    // 双击返回退出应用（2 秒内按两次）；表/里世界是同级 Tab，返回键不切 Tab
     var lastBackAt by remember { mutableStateOf(0L) }
     BackHandler {
-        if (tab != 0) {
-            tab = 0
-            return@BackHandler
-        }
         val now = System.currentTimeMillis()
         if (now - lastBackAt < 2000) {
             (context as? Activity)?.finish()
