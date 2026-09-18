@@ -340,10 +340,13 @@ fun PhotoViewerDialog(
     ) {
         // 阅读方向：false=左右翻页（默认，支持双击/双指缩放） / true=上下连续滑动
         var vertical by rememberSaveable { mutableStateOf(false) }
+        // 有下一章 → Pager 末尾追加一页"虚拟下一章"：翻到该页即弹窗询问并弹回最后一页。
+        // 左右模式的末页手势直接复用 Pager 原生翻页手势（翻页本身必定触发），不依赖嵌套滚动增量派发
+        val hasNext = hasNextChapter && onOpenNextChapter != null
         val pagerState = rememberPagerState(
             initialPage = initialIndex.coerceIn(0, urls.size - 1),
             initialPageOffsetFraction = 0f,
-            pageCount = { urls.size }
+            pageCount = { urls.size + if (hasNext) 1 else 0 }
         )
         val listState = rememberLazyListState()
         // 切换方向时跳回当前页（LaunchedEffect 首次运行时 jumpIndex 为 null 不动作）
@@ -363,12 +366,35 @@ fun PhotoViewerDialog(
         // 点「留在本章」后需等本次滚动结束（isScrollInProgress 变 false）才可再次触发。
         var showNextPrompt by remember { mutableStateOf(false) }
         var pageZoomed by remember { mutableStateOf(false) }
-        LaunchedEffect(pagerState.currentPage) { pageZoomed = false }
+        LaunchedEffect(pagerState.currentPage) {
+            pageZoomed = false
+            // 翻到"虚拟下一章"页 → 弹窗询问并弹回最后一页（左右翻页模式的末页手势）
+            if (hasNext && pagerState.currentPage >= urls.size) {
+                showNextPrompt = true
+                pagerState.scrollToPage(urls.size - 1)
+            }
+        }
         val forwardThreshold = with(LocalDensity.current) { 48.dp.toPx() }
         val nextChapterGate = remember(hasNextChapter, forwardThreshold) {
             object : NestedScrollConnection {
                 var acc = 0f
                 var spent = false
+                // 上下滑动模式主检测：onPreScroll 在子组件消费之前收到全部增量（末页时子组件消费 0），
+                // 不依赖"边界未消费增量"在 post 阶段的派发（真机实测 post 不可靠）
+                override fun onPreScroll(
+                    available: Offset,
+                    source: NestedScrollSource
+                ): Offset {
+                    if (!hasNextChapter || onOpenNextChapter == null) return Offset.Zero
+                    if (pageZoomed || showNextPrompt || spent) return Offset.Zero
+                    if (source != NestedScrollSource.UserInput) return Offset.Zero
+                    val atEnd = if (vertical) !listState.canScrollForward else !pagerState.canScrollForward
+                    val d = if (vertical) available.y else available.x
+                    if (!atEnd || d >= 0f) { acc = 0f; return Offset.Zero }
+                    acc -= d
+                    if (acc >= forwardThreshold) { spent = true; acc = 0f; showNextPrompt = true }
+                    return Offset.Zero
+                }
                 override fun onPostScroll(
                     consumed: Offset,
                     available: Offset,
@@ -458,12 +484,26 @@ fun PhotoViewerDialog(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize()
                 ) { pageIdx ->
-                    ZoomableImage(
-                        urls[pageIdx],
-                        onClose = onDismiss,
-                        onLongPress = { imgUrl -> saveRequester(imgUrl) },
-                        onZoom = { pageZoomed = it }
-                    )
+                    if (pageIdx >= urls.size) {
+                        // 虚拟"下一章"占位页：到达即弹窗并弹回（见 LaunchedEffect），用户只会瞥见一瞬
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "松开进入下一章",
+                                color = Color.White.copy(alpha = 0.6f),
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    } else {
+                        ZoomableImage(
+                            urls[pageIdx],
+                            onClose = onDismiss,
+                            onLongPress = { imgUrl -> saveRequester(imgUrl) },
+                            onZoom = { pageZoomed = it }
+                        )
+                    }
                 }
             }
             // 左上角：阅读方向切换
