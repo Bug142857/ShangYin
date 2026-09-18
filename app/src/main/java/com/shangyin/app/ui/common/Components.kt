@@ -374,7 +374,7 @@ fun PhotoViewerDialog(
                 pagerState.scrollToPage(urls.size - 1)
             }
         }
-        val forwardThreshold = with(LocalDensity.current) { 48.dp.toPx() }
+        val forwardThreshold = with(LocalDensity.current) { 36.dp.toPx() }
         val nextChapterGate = remember(hasNextChapter, forwardThreshold) {
             object : NestedScrollConnection {
                 var acc = 0f
@@ -390,7 +390,9 @@ fun PhotoViewerDialog(
                     if (source != NestedScrollSource.UserInput) return Offset.Zero
                     val atEnd = if (vertical) !listState.canScrollForward else !pagerState.canScrollForward
                     val d = if (vertical) available.y else available.x
-                    if (!atEnd || d >= 0f) { acc = 0f; return Offset.Zero }
+                    if (!atEnd) { acc = 0f; return Offset.Zero }
+                    // 反向微抖动只抵消不清零（否则手指轻微下抖会打断累计，导致很难触发）
+                    if (d >= 0f) { acc = (acc - d).coerceAtLeast(0f); return Offset.Zero }
                     acc -= d
                     if (acc >= forwardThreshold) { spent = true; acc = 0f; showNextPrompt = true }
                     return Offset.Zero

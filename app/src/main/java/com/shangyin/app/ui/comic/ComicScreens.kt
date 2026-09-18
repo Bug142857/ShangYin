@@ -83,6 +83,8 @@ import com.shangyin.app.data.Repo
 import com.shangyin.app.data.download.ComicDownloadManager
 import com.shangyin.app.data.download.DownloadedChapter
 import com.shangyin.app.data.download.DownloadedComic
+import com.shangyin.app.data.ReadProgressStore
+import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.data.komiic.KomiicCategory
 import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.komiic.KomiicChapter
@@ -479,7 +481,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
     var viewerIdx by remember { mutableIntStateOf(-1) }
     var showCollect by remember { mutableStateOf(false) }
-    var sortDesc by rememberSaveable { mutableStateOf(false) }
+    var sortDesc by rememberSaveable { mutableStateOf(SettingsStore.chapterSortDesc) }
     // 查看全部（合并全部章节）
     var allImages by remember { mutableStateOf<List<String>?>(null) }
     var loadingAll by remember { mutableStateOf(false) }
@@ -490,6 +492,12 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     var gridUrls by remember { mutableStateOf<List<String>?>(null) }
 
     val ordered = remember(chapters, sortDesc) { if (sortDesc) chapters.reversed() else chapters }
+    // 按话数(serial)正序的章节表，与界面正/倒序无关："下一章"永远指向数字上的下一话
+    val bySerial = remember(chapters) { chapters.sortedBy { it.serial?.toIntOrNull() ?: Int.MAX_VALUE } }
+    // 阅读进度（用于"上次看到"高亮）
+    ReadProgressStore.ensure(context)
+    val progressMap by ReadProgressStore.all.collectAsStateWithLifecycle(ReadProgressStore.all.value)
+    val lastReadKey = progressMap["komiic/$comicId"]
 
     // 收藏状态（右上角心形高亮）
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
@@ -546,6 +554,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                     else {
                         viewerIdx = idx
                         viewerUrls = urls
+                        ReadProgressStore.record(context, "komiic", comicId, ch.id)
                     }
                 }
                 .onFailure {
@@ -553,6 +562,12 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                     Toast.makeText(context, "获取图片失败：$msg", Toast.LENGTH_SHORT).show()
                 }
         }
+    }
+
+    /** 按 chapterId 打开章节（映射回当前排序下的下标，供"下一章"跨排序推进用） */
+    fun openChapterByCh(ch: KomiicChapter) {
+        val idx = ordered.indexOfFirst { it.id == ch.id }
+        if (idx >= 0) openChapter(idx)
     }
 
     /** 下载指定章节（1 章或整套） */
@@ -726,7 +741,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                                 modifier = Modifier.weight(1f).padding(start = 8.dp)
                             )
                             TextButton(
-                                onClick = { sortDesc = !sortDesc },
+                                onClick = { sortDesc = !sortDesc; SettingsStore.chapterSortDesc = sortDesc },
                                 enabled = chapters.size > 1
                             ) {
                                 Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -751,8 +766,12 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                         val ch = ordered[i]
                         val task = activeTasks[ComicDownloadManager.key("komiic", comicId, ch.id)]
                         val done = ch.id in downloadedKeys
+                        val isLast = ch.id == lastReadKey
                         Row(
-                            Modifier.fillMaxWidth().clickable { openChapter(i) }.padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                            Modifier.fillMaxWidth()
+                                .background(if (isLast) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent)
+                                .clickable { openChapter(i) }
+                                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
@@ -763,6 +782,14 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                             if (ch.type == "book") {
                                 Text(
                                     "单行本",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(end = 8.dp)
+                                )
+                            }
+                            if (isLast) {
+                                Text(
+                                    "上次看到",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(end = 8.dp)
@@ -862,16 +889,23 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     // 全屏阅读器（双模式 + 缩放 + 长按保存 + 末页询问下一章）
     viewerUrls?.let { urls ->
         val label = ordered.getOrNull(viewerIdx)?.let { chapterName(viewerIdx, it) }
+        // 下一章 = 按话数正序的下一话（与界面正/倒序无关，1192 的下一章是 1193）
+        val nextCh = ordered.getOrNull(viewerIdx)?.let { cur ->
+            val i = bySerial.indexOfFirst { it.id == cur.id }
+            bySerial.getOrNull(i + 1)
+        }
         key(viewerIdx) {
             PhotoViewerDialog(
                 urls = urls,
                 initialIndex = 0,
                 onDismiss = { viewerUrls = null; viewerIdx = -1 },
                 chapterLabel = label,
-                hasNextChapter = viewerIdx >= 0 && viewerIdx < ordered.size - 1,
+                hasNextChapter = nextCh != null,
                 onOpenNextChapter = {
-                    Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
-                    openChapter(viewerIdx + 1)
+                    if (nextCh != null) {
+                        Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
+                        openChapterByCh(nextCh)
+                    }
                 }
             )
         }

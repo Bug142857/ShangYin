@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -53,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.shangyin.app.data.ReadProgressStore
 import com.shangyin.app.data.download.ComicDownloadManager
 import com.shangyin.app.data.download.ComicDownloadStore
 import com.shangyin.app.data.download.DownloadedComic
@@ -198,7 +200,10 @@ fun DownloadScreen(nav: NavHostController) {
                         onReadChapter = { key ->
                             val pages = ComicDownloadStore.chapterPages(context, comic.source, comic.id, key)
                             if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
-                            else viewer = Triple(comic, key, pages.map { "file://$it" })
+                            else {
+                                viewer = Triple(comic, key, pages.map { "file://$it" })
+                                ReadProgressStore.record(context, comic.source, comic.id, key)
+                            }
                         },
                         onDeleteChapter = { key ->
                             pendingChapterDelete = comic to key
@@ -211,7 +216,8 @@ fun DownloadScreen(nav: NavHostController) {
 
     // 离线阅读器：末页"下一章"跳到下一个已下载章节（未下载则提示）
     viewer?.let { (c, chapterKey, urls) ->
-        val chapters = remember(c.id) { c.chapters.sortedBy { it.name } }
+        // 按章节名中的数字正序（"第 1192 话"排在"第 999 话"之后），与下载先后无关
+        val chapters = remember(c.id) { c.chapters.sortedBy { chapterNo(it.name) } }
         val idx = chapters.indexOfFirst { it.key == chapterKey }
         key(idx) {
             PhotoViewerDialog(
@@ -227,6 +233,7 @@ fun DownloadScreen(nav: NavHostController) {
                         Toast.makeText(context, "下一章尚未下载：${next?.name ?: "没有更多章节"}", Toast.LENGTH_SHORT).show()
                     } else {
                         viewer = Triple(c, next.key, pages.map { "file://$it" })
+                        ReadProgressStore.record(context, c.source, c.id, next.key)
                     }
                 }
             )
@@ -329,11 +336,14 @@ private fun ComicDownloadRow(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            val progressMap by ReadProgressStore.all.collectAsStateWithLifecycle(ReadProgressStore.all.value)
             if (expanded) {
-                comic.chapters.sortedBy { it.name }.forEach { ch ->
+                comic.chapters.sortedBy { chapterNo(it.name) }.forEach { ch ->
+                    val isLast = ch.key == progressMap["${comic.source}/${comic.id}"]
                     Row(
                         Modifier
                             .fillMaxWidth()
+                            .background(if (isLast) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent)
                             .clickable { onReadChapter(ch.key) }
                             .padding(start = 78.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -345,6 +355,14 @@ private fun ComicDownloadRow(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
+                        if (isLast) {
+                            Text(
+                                "上次看到",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                        }
                         Text(
                             "${ch.count} 张",
                             style = MaterialTheme.typography.labelSmall,
@@ -365,6 +383,10 @@ private fun ComicDownloadRow(
         }
     }
 }
+
+/** 章节名排序键：取名字里第一串数字（"第 1192 话"排在"第 999 话"之后），无数字排最后 */
+private fun chapterNo(name: String): Long =
+    Regex("\\d+").find(name)?.value?.toLongOrNull() ?: Long.MAX_VALUE
 
 /** 下载目录：只作文字说明（应用私有目录，无需存储权限，卸载即清） */
 @Composable

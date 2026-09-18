@@ -82,6 +82,13 @@ object SettingsStore {
         get() = sp.getBoolean(KEY_DOWNLOAD_INTERNAL, false)
         set(v) = sp.edit().putBoolean(KEY_DOWNLOAD_INTERNAL, v).apply()
 
+    private const val KEY_CHAPTER_SORT_DESC = "chapter_sort_desc"
+
+    /** 漫画/本子章节列表倒序排列（全局记忆，跨重启保留） */
+    var chapterSortDesc: Boolean
+        get() = sp.getBoolean(KEY_CHAPTER_SORT_DESC, false)
+        set(v) = sp.edit().putBoolean(KEY_CHAPTER_SORT_DESC, v).apply()
+
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 
     /** 导出关键配置快照（key 与 SP key 一致） */

@@ -74,6 +74,8 @@ import com.shangyin.app.data.bika.BikaComic
 import com.shangyin.app.data.download.ComicDownloadManager
 import com.shangyin.app.data.download.DownloadedChapter
 import com.shangyin.app.data.download.DownloadedComic
+import com.shangyin.app.data.ReadProgressStore
+import com.shangyin.app.ui.settings.SettingsStore
 import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.LoadingPill
@@ -103,7 +105,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
     var viewerIdx by remember { mutableIntStateOf(-1) }        // viewerUrls 对应 ordered 下标（-1=单本无章节）
-    var sortDesc by rememberSaveable { mutableStateOf(false) }
+    var sortDesc by rememberSaveable { mutableStateOf(SettingsStore.chapterSortDesc) }
 
     // 查看全部：按章节顺序取全部图片，网格浏览 + 点击进入阅读器放大（可中途关闭取消）
     var allImages by remember { mutableStateOf<List<String>?>(null) }
@@ -129,6 +131,12 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     LaunchedEffect(id) { ComicDownloadManager.refresh(context) }
 
     val ordered = remember(chapters, sortDesc) { if (sortDesc) chapters.reversed() else chapters }
+    // 按话数(order)正序的章节表，与界面正/倒序无关："下一章"永远指向数字上的下一话
+    val byOrder = remember(chapters) { chapters.sortedBy { it.order } }
+    // 阅读进度（用于"上次看到"高亮）
+    ReadProgressStore.ensure(context)
+    val progressMap by ReadProgressStore.all.collectAsStateWithLifecycle(ReadProgressStore.all.value)
+    val lastReadKey = progressMap["bika/$id"]
 
     /** 章节显示名（行内用） */
     fun epLabel(ch: BikaChapter) = "第 ${ch.order} 话"
@@ -180,6 +188,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     else {
                         viewerIdx = idx
                         viewerUrls = urls
+                        ReadProgressStore.record(context, "bika", id, order.toString())
                     }
                 }
                 .onFailure {
@@ -192,6 +201,12 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 }
             loadingEp = null
         }
+    }
+
+    /** 按 order 打开章节（映射回当前排序下的下标，供"下一章"跨排序推进用） */
+    fun readChapterByOrder(order: Int) {
+        val idx = ordered.indexOfFirst { it.order == order }
+        readChapter(order, if (idx >= 0) idx else -1)
     }
 
     /** 下载指定章节（1 章或整套）；无章节的单本按 order=1 下载 */
@@ -409,7 +424,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                 modifier = Modifier.weight(1f)
                             )
                             TextButton(
-                                onClick = { sortDesc = !sortDesc },
+                                onClick = { sortDesc = !sortDesc; SettingsStore.chapterSortDesc = sortDesc },
                                 enabled = chapters.size > 1
                             ) {
                                 Icon(Icons.Rounded.SwapVert, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -447,9 +462,10 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                             val reading = loadingEp == ch.order
                             val task = activeTasks[ComicDownloadManager.key("bika", id, ch.order.toString())]
                             val done = ch.order.toString() in downloadedKeys
+                            val isLast = ch.order.toString() == lastReadKey
                             Surface(
                                 shape = MaterialTheme.shapes.medium,
-                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                color = if (isLast) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
                                 onClick = { if (!reading) readChapter(ch.order, i) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
@@ -471,6 +487,14 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    if (isLast) {
+                                        Spacer(Modifier.width(10.dp))
+                                        Text(
+                                            "上次看到",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
                                         )
                                     }
                                     Spacer(Modifier.weight(1f))
@@ -566,16 +590,23 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     // 全屏阅读器（可缩放/翻页/长按保存当前页/切换上下连续滑动 + 末页询问下一章）
     viewerUrls?.let { urls ->
         val label = ordered.getOrNull(viewerIdx)?.let { epLabel(it) }
+        // 下一章 = 按话数正序的下一话（与界面正/倒序无关，1192 的下一章是 1193）
+        val nextCh = ordered.getOrNull(viewerIdx)?.let { cur ->
+            val i = byOrder.indexOfFirst { it.order == cur.order }
+            byOrder.getOrNull(i + 1)
+        }
         key(viewerIdx) {
             PhotoViewerDialog(
                 urls = urls,
                 initialIndex = 0,
                 onDismiss = { viewerUrls = null; viewerIdx = -1 },
                 chapterLabel = label,
-                hasNextChapter = viewerIdx >= 0 && viewerIdx < ordered.size - 1,
+                hasNextChapter = nextCh != null,
                 onOpenNextChapter = {
-                    Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
-                    ordered.getOrNull(viewerIdx + 1)?.let { next -> readChapter(next.order, viewerIdx + 1) }
+                    if (nextCh != null) {
+                        Toast.makeText(context, "正在加载下一章…", Toast.LENGTH_SHORT).show()
+                        readChapterByOrder(nextCh.order)
+                    }
                 }
             )
         }
