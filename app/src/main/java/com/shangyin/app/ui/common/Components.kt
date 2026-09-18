@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +44,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -340,6 +344,10 @@ fun PhotoViewerDialog(
     ) {
         // 阅读方向：false=左右翻页（默认，支持双击/双指缩放） / true=上下连续滑动
         var vertical by rememberSaveable { mutableStateOf(false) }
+        val scope = rememberCoroutineScope()
+        // 垂直模式：最后一张图是否已加载完（未加载完不允许触发"下一章"，防止滑进未加载区域被误判为末页）
+        var lastImgReady by remember { mutableStateOf(false) }
+        LaunchedEffect(urls) { lastImgReady = false }
         // 有下一章 → Pager 末尾追加一页"虚拟下一章"：翻到该页即弹窗询问并弹回最后一页。
         // 左右模式的末页手势直接复用 Pager 原生翻页手势（翻页本身必定触发），不依赖嵌套滚动增量派发
         val hasNext = hasNextChapter && onOpenNextChapter != null
@@ -388,7 +396,7 @@ fun PhotoViewerDialog(
                     if (!hasNextChapter || onOpenNextChapter == null) return Offset.Zero
                     if (pageZoomed || showNextPrompt || spent) return Offset.Zero
                     if (source != NestedScrollSource.UserInput) return Offset.Zero
-                    val atEnd = if (vertical) !listState.canScrollForward else !pagerState.canScrollForward
+                    val atEnd = if (vertical) (!listState.canScrollForward && lastImgReady) else !pagerState.canScrollForward
                     val d = if (vertical) available.y else available.x
                     if (!atEnd) { acc = 0f; return Offset.Zero }
                     // 反向微抖动只抵消不清零（否则手指轻微下抖会打断累计，导致很难触发）
@@ -448,7 +456,7 @@ fun PhotoViewerDialog(
                             }
                             if (ev.changes.all { !it.pressed }) break
                         }
-                        val atEnd = if (vertical) !listState.canScrollForward
+                        val atEnd = if (vertical) (!listState.canScrollForward && lastImgReady)
                         else pagerState.currentPage >= urls.size - 1
                         val forward = if (vertical) dy < -forwardThreshold else dx < -forwardThreshold
                         if (atEnd && forward && !pageZoomed && hasNextChapter &&
@@ -460,9 +468,12 @@ fun PhotoViewerDialog(
                 }
         ) {
             if (vertical) {
-                // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图
+                // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图。
+                // 顶部留白避开信息栏；图片最小高度 240dp 占位——未加载的尾部也有真实高度，
+                // 避免"滑进未加载区域就滚不动而被误判为末页"
                 LazyColumn(
                     state = listState,
+                    contentPadding = PaddingValues(top = 96.dp, bottom = 24.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(urls.size) { pageIdx ->
@@ -473,8 +484,11 @@ fun PhotoViewerDialog(
                                 .build(),
                             contentDescription = null,
                             contentScale = ContentScale.FillWidth,
+                            onSuccess = { if (pageIdx == urls.size - 1) lastImgReady = true },
+                            onError = { if (pageIdx == urls.size - 1) lastImgReady = true },
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 240.dp)
                                 .pointerInput(pageIdx) {
                                     detectTapGestures(onLongPress = { saveRequester(urls[pageIdx]) })
                                 }
@@ -508,48 +522,94 @@ fun PhotoViewerDialog(
                     }
                 }
             }
-            // 左上角：阅读方向切换
-            IconButton(
-                onClick = {
-                    jumpIndex = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
-                    vertical = !vertical
-                },
+            // 顶部信息栏（渐变遮罩）：模式切换 / 章节名 / 页码 / 关闭 + 快速跳转滑动条
+            Column(
                 modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(12.dp)
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color(0x00000000))))
             ) {
-                Icon(
-                    if (vertical) Icons.Rounded.SwapHoriz else Icons.Rounded.SwapVert,
-                    contentDescription = if (vertical) "切换为左右翻页" else "切换为上下滑动",
-                    tint = Color.White,
-                    modifier = Modifier.size(26.dp)
-                )
-            }
-            // 右上角 X 关闭按钮
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(12.dp)
-            ) {
-                Icon(
-                    Icons.Rounded.Close,
-                    contentDescription = "关闭",
-                    tint = Color.White,
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-            // 顶部页码
-            if (urls.size > 1) {
-                val cur = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
-                Text(
-                    "${cur + 1} / ${urls.size}",
-                    color = Color.White,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 18.dp)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 阅读方向切换
+                    IconButton(
+                        onClick = {
+                            jumpIndex = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
+                            vertical = !vertical
+                        }
+                    ) {
+                        Icon(
+                            if (vertical) Icons.Rounded.SwapHoriz else Icons.Rounded.SwapVert,
+                            contentDescription = if (vertical) "切换为左右翻页" else "切换为上下滑动",
+                            tint = Color.White,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                    // 章节名
+                    Text(
+                        chapterLabel?.takeIf { it.isNotBlank() } ?: "阅读",
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // 页码进度
+                    if (urls.size > 1) {
+                        val cur = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
+                        Text(
+                            "${cur + 1} / ${urls.size}",
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                    }
+                    // 关闭
+                    IconButton(onClick = onDismiss) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "关闭",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+                // 快速跳转滑动条（拖动显示目标页码，松手跳转）
+                if (urls.size > 1) {
+                    var dragging by remember { mutableStateOf(false) }
+                    var dragPos by remember { mutableStateOf(0) }
+                    val cur = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
+                    if (dragging) {
+                        Text(
+                            "跳转到第 ${dragPos + 1} 页",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        )
+                    }
+                    Slider(
+                        value = (if (dragging) dragPos else cur).coerceIn(0, urls.size - 1).toFloat(),
+                        onValueChange = {
+                            dragging = true
+                            dragPos = it.toInt()
+                        },
+                        onValueChangeFinished = {
+                            val target = dragPos.coerceIn(0, urls.size - 1)
+                            scope.launch {
+                                if (vertical) listState.scrollToItem(target) else pagerState.scrollToPage(target)
+                            }
+                            dragging = false
+                        },
+                        valueRange = 0f..(urls.size - 1).toFloat(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Color.White,
+                            activeTrackColor = Color.White,
+                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp, end = 8.dp)
+                    )
+                }
             }
         }
 
