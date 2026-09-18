@@ -57,6 +57,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
@@ -65,15 +66,11 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -320,7 +317,7 @@ fun Modifier.clickableNoRipple(onClick: () -> Unit): Modifier = composed {
  * - 未放大：大幅度左右滑动切换上一张/下一张（手势交给 Pager），单击关闭
  * - 放大后：单指拖动看图（带边界限制），双击/双指可缩放
  * - 顶部页码指示，右上角 X 关闭
- * - 单章阅读时若还有下一章：在末页继续向前滑动（越界滚动）询问是否继续查看下一章
+ * - 单章阅读：末尾有占位提示——还有下一章时到末页松手询问是否继续，已是最后一页则提示"已经是最后一页了"
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -345,16 +342,15 @@ fun PhotoViewerDialog(
         // 阅读方向：false=左右翻页（默认，支持双击/双指缩放） / true=上下连续滑动
         var vertical by rememberSaveable { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
-        // 垂直模式：最后一张图是否已加载完（未加载完不允许触发"下一章"，防止滑进未加载区域被误判为末页）
+        // 垂直模式：最后一张图是否已加载完（加载完才允许触发"下一章"，防止图片未加载就被误判到末页）
         var lastImgReady by remember { mutableStateOf(false) }
-        LaunchedEffect(urls) { lastImgReady = false }
-        // 有下一章 → Pager 末尾追加一页"虚拟下一章"：翻到该页即弹窗询问并弹回最后一页。
-        // 左右模式的末页手势直接复用 Pager 原生翻页手势（翻页本身必定触发），不依赖嵌套滚动增量派发
+        // 末尾永远保留一页虚拟占位：有下一章=翻到即询问（复用 Pager 原生翻页手势，必定触发）；
+        // 没有下一章=停留显示"已经是最后一页了"（纯告知，无任何跳转）
         val hasNext = hasNextChapter && onOpenNextChapter != null
         val pagerState = rememberPagerState(
             initialPage = initialIndex.coerceIn(0, urls.size - 1),
             initialPageOffsetFraction = 0f,
-            pageCount = { urls.size + if (hasNext) 1 else 0 }
+            pageCount = { urls.size + 1 }
         )
         val listState = rememberLazyListState()
         // 切换方向时跳回当前页（LaunchedEffect 首次运行时 jumpIndex 为 null 不动作）
@@ -368,10 +364,8 @@ fun PhotoViewerDialog(
         }
         val saveRequester = rememberImageSaveRequester()
 
-        // 末页询问下一章：本章最后一页继续向前滑动/抛掷（越界滚动）→ 弹窗询问；
-        // 实现：NestedScrollConnection 捕获列表/Pager 在边界处"未消费"的前向滚动增量——
-        // 只有滚到尽头才会出现未消费增量，天然等价于"已到末页"，左右翻页与上下滑动两种模式通用。
-        // 点「留在本章」后需等本次滚动结束（isScrollInProgress 变 false）才可再次触发。
+        // 末页询问下一章：末尾追加占位项（列表/Pager），滚动到占位项即触发——
+        // 结构化方案，任意手指位置、慢拖快甩都行，不依赖增量累计。
         var showNextPrompt by remember { mutableStateOf(false) }
         var pageZoomed by remember { mutableStateOf(false) }
         LaunchedEffect(pagerState.currentPage) {
@@ -382,117 +376,82 @@ fun PhotoViewerDialog(
                 pagerState.scrollToPage(urls.size - 1)
             }
         }
-        val forwardThreshold = with(LocalDensity.current) { 36.dp.toPx() }
-        val nextChapterGate = remember(hasNextChapter, forwardThreshold) {
-            object : NestedScrollConnection {
-                var acc = 0f
-                var spent = false
-                // 上下滑动模式主检测：onPreScroll 在子组件消费之前收到全部增量（末页时子组件消费 0），
-                // 不依赖"边界未消费增量"在 post 阶段的派发（真机实测 post 不可靠）
-                override fun onPreScroll(
-                    available: Offset,
-                    source: NestedScrollSource
-                ): Offset {
-                    if (!hasNextChapter || onOpenNextChapter == null) return Offset.Zero
-                    if (pageZoomed || showNextPrompt || spent) return Offset.Zero
-                    if (source != NestedScrollSource.UserInput) return Offset.Zero
-                    val atEnd = if (vertical) (!listState.canScrollForward && lastImgReady) else !pagerState.canScrollForward
-                    val d = if (vertical) available.y else available.x
-                    if (!atEnd) { acc = 0f; return Offset.Zero }
-                    // 反向微抖动只抵消不清零（否则手指轻微下抖会打断累计，导致很难触发）
-                    if (d >= 0f) { acc = (acc - d).coerceAtLeast(0f); return Offset.Zero }
-                    acc -= d
-                    if (acc >= forwardThreshold) { spent = true; acc = 0f; showNextPrompt = true }
-                    return Offset.Zero
+        // 上下滑动：末页占位项滚入超过一半 → 有下一章弹窗询问并弹回最后一页；
+        // 没有下一章则停留，占位项本身就显示"已经是最后一页了"（纯告知，无任何跳转）。
+        // 结构化触发：任意手指位置、慢拖或惯性抛掷都成立，与左右模式虚拟页同思路
+        LaunchedEffect(vertical, listState, lastImgReady, hasNext) {
+            snapshotFlow {
+                val info = listState.layoutInfo
+                val footer = info.visibleItemsInfo.firstOrNull { it.index >= urls.size }
+                if (footer == null) 0f
+                else ((info.viewportEndOffset - footer.offset).toFloat() / footer.size)
+                    .coerceIn(0f, 1f)
+            }.collect { frac ->
+                if (frac >= 0.5f && lastImgReady && hasNext && !showNextPrompt) {
+                    showNextPrompt = true
+                    listState.scrollToItem((urls.size - 1).coerceAtLeast(0))
                 }
-                override fun onPostScroll(
-                    consumed: Offset,
-                    available: Offset,
-                    source: NestedScrollSource
-                ): Offset {
-                    if (!hasNextChapter || onOpenNextChapter == null) return Offset.Zero
-                    if (pageZoomed || showNextPrompt || spent) return Offset.Zero
-                    // 前向滚动 = x 向左 / y 向上（负值）
-                    val d = if (vertical) available.y else available.x
-                    if (d < 0f) {
-                        acc -= d
-                        if (acc >= forwardThreshold) {
-                            spent = true
-                            acc = 0f
-                            showNextPrompt = true
-                        }
-                    } else if (d > 0f) {
-                        acc = 0f
-                    }
-                    return Offset.Zero
-                }
-            }
-        }
-        // 滚动结束（手指松开且惯性停止）后重置，允许再次滑动触发
-        LaunchedEffect(pagerState.isScrollInProgress, listState.isScrollInProgress) {
-            if (!pagerState.isScrollInProgress && !listState.isScrollInProgress) {
-                nextChapterGate.spent = false
-                nextChapterGate.acc = 0f
             }
         }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
-                .nestedScroll(nextChapterGate)
-                // 双保险：指针级观察兜底（末页 + 单指前向大幅滑动）。NestedScrollConnection 理论上已覆盖，
-                // 此处防止个别机型/滚动容器未派发未消费增量的边缘情况
-                .pointerInput(vertical, urls.size, hasNextChapter) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        var dx = 0f
-                        var dy = 0f
-                        while (true) {
-                            val ev = awaitPointerEvent()
-                            // 只统计单指位移（双指缩放不参与判断）
-                            ev.changes.singleOrNull()?.let { c ->
-                                dx += c.positionChange().x
-                                dy += c.positionChange().y
-                            }
-                            if (ev.changes.all { !it.pressed }) break
-                        }
-                        val atEnd = if (vertical) (!listState.canScrollForward && lastImgReady)
-                        else pagerState.currentPage >= urls.size - 1
-                        val forward = if (vertical) dy < -forwardThreshold else dx < -forwardThreshold
-                        if (atEnd && forward && !pageZoomed && hasNextChapter &&
-                            onOpenNextChapter != null && !showNextPrompt
-                        ) {
-                            showNextPrompt = true
-                        }
-                    }
-                }
         ) {
             if (vertical) {
-                // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图。
-                // 顶部留白避开信息栏；图片最小高度 240dp 占位——未加载的尾部也有真实高度，
-                // 避免"滑进未加载区域就滚不动而被误判为末页"
-                LazyColumn(
-                    state = listState,
-                    contentPadding = PaddingValues(top = 96.dp, bottom = 24.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(urls.size) { pageIdx ->
-                        AsyncImage(
-                            model = ImageRequest.Builder(LocalContext.current)
-                                .data(urls[pageIdx])
-                                .crossfade(true)
-                                .build(),
-                            contentDescription = null,
-                            contentScale = ContentScale.FillWidth,
-                            onSuccess = { if (pageIdx == urls.size - 1) lastImgReady = true },
-                            onError = { if (pageIdx == urls.size - 1) lastImgReady = true },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 240.dp)
-                                .pointerInput(pageIdx) {
-                                    detectTapGestures(onLongPress = { saveRequester(urls[pageIdx]) })
-                                }
-                        )
+                // 上下连续滑动模式：顶栏占位排版（不悬浮在图片上，信息永远清晰，首图也不会被遮挡）；
+                // 列表末尾追加"末页占位"（触发见上方 LaunchedEffect）：有下一章=滚入过半弹窗询问，
+                // 没有下一章=停留显示"已经是最后一页了"（纯告知，无任何跳转）。
+                // 图片最小高度 240dp 占位——未加载的尾部也有真实高度
+                Column(modifier = Modifier.fillMaxSize()) {
+                    PhotoViewerTopBar(
+                        vertical = true,
+                        chapterLabel = chapterLabel,
+                        pageCount = urls.size,
+                        currentPage = listState.firstVisibleItemIndex,
+                        onToggleMode = {
+                            jumpIndex = listState.firstVisibleItemIndex
+                            vertical = !vertical
+                        },
+                        onDismiss = onDismiss,
+                        onJumpTo = { target -> scope.launch { listState.scrollToItem(target) } },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    LazyColumn(
+                        state = listState,
+                        contentPadding = PaddingValues(bottom = 48.dp),
+                        modifier = Modifier.weight(1f).fillMaxWidth()
+                    ) {
+                        items(urls.size) { pageIdx ->
+                            AsyncImage(
+                                model = ImageRequest.Builder(LocalContext.current)
+                                    .data(urls[pageIdx])
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = null,
+                                contentScale = ContentScale.FillWidth,
+                                onSuccess = { if (pageIdx == urls.size - 1) lastImgReady = true },
+                                onError = { if (pageIdx == urls.size - 1) lastImgReady = true },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 240.dp)
+                                    .pointerInput(pageIdx) {
+                                        detectTapGestures(onLongPress = { saveRequester(urls[pageIdx]) })
+                                    }
+                            )
+                        }
+                        item {
+                            Box(
+                                modifier = Modifier.fillMaxWidth().height(180.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    if (hasNext) "松开进入下一章" else "已经是最后一页了",
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -501,13 +460,13 @@ fun PhotoViewerDialog(
                     modifier = Modifier.fillMaxSize()
                 ) { pageIdx ->
                     if (pageIdx >= urls.size) {
-                        // 虚拟"下一章"占位页：到达即弹窗并弹回（见 LaunchedEffect），用户只会瞥见一瞬
+                        // 末尾虚拟占位页：有下一章=到达即弹窗并弹回；没有=停留显示"已经是最后一页了"
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                "松开进入下一章",
+                                if (hasNext) "松开进入下一章" else "已经是最后一页了",
                                 color = Color.White.copy(alpha = 0.6f),
                                 style = MaterialTheme.typography.bodyLarge
                             )
@@ -522,94 +481,24 @@ fun PhotoViewerDialog(
                     }
                 }
             }
-            // 顶部信息栏（渐变遮罩）：模式切换 / 章节名 / 页码 / 关闭 + 快速跳转滑动条
-            Column(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color(0x00000000))))
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 阅读方向切换
-                    IconButton(
-                        onClick = {
-                            jumpIndex = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
-                            vertical = !vertical
-                        }
-                    ) {
-                        Icon(
-                            if (vertical) Icons.Rounded.SwapHoriz else Icons.Rounded.SwapVert,
-                            contentDescription = if (vertical) "切换为左右翻页" else "切换为上下滑动",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                    // 章节名
-                    Text(
-                        chapterLabel?.takeIf { it.isNotBlank() } ?: "阅读",
-                        color = Color.White,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    // 页码进度
-                    if (urls.size > 1) {
-                        val cur = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
-                        Text(
-                            "${cur + 1} / ${urls.size}",
-                            color = Color.White,
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.padding(horizontal = 8.dp)
-                        )
-                    }
-                    // 关闭
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            Icons.Rounded.Close,
-                            contentDescription = "关闭",
-                            tint = Color.White,
-                            modifier = Modifier.size(28.dp)
-                        )
-                    }
-                }
-                // 快速跳转滑动条（拖动显示目标页码，松手跳转）
-                if (urls.size > 1) {
-                    var dragging by remember { mutableStateOf(false) }
-                    var dragPos by remember { mutableStateOf(0) }
-                    val cur = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
-                    if (dragging) {
-                        Text(
-                            "跳转到第 ${dragPos + 1} 页",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelSmall,
-                            modifier = Modifier.align(Alignment.CenterHorizontally)
-                        )
-                    }
-                    Slider(
-                        value = (if (dragging) dragPos else cur).coerceIn(0, urls.size - 1).toFloat(),
-                        onValueChange = {
-                            dragging = true
-                            dragPos = it.toInt()
-                        },
-                        onValueChangeFinished = {
-                            val target = dragPos.coerceIn(0, urls.size - 1)
-                            scope.launch {
-                                if (vertical) listState.scrollToItem(target) else pagerState.scrollToPage(target)
-                            }
-                            dragging = false
-                        },
-                        valueRange = 0f..(urls.size - 1).toFloat(),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = Color.White,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.3f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 8.dp, end = 8.dp)
-                    )
-                }
+            // 顶部信息栏：上下滑动模式已在 Column 内占位排版；左右翻页模式悬浮在 Pager 上（渐变遮罩）
+            if (!vertical) {
+                PhotoViewerTopBar(
+                    vertical = false,
+                    chapterLabel = chapterLabel,
+                    pageCount = urls.size,
+                    currentPage = pagerState.currentPage,
+                    onToggleMode = {
+                        jumpIndex = pagerState.currentPage
+                        vertical = !vertical
+                    },
+                    onDismiss = onDismiss,
+                    onJumpTo = { target -> scope.launch { pagerState.scrollToPage(target) } },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color(0x00000000))))
+                )
             }
         }
 
@@ -635,6 +524,95 @@ fun PhotoViewerDialog(
                 dismissButton = {
                     TextButton(onClick = { showNextPrompt = false }) { Text("留在本章") }
                 }
+            )
+        }
+    }
+}
+
+/** 阅读器顶部信息栏：模式切换 / 章节名 / 页码进度 / 关闭 + 快速跳转滑动条。
+ *  vertical=true 时在布局内占位排版（图片从其下方开始，永不遮挡信息与首图）；
+ *  vertical=false 时由调用处叠加渐变背景悬浮在 Pager 上。 */
+@Composable
+private fun PhotoViewerTopBar(
+    vertical: Boolean,
+    chapterLabel: String?,
+    pageCount: Int,
+    currentPage: Int,
+    onToggleMode: () -> Unit,
+    onDismiss: () -> Unit,
+    onJumpTo: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // 阅读方向切换
+            IconButton(onClick = onToggleMode) {
+                Icon(
+                    if (vertical) Icons.Rounded.SwapHoriz else Icons.Rounded.SwapVert,
+                    contentDescription = if (vertical) "切换为左右翻页" else "切换为上下滑动",
+                    tint = Color.White,
+                    modifier = Modifier.size(26.dp)
+                )
+            }
+            // 章节名
+            Text(
+                chapterLabel?.takeIf { it.isNotBlank() } ?: "阅读",
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            // 页码进度（左右模式可能停在虚拟占位页，页码收敛到最后一页）
+            if (pageCount > 1) {
+                Text(
+                    "${currentPage.coerceIn(0, pageCount - 1) + 1} / $pageCount",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(horizontal = 8.dp)
+                )
+            }
+            // 关闭
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    Icons.Rounded.Close,
+                    contentDescription = "关闭",
+                    tint = Color.White,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+        }
+        // 快速跳转滑动条（拖动显示目标页码，松手跳转）
+        if (pageCount > 1) {
+            var dragging by remember { mutableStateOf(false) }
+            var dragPos by remember { mutableStateOf(0) }
+            if (dragging) {
+                Text(
+                    "跳转到第 ${dragPos.coerceIn(0, pageCount - 1) + 1} 页",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+            }
+            Slider(
+                value = (if (dragging) dragPos else currentPage).coerceIn(0, pageCount - 1).toFloat(),
+                onValueChange = {
+                    dragging = true
+                    dragPos = it.toInt()
+                },
+                onValueChangeFinished = {
+                    onJumpTo(dragPos.coerceIn(0, pageCount - 1))
+                    dragging = false
+                },
+                valueRange = 0f..(pageCount - 1).toFloat(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.3f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 8.dp, end = 8.dp)
             )
         }
     }
