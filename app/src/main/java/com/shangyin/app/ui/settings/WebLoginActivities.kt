@@ -1,0 +1,331 @@
+package com.shangyin.app.ui.settings
+
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.graphics.Bitmap
+import android.os.Bundle
+import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.shangyin.app.ui.theme.ShangYinTheme
+
+/**
+ * 「网站账号」类登录的统一实现：内嵌 WebView 打开站点，登录成功后抓 Cookie 存进 SettingsStore。
+ *
+ * 两个站点都需要真实浏览器环境：
+ *  - 无忧游戏库：Zibll 登录表单带 slider 滑块验证码，无法程序化提交
+ *  - Z-Library：全站 DiamWall JS 反爬（普通 HTTP 请求返回 513 挑战页）
+ * 因此统一走 WebView，且 Cookie 必须与 WebView 同款 UA 一起使用才有效。
+ */
+
+/** 一个站点的登录参数 */
+private class LoginSpec(
+    val title: String,
+    /** WebView 打开的首个地址 */
+    val startUrl: String,
+    /** 抓取 Cookie 的站点地址（按域名分别取，再合并去重） */
+    val cookieUrls: List<String>,
+    val hint: String,
+    /** 判断 cookie 字符串是否代表登录态 */
+    val loginDetect: (String) -> Boolean,
+    val isLoggedIn: () -> Boolean,
+    val save: (String) -> Unit,
+    val logout: () -> Unit,
+    /** 自动点击登录入口的 CSS 选择器（站点首页没有直达登录页时用） */
+    val autoClickSelector: String? = null
+)
+
+/** 无忧游戏库登录 */
+class WygamerLoginActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            ShangYinTheme {
+                WebLoginContent(
+                    spec = LoginSpec(
+                        title = "无忧游戏库登录",
+                        startUrl = "https://www.wygamer.com/",
+                        cookieUrls = listOf("https://www.wygamer.com/"),
+                        hint = "登录后可查看部分需要登录才能显示的资源下载链接。\n登录信息仅保存在本机。",
+                        loginDetect = { c ->
+                            c.contains("wordpress_logged_in", true) || c.contains("zibll", true)
+                        },
+                        isLoggedIn = { SettingsStore.isWygamerLoggedIn },
+                        save = { SettingsStore.wygamerCookie = it },
+                        logout = { SettingsStore.clearWygamerLogin() },
+                        autoClickSelector = ".signin-loader"
+                    ),
+                    onFinish = {
+                        setResult(Activity.RESULT_OK)
+                        finish()
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** Z-Library 登录（顺带完成 DiamWall 反爬验证） */
+class ZlibLoginActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            ShangYinTheme {
+                WebLoginContent(
+                    spec = LoginSpec(
+                        title = "Z-Library 登录",
+                        startUrl = "https://${SettingsStore.zlibHost}/",
+                        cookieUrls = listOf("https://${SettingsStore.zlibHost}/"),
+                        hint = "登录后即可搜索并下载电子书。\n" +
+                            "站点有反爬验证，若接口提示「需要重新验证」，回到这里重新登录一次即可。\n" +
+                            "登录信息仅保存在本机。",
+                        loginDetect = { c -> c.contains("remix_userkey", true) },
+                        isLoggedIn = { SettingsStore.zlibCookie.contains("remix_userkey", true) },
+                        save = { SettingsStore.zlibCookie = it },
+                        logout = { SettingsStore.clearZlibLogin() },
+                        autoClickSelector = "a[href*='/login']"
+                    ),
+                    onFinish = {
+                        setResult(Activity.RESULT_OK)
+                        finish()
+                    }
+                )
+            }
+        }
+    }
+}
+
+/** 按域名取 Cookie 合并去重（同名保留首次出现的值） */
+private fun collectCookies(cm: CookieManager, urls: List<String>): String {
+    val all = LinkedHashMap<String, String>()
+    for (u in urls) {
+        val raw = cm.getCookie(u) ?: continue
+        raw.split(";").forEach { part ->
+            val idx = part.indexOf('=')
+            if (idx > 0) {
+                val k = part.substring(0, idx).trim()
+                val v = part.substring(idx + 1).trim()
+                if (k.isNotEmpty() && !all.containsKey(k)) all[k] = v
+            }
+        }
+    }
+    return all.entries.joinToString("; ") { "${it.key}=${it.value}" }
+}
+
+/** 退出登录时把已保存的 Cookie 逐个置为过期，避免 WebView 仍处于登录态 */
+private fun expireCookies(cm: CookieManager, urls: List<String>, cookieString: String) {
+    val names = cookieString.split(";").mapNotNull { part ->
+        val idx = part.indexOf('=')
+        if (idx > 0) part.substring(0, idx).trim().takeIf { it.isNotEmpty() } else null
+    }
+    for (u in urls) for (n in names) cm.setCookie(u, "$n=; Max-Age=0; path=/")
+    cm.flush()
+}
+
+@Composable
+private fun WebLoginContent(spec: LoginSpec, onFinish: () -> Unit) {
+    // 0 = 显示"已登录"页；1 = 显示 WebView（登录或重新验证）
+    var mode by remember { mutableIntStateOf(if (spec.isLoggedIn()) 0 else 1) }
+
+    if (mode == 0) {
+        val ctx = LocalContext.current
+        AlreadyLoggedInScreen(
+            title = spec.title,
+            onBack = onFinish,
+            onRefresh = { mode = 1 },
+            onLogout = {
+                val saved = collectCookies(CookieManager.getInstance(), spec.cookieUrls)
+                spec.logout()
+                expireCookies(CookieManager.getInstance(), spec.cookieUrls, saved)
+                Toast.makeText(ctx, "已退出登录", Toast.LENGTH_SHORT).show()
+                onFinish()
+            }
+        )
+    } else {
+        WebViewLoginScreen(spec = spec, onBack = onFinish, onLoginSuccess = onFinish)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AlreadyLoggedInScreen(
+    title: String,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onLogout: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                }
+            )
+        }
+    ) { pad ->
+        Column(
+            modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("已登录", style = MaterialTheme.typography.titleLarge)
+            Text(
+                "搜索 / 详情 / 下载会使用登录态。若接口提示需要重新验证，点下方「重新验证」刷新一次。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.outline
+            )
+            Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
+                Text("重新验证 / 切换账号")
+            }
+            OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
+                Text("退出登录")
+            }
+        }
+    }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WebViewLoginScreen(
+    spec: LoginSpec,
+    onBack: () -> Unit,
+    onLoginSuccess: () -> Unit
+) {
+    val ctx = LocalContext.current
+    var loading by remember { mutableStateOf(true) }
+    val cookieManager = CookieManager.getInstance()
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            webViewRef?.let { wv ->
+                wv.stopLoading()
+                wv.settings.javaScriptEnabled = false
+                wv.clearHistory()
+                wv.removeAllViews()
+                (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+                wv.destroy()
+                webViewRef = null
+            }
+            cookieManager.flush()
+        }
+    }
+
+    /** 尝试提取并保存 cookie，成功返回 true */
+    fun tryExtractCookies(): Boolean {
+        val merged = collectCookies(cookieManager, spec.cookieUrls)
+        if (!spec.loginDetect(merged)) return false
+        spec.save(merged)
+        cookieManager.flush()
+        return true
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(spec.title) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    Button(onClick = { webViewRef?.reload() }) { Text("刷新") }
+                    Button(
+                        onClick = {
+                            if (tryExtractCookies()) onLoginSuccess()
+                            else Toast.makeText(ctx, "未检测到登录态，请先完成登录", Toast.LENGTH_SHORT).show()
+                        }
+                    ) { Text("已登录") }
+                }
+            )
+        }
+    ) { pad ->
+        Box(modifier = Modifier.fillMaxSize().padding(pad)) {
+            AndroidView(
+                factory = { c ->
+                    WebView(c).apply {
+                        webViewRef = this
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.cacheMode = WebSettings.LOAD_DEFAULT
+                        settings.userAgentString = com.shangyin.app.data.wygamer.WygamerClient.UA
+
+                        cookieManager.setAcceptCookie(true)
+                        cookieManager.setAcceptThirdPartyCookies(this, true)
+
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                loading = true
+                            }
+
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                loading = false
+                                val u = url ?: return
+                                // 站点首页没有直达登录页：自动点一下登录入口（已登录则会直接命中下面的检测）
+                                spec.autoClickSelector?.let { sel ->
+                                    if (!u.contains("/login") && !spec.isLoggedIn()) {
+                                        view?.evaluateJavascript(
+                                            "(function(){var e=document.querySelector('$sel');if(e)e.click();})()",
+                                            null
+                                        )
+                                    }
+                                }
+                                if (tryExtractCookies()) onLoginSuccess()
+                            }
+
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean = super.shouldOverrideUrlLoading(view, request)
+                        }
+
+                        loadUrl(spec.startUrl)
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+
+            if (loading) {
+                CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            }
+        }
+    }
+}

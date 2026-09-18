@@ -22,6 +22,9 @@ object SettingsStore {
     const val THEME_LIGHT = "light"
     const val THEME_DARK = "dark"
 
+    /** Z-Library 默认线路域名 */
+    const val DEFAULT_ZLIB_HOST = "z-library.sk"
+
     private lateinit var sp: SharedPreferences
 
     fun init(context: Context) {
@@ -161,6 +164,43 @@ object SettingsStore {
 
     fun clearBikaToken() {
         sp.edit().remove(KEY_BIKA_TOKEN).apply()
+    }
+
+    // ---------- 无忧游戏库（www.wygamer.com） ----------
+
+    private const val KEY_WYGAMER_COOKIE = "wygamer_cookie"
+
+    /** 无忧游戏库 Cookie（WebView 登录后抓取，用于带登录态抓取页面） */
+    var wygamerCookie: String
+        get() = sp.getString(KEY_WYGAMER_COOKIE, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_WYGAMER_COOKIE, v).apply()
+
+    /** 是否已登录无忧游戏库（Zibll 登录票据） */
+    val isWygamerLoggedIn: Boolean
+        get() = wygamerCookie.contains("zibll", ignoreCase = true) ||
+            wygamerCookie.contains("wordpress_logged_in", ignoreCase = true)
+
+    fun clearWygamerLogin() {
+        sp.edit().remove(KEY_WYGAMER_COOKIE).apply()
+    }
+
+    // ---------- Z-Library（图书） ----------
+
+    private const val KEY_ZLIB_COOKIE = "zlib_cookie"
+    private const val KEY_ZLIB_HOST = "zlib_host"
+
+    /** Z-Library Cookie（含 remix_userid / remix_userkey + 反爬验证票据） */
+    var zlibCookie: String
+        get() = sp.getString(KEY_ZLIB_COOKIE, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_ZLIB_COOKIE, v).apply()
+
+    /** Z-Library 线路域名（可换，默认 z-library.sk），不带协议 */
+    var zlibHost: String
+        get() = sp.getString(KEY_ZLIB_HOST, DEFAULT_ZLIB_HOST).orEmpty().ifBlank { DEFAULT_ZLIB_HOST }
+        set(v) = sp.edit().putString(KEY_ZLIB_HOST, v.trim().trimEnd('/').removePrefix("https://")).apply()
+
+    fun clearZlibLogin() {
+        sp.edit().remove(KEY_ZLIB_COOKIE).apply()
     }
 
     // ---------- 在线观影（片源管理 + 播放进度） ----------

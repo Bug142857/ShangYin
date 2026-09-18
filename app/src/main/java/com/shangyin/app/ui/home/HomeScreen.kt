@@ -27,11 +27,13 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -78,7 +80,7 @@ import com.shangyin.app.ui.safeNavigate
 /**
  * 主页：底部双标签「表世界 / 里世界」。
  * - 表世界：分类 chips + 搜索栏（跳搜索页）+ 豆瓣收藏清单
- * - 里世界：番号 / 本子 / 漫画 入口 + 里世界收藏清单
+ * - 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 入口 + 里世界收藏清单
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -209,7 +211,7 @@ private fun SurfaceWorld(
 
 // ---------------- 里世界 ----------------
 
-/** 里世界：番号 / 本子 / 漫画 入口 + 里世界清单 */
+/** 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 入口 + 里世界清单 */
 @Composable
 private fun InnerWorld(
     nav: NavHostController,
@@ -221,7 +223,7 @@ private fun InnerWorld(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             InnerWorldEntry(
@@ -243,6 +245,25 @@ private fun InnerWorld(
                 onClick = { nav.safeNavigate("comicHome") }
             )
         }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            InnerWorldEntry(
+                icon = Icons.Rounded.SportsEsports,
+                title = "游戏",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("gameHome") }
+            )
+            InnerWorldEntry(
+                icon = Icons.Rounded.Book,
+                title = "图书",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("bookHome") }
+            )
+        }
         WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))
     }
 }
@@ -259,7 +280,7 @@ private fun InnerWorldEntry(
     Card(modifier = modifier.clickable(enabled = enabled) { onClick() }) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
         ) {
             Icon(
                 icon,

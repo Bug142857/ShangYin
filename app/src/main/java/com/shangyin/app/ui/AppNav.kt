@@ -189,6 +189,32 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getString("comicId").orEmpty()
                 )
             }
+            // 游戏 = 无忧游戏库（wygamer.com，里世界第四入口）
+            composable("gameHome") { com.shangyin.app.ui.wygamer.GameHomeScreen(nav) }
+            composable(
+                route = "gameDetail/{id}",
+                arguments = listOf(navArgument("id") { type = NavType.StringType })
+            ) { entry ->
+                com.shangyin.app.ui.wygamer.GameDetailScreen(
+                    nav,
+                    entry.arguments?.getString("id").orEmpty()
+                )
+            }
+            // 图书 = Z-Library（里世界第五入口）
+            composable("bookHome") { com.shangyin.app.ui.zlib.BookHomeScreen(nav) }
+            composable(
+                route = "bookDetail/{id}/{hash}",
+                arguments = listOf(
+                    navArgument("id") { type = NavType.StringType },
+                    navArgument("hash") { type = NavType.StringType }
+                )
+            ) { entry ->
+                com.shangyin.app.ui.zlib.BookDetailScreen(
+                    nav,
+                    entry.arguments?.getString("id").orEmpty(),
+                    entry.arguments?.getString("hash").orEmpty()
+                )
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })
