@@ -79,6 +79,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -340,7 +341,8 @@ fun PhotoViewerDialog(
         )
     ) {
         // 阅读方向：false=左右翻页（默认，支持双击/双指缩放） / true=上下连续滑动
-        var vertical by rememberSaveable { mutableStateOf(false) }
+        // 初值取全局记忆（SettingsStore），切换时写回——跨章节、跨重启保持用户习惯
+        var vertical by rememberSaveable { mutableStateOf(SettingsStore.readerVertical) }
         val scope = rememberCoroutineScope()
         // 垂直模式：最后一张图是否已加载完（加载完才允许触发"下一章"，防止图片未加载就被误判到末页）
         var lastImgReady by remember { mutableStateOf(false) }
@@ -352,7 +354,12 @@ fun PhotoViewerDialog(
             initialPageOffsetFraction = 0f,
             pageCount = { urls.size + 1 }
         )
-        val listState = rememberLazyListState()
+        // 直接以上下模式打开时，首屏定位到 initialIndex（网格放大/续读场景）
+        val listState = rememberLazyListState(
+            initialFirstVisibleItemIndex = if (SettingsStore.readerVertical) {
+                initialIndex.coerceIn(0, urls.size - 1)
+            } else 0
+        )
         // 切换方向时跳回当前页（LaunchedEffect 首次运行时 jumpIndex 为 null 不动作）
         var jumpIndex by remember { mutableStateOf<Int?>(null) }
         LaunchedEffect(vertical) {
@@ -414,6 +421,7 @@ fun PhotoViewerDialog(
                         onToggleMode = {
                             jumpIndex = listState.firstVisibleItemIndex
                             vertical = !vertical
+                            SettingsStore.readerVertical = vertical
                         },
                         onDismiss = onDismiss,
                         onJumpTo = { target -> scope.launch { listState.scrollToItem(target) } },
@@ -493,6 +501,7 @@ fun PhotoViewerDialog(
                     onToggleMode = {
                         jumpIndex = pagerState.currentPage
                         vertical = !vertical
+                        SettingsStore.readerVertical = vertical
                     },
                     onDismiss = onDismiss,
                     onJumpTo = { target -> scope.launch { pagerState.scrollToPage(target) } },

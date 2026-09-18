@@ -89,6 +89,13 @@ object SettingsStore {
         get() = sp.getBoolean(KEY_CHAPTER_SORT_DESC, false)
         set(v) = sp.edit().putBoolean(KEY_CHAPTER_SORT_DESC, v).apply()
 
+    private const val KEY_READER_VERTICAL = "reader_vertical"
+
+    /** 阅读器滑动模式（全局记忆，跨章节/跨重启保留）：true=上下连续滑动 false=左右翻页 */
+    var readerVertical: Boolean
+        get() = sp.getBoolean(KEY_READER_VERTICAL, false)
+        set(v) = sp.edit().putBoolean(KEY_READER_VERTICAL, v).apply()
+
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 
     /** 导出关键配置快照（key 与 SP key 一致） */
