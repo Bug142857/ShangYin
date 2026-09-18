@@ -2,6 +2,7 @@ package com.shangyin.app.data.download
 
 import android.content.Context
 import com.shangyin.app.ImageDownloader
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,7 +39,19 @@ object ComicDownloadStore {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun root(context: Context): File = File(context.getExternalFilesDir(null), "comics")
+    /** 当前设置的下载根目录（新下载写入这里；外部私有优先，不可用时退回内部） */
+    fun root(context: Context): File {
+        val ext = context.getExternalFilesDir(null)
+        return if (SettingsStore.downloadInternal || ext == null) File(context.filesDir, "comics")
+        else File(ext, "comics")
+    }
+
+    /** 全部候选根目录（扫描/读取/删除用，兼容切换存储位置前的旧内容） */
+    private fun roots(context: Context): List<File> =
+        listOfNotNull(
+            context.getExternalFilesDir(null)?.let { File(it, "comics") },
+            File(context.filesDir, "comics")
+        ).distinctBy { it.absolutePath }
 
     fun comicDir(context: Context, source: String, id: String): File =
         File(root(context), "$source/$id")
@@ -46,11 +59,14 @@ object ComicDownloadStore {
     fun chapterDir(context: Context, source: String, id: String, key: String): File =
         File(comicDir(context, source, id), key)
 
-    fun loadMeta(context: Context, source: String, id: String): DownloadedComic? {
-        val f = File(comicDir(context, source, id), "meta.json")
+    private fun loadMetaIn(root: File, source: String, id: String): DownloadedComic? {
+        val f = File(File(File(root, source), id), "meta.json")
         if (!f.isFile) return null
         return runCatching { json.decodeFromString<DownloadedComic>(f.readText()) }.getOrNull()
     }
+
+    fun loadMeta(context: Context, source: String, id: String): DownloadedComic? =
+        roots(context).firstNotNullOfOrNull { loadMetaIn(it, source, id) }
 
     private fun saveMeta(context: Context, meta: DownloadedComic) {
         val dir = comicDir(context, meta.source, meta.id).apply { mkdirs() }
@@ -64,40 +80,57 @@ object ComicDownloadStore {
         saveMeta(context, cur.copy(title = comic.title, cover = comic.cover ?: cur.cover, chapters = chapters))
     }
 
-    /** 扫描磁盘上的全部下载记录（按加入时间倒序：以目录修改时间为准） */
-    fun loadLibrary(context: Context): List<DownloadedComic> {
-        val root = root(context)
-        if (!root.isDirectory) return emptyList()
-        return root.listFiles().orEmpty().filter { it.isDirectory }.flatMap { srcDir ->
-            srcDir.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { comic ->
-                loadMeta(context, srcDir.name, comic.name)?.takeIf { it.chapters.isNotEmpty() }
-                    ?.let { it to comic.lastModified() }
+    /** 扫描全部根目录的下载记录（按目录修改时间倒序，同一本取最新位置） */
+    fun loadLibrary(context: Context): List<DownloadedComic> =
+        roots(context).flatMap { root ->
+            if (!root.isDirectory) emptyList()
+            else root.listFiles().orEmpty().filter { it.isDirectory }.flatMap { srcDir ->
+                srcDir.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { comic ->
+                    loadMetaIn(root, srcDir.name, comic.name)?.takeIf { it.chapters.isNotEmpty() }
+                        ?.let { it to comic.lastModified() }
+                }
             }
-        }.sortedByDescending { it.second }.map { it.first }
-    }
+        }.sortedByDescending { it.second }
+            .map { it.first }
+            .distinctBy { it.source to it.id }
 
-    /** 章节的本地图片路径（按文件名正序） */
+    /** 章节的本地图片路径（按文件名正序；各存储位置都找，谁有内容用谁） */
     fun chapterPages(context: Context, source: String, id: String, key: String): List<String> =
-        chapterDir(context, source, id, key).listFiles().orEmpty()
-            .filter { it.isFile && it.name != "meta.json" }
-            .sortedBy { it.name }
-            .map { it.absolutePath }
+        roots(context).firstNotNullOfOrNull { root ->
+            File(File(File(root, source), id), key).listFiles().orEmpty()
+                .filter { it.isFile && it.name != "meta.json" }
+                .takeIf { it.isNotEmpty() }
+                ?.sortedBy { it.name }
+                ?.map { it.absolutePath }
+        } ?: emptyList()
 
-    /** 目录占用字节数 */
-    fun size(context: Context, source: String, id: String): Long {
-        val dir = comicDir(context, source, id)
-        return dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-    }
+    /** 目录占用字节数（各存储位置合计） */
+    fun size(context: Context, source: String, id: String): Long =
+        roots(context).sumOf { root ->
+            File(root, "$source/$id").walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+        }
 
     fun deleteChapter(context: Context, source: String, id: String, key: String) {
-        chapterDir(context, source, id, key).deleteRecursively()
-        val cur = loadMeta(context, source, id) ?: return
-        val left = cur.chapters.filterNot { it.key == key }
-        if (left.isEmpty()) deleteComic(context, source, id) else saveMeta(context, cur.copy(chapters = left))
+        // 各位置的该章目录都删除；meta 里最后一章删完则整本目录一并清掉
+        roots(context).forEach { root ->
+            File(File(File(root, source), id), key).deleteRecursively()
+        }
+        roots(context).forEach { root ->
+            val comicDir = File(File(root, source), id)
+            val metaFile = File(comicDir, "meta.json")
+            if (!metaFile.isFile) return@forEach
+            val cur = runCatching { json.decodeFromString<DownloadedComic>(metaFile.readText()) }.getOrNull()
+                ?: return@forEach
+            val left = cur.chapters.filterNot { it.key == key }
+            if (left.isEmpty()) comicDir.deleteRecursively()
+            else metaFile.writeText(json.encodeToString(DownloadedComic.serializer(), cur.copy(chapters = left)))
+        }
     }
 
     fun deleteComic(context: Context, source: String, id: String) {
-        comicDir(context, source, id).deleteRecursively()
+        roots(context).forEach { root ->
+            File(root, "$source/$id").deleteRecursively()
+        }
     }
 
     /**

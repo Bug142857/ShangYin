@@ -221,6 +221,7 @@ fun PlayerScreen(nav: NavHostController) {
         // 设置齿轮运行时隐藏（菜单里的"立体声"音轨项无公开 API 移除），倍速改自建按钮
         PlayerView(context).apply {
             useController = true
+            keepScreenOn = true  // 播放页保持屏幕常亮，防止系统超时息屏
             controllerShowTimeoutMs = 5000
             setShowPreviousButton(false)
             setShowNextButton(false)

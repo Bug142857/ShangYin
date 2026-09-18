@@ -23,6 +23,8 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,6 +32,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,6 +59,8 @@ import com.shangyin.app.data.download.ComicDownloadStore
 import com.shangyin.app.data.download.DownloadedComic
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safePopBackStack
+import com.shangyin.app.ui.settings.SettingsStore
+import kotlinx.coroutines.launch
 
 /**
  * 我的下载：进行中的任务 + 已下载的漫画/本子（离线阅读、单章删除、整套删除）。
@@ -91,27 +97,31 @@ fun DownloadScreen(nav: NavHostController) {
             )
         }
     ) { pad ->
-        if (library.isEmpty() && tasks.isEmpty()) {
-            Column(
-                Modifier.padding(pad).fillMaxSize().padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text("还没有下载内容", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "在漫画 / 本子详情页点「下载全部」或章节右侧的下载按钮",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            return@Scaffold
-        }
         LazyColumn(
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(pad).fillMaxSize()
         ) {
+            // 下载目录（存储位置）设置
+            item { DownloadDirCard() }
+
+            if (tasks.isEmpty() && library.isEmpty()) {
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().padding(vertical = 80.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("还没有下载内容", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "在漫画 / 本子详情页点「下载全部」或章节右侧的下载按钮",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             if (tasks.isNotEmpty()) {
                 item {
                     Text("下载中（${tasks.size}）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -295,6 +305,97 @@ private fun ComicDownloadRow(
                 }
                 Spacer(Modifier.height(6.dp))
             }
+        }
+    }
+}
+
+/** 下载目录（存储位置）：外部私有（默认，推荐）/ 内部私有，切换仅影响之后的下载 */
+@Composable
+private fun DownloadDirCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var internal by remember { mutableStateOf(SettingsStore.downloadInternal) }
+    var showPicker by remember { mutableStateOf(false) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable { showPicker = true }.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("下载目录", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                Text(
+                    if (internal) "内部私有目录 · ${ComicDownloadStore.root(context).absolutePath}"
+                    else "外部私有目录（推荐） · ${ComicDownloadStore.root(context).absolutePath}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.Rounded.ExpandMore,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    if (showPicker) {
+        AlertDialog(
+            onDismissRequest = { showPicker = false },
+            title = { Text("下载目录") },
+            text = {
+                Column {
+                    DirOption(
+                        title = "外部私有目录（推荐）",
+                        desc = "Android/data 下应用私有目录，不占内部空间，卸载应用时一并清除",
+                        selected = !internal,
+                        onClick = {
+                            SettingsStore.downloadInternal = false
+                            internal = false
+                            showPicker = false
+                            scope.launch { ComicDownloadManager.refresh(context) }
+                        }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    DirOption(
+                        title = "内部私有目录",
+                        desc = "随应用数据存储，空间较小；外部存储不可用时自动用这里",
+                        selected = internal,
+                        onClick = {
+                            SettingsStore.downloadInternal = true
+                            internal = true
+                            showPicker = false
+                            scope.launch { ComicDownloadManager.refresh(context) }
+                        }
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "切换仅影响之后的下载；已有内容保留在原位置，仍会显示并正常阅读。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { showPicker = false }) { Text("完成") } }
+        )
+    }
+}
+
+@Composable
+private fun DirOption(title: String, desc: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

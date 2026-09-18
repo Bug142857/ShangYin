@@ -16,6 +16,7 @@ object SettingsStore {
     private const val KEY_WEBDAV_USER = "webdav_user"
     private const val KEY_WEBDAV_PASS = "webdav_pass"
     private const val KEY_LAST_CLOUD_SYNC = "last_cloud_sync"
+    private const val KEY_DOWNLOAD_INTERNAL = "download_internal"
 
     const val THEME_FOLLOW = "follow"
     const val THEME_LIGHT = "light"
@@ -75,6 +76,11 @@ object SettingsStore {
     fun clearDoubanLogin() {
         sp.edit().remove(KEY_DOUBAN_COOKIE).remove(KEY_DOUBAN_CK).apply()
     }
+
+    /** 下载存储位置：false=应用外部私有目录（默认，推荐，不占内部空间） true=应用内部私有目录 */
+    var downloadInternal: Boolean
+        get() = sp.getBoolean(KEY_DOWNLOAD_INTERNAL, false)
+        set(v) = sp.edit().putBoolean(KEY_DOWNLOAD_INTERNAL, v).apply()
 
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 

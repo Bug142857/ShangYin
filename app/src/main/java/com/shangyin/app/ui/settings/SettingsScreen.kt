@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DownloadDone
 import androidx.compose.material.icons.rounded.List
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Person
@@ -231,6 +232,36 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                         Text("数据管理", style = MaterialTheme.typography.titleSmall)
                         Text(
                             "导出/导入备份文件（收藏、清单、片源配置）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
+            // 下载管理（漫画/本子离线下载）
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        nav.safeNavigate("downloads")
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.DownloadDone, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("下载管理", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "漫画/本子离线下载：下载状态、下载目录、离线阅读",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

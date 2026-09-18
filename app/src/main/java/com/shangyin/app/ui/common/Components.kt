@@ -52,11 +52,13 @@ import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -344,21 +346,41 @@ fun PhotoViewerDialog(
         }
         val saveRequester = rememberImageSaveRequester()
 
-        // 末页询问下一章（同一章只问一次）
+        // 末页询问下一章：滑到最后一页后，再往前滑一下（越界滑动）才弹窗；
+        // 点「否」后可再次滑动再次触发；「下一章」= 当前排序下的下一章（n+1，倒序时即序号更小一章）
         var showNextPrompt by remember { mutableStateOf(false) }
-        var askedNext by remember(urls) { mutableStateOf(false) }
-        val curPage = if (vertical) listState.firstVisibleItemIndex else pagerState.currentPage
-        LaunchedEffect(curPage, urls.size, vertical) {
-            if (!askedNext && hasNextChapter && onOpenNextChapter != null && curPage >= urls.size - 1) {
-                askedNext = true
-                showNextPrompt = true
-            }
-        }
-
+        var pageZoomed by remember { mutableStateOf(false) }
+        LaunchedEffect(pagerState.currentPage) { pageZoomed = false }
+        val overscrollPx = with(LocalDensity.current) { 48.dp.toPx() }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .pointerInput(vertical, urls.size, hasNextChapter) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        var dx = 0f
+                        var dy = 0f
+                        while (true) {
+                            val ev = awaitPointerEvent(PointerEventPass.Final)
+                            // 只统计单指位移（双指缩放不参与判断）
+                            ev.changes.singleOrNull()?.let { c ->
+                                dx += c.positionChange().x
+                                dy += c.positionChange().y
+                            }
+                            if (ev.changes.all { !it.pressed }) break
+                        }
+                        val atEnd = if (vertical) !listState.canScrollForward
+                        else pagerState.currentPage >= urls.size - 1
+                        val forward = if (vertical) dy < -overscrollPx && abs(dy) > abs(dx) * 1.2f
+                        else dx < -overscrollPx && abs(dx) > abs(dy) * 1.2f
+                        if (atEnd && forward && !pageZoomed && hasNextChapter &&
+                            onOpenNextChapter != null && !showNextPrompt
+                        ) {
+                            showNextPrompt = true
+                        }
+                    }
+                }
         ) {
             if (vertical) {
                 // 上下连续滑动模式：图片按原始比例纵向排列，长按保存当前图
@@ -390,7 +412,8 @@ fun PhotoViewerDialog(
                     ZoomableImage(
                         urls[pageIdx],
                         onClose = onDismiss,
-                        onLongPress = { imgUrl -> saveRequester(imgUrl) }
+                        onLongPress = { imgUrl -> saveRequester(imgUrl) },
+                        onZoom = { pageZoomed = it }
                     )
                 }
             }
@@ -474,7 +497,13 @@ fun PhotoViewerDialog(
  * - 双击：在 1x 和 2.5x 之间切换（单击延迟 280ms 关闭，给双击留窗口）
  */
 @Composable
-fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> Unit)? = null) {
+fun ZoomableImage(
+    url: String?,
+    onClose: () -> Unit,
+    onLongPress: ((String) -> Unit)? = null,
+    /** 缩放状态变化回调（true=已放大）——阅读器末页手势用它排除放大后拖图误触 */
+    onZoom: ((Boolean) -> Unit)? = null
+) {
     val scope = rememberCoroutineScope()
     var scale by remember(url) { mutableFloatStateOf(1f) }
     var offsetX by remember(url) { mutableFloatStateOf(0f) }
@@ -548,6 +577,7 @@ fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> U
                                 val maxX = size.width * (newScale - 1f) / 2f
                                 val maxY = size.height * (newScale - 1f) / 2f
                                 scale = newScale
+                                onZoom?.invoke(newScale > 1.01f)
                                 if (newScale > 1.01f) {
                                     offsetX = (offsetX + panDelta.x).coerceIn(-maxX, maxX)
                                     offsetY = (offsetY + panDelta.y).coerceIn(-maxY, maxY)
@@ -594,8 +624,10 @@ fun ZoomableImage(url: String?, onClose: () -> Unit, onLongPress: ((String) -> U
                                 closeJob = null
                                 if (scale > 1.01f) {
                                     scale = 1f; offsetX = 0f; offsetY = 0f
+                                    onZoom?.invoke(false)
                                 } else {
                                     scale = 2.5f
+                                    onZoom?.invoke(true)
                                 }
                             } else {
                                 // 单击：延迟关闭，留出双击识别窗口
