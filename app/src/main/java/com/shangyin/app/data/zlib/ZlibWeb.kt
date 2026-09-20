@@ -73,12 +73,21 @@ object ZlibWeb {
         text.contains("登录到您的账户") ||
             (text.contains("\"success\":0") && text.contains("未找到请求的书"))
 
-    /** 登录 / 退出登录后重置：丢掉已加载页面与线路记忆，下次请求重新加载 */
+    /** 登录 / 退出登录后重置：只丢弃线路记忆（页面本身保留，避免又付一次约 7 秒的首页加载） */
     fun reset() {
-        loadedHost = null
         pageReady = CompletableDeferred()
-        val wv = webView ?: return
-        wv.post { runCatching { wv.loadUrl("about:blank") } }
+    }
+
+    /**
+     * 预热：提前把站点首页加载好。
+     * 实测（2026-09-20）本站首页 `loadEventEnd` 约 **7.4 秒**（还带一次重定向），
+     * 我们只需要「一个同源文档」来发 fetch，所以用 [onPageCommitVisible] 完成等待；
+     * 但首次仍需付出这部分时间，故进图书页时就先预热，别让用户搜完再干等。
+     */
+    suspend fun warmup() = withContext(Dispatchers.Main) {
+        val view = webView ?: return@withContext
+        val host = candidateHosts().firstOrNull { hasSession(it) } ?: candidateHosts().first()
+        if (loadedHost != host) loadAndWait(view, host, "https://$host/")
     }
 
     /** 由 ZlibWebHost 在主线程挂载；UA 不伪造（与登录页一致，DiamWall 会核对） */
@@ -112,6 +121,15 @@ object ZlibWeb {
         view.webViewClient = object : WebViewClient() {
             override fun onPageStarted(v: WebView?, url: String?, favicon: Bitmap?) {
                 pageReady = CompletableDeferred()
+            }
+
+            /**
+             * 首个内容帧提交就算「页面可用」。
+             * 本站首页实测 loadEventEnd ≈ 7.4s，onPageFinished 要等到所有子资源加载完；
+             * 而我们只需要一个同源文档来发 fetch，所以用更早的这个回调结束等待。
+             */
+            override fun onPageCommitVisible(v: WebView?, url: String?) {
+                pageReady.complete(Unit)
             }
 
             override fun onPageFinished(v: WebView?, url: String?) {

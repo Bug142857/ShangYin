@@ -152,6 +152,9 @@ fun BookHomeScreen(nav: NavHostController) {
         }
     }
 
+    // 预热站点页面：首页加载实测约 7.4 秒，提前做掉，别让第一次搜索把时间花在页面加载上
+    LaunchedEffect(Unit) { runCatching { ZlibClient.warmup() } }
+
     Scaffold(
         topBar = {
             TopAppBar(

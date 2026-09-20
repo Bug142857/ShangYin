@@ -177,6 +177,9 @@ object ZlibClient {
             !text.contains("log in to your account", true)
     }.getOrDefault(false)
 
+    /** 预热：进图书页时把站点首页先加载好（实测约 7.4 秒），省得用户搜完还要等页面加载 */
+    suspend fun warmup() = ZlibWeb.warmup()
+
     /** 站点对「未登录 / 会话失效」返回的文案（中英两版都实测过） */
     private val NOT_LOGGED_IN_WORDS = listOf(
         "未找到请求的书", "requested book not found",
