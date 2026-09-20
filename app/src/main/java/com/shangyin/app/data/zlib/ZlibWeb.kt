@@ -39,10 +39,47 @@ object ZlibWeb {
 
     val attached: Boolean get() = webView != null
 
-    /** 当前线路域名（与登录流程共用 SettingsStore.zlibHost，登录时会写入当日可用线路） */
-    private fun host(): String = SettingsStore.zlibHost.trim()
-        .removePrefix("https://").removePrefix("http://").trimEnd('/')
-        .ifBlank { "z-library.sk" }
+    /**
+     * 候选线路：设置里记的域名，以及补/去 `zh.` 前缀的变体。
+     * 为什么要多候选：登录页与接口必须落在**同一个 host** 上，否则 host-only 的
+     * `remix_userid`/`remix_userkey` 不会一起发送 —— 实测表现为接口返回
+     * `{"success":0,"error":"未找到请求的书"}`（这就是"未登录"的误导性文案）。
+     */
+    private fun candidateHosts(): List<String> {
+        val h = SettingsStore.zlibHost.trim()
+            .removePrefix("https://").removePrefix("http://").trimEnd('/')
+            .ifBlank { "z-lib.sk" }
+        val bare = h.removePrefix("zh.")
+        return listOf(h, "zh.$bare", bare).distinct()
+    }
+
+    /** 该线路的 CookieManager 里是否有登录 Cookie */
+    private fun hasSession(host: String): Boolean =
+        CookieManager.getInstance().getCookie("https://$host/")
+            ?.contains("remix_userkey", ignoreCase = true) == true
+
+    /** 记住真正可用的线路（写回设置，UI 显示与下次请求都用它） */
+    private fun rememberHost(host: String) {
+        if (SettingsStore.zlibHost.trim().removePrefix("https://").trimEnd('/') != host) {
+            SettingsStore.zlibHost = host
+        }
+    }
+
+    /**
+     * 站点的「未登录」文案（实测匿名请求任一关键词都返回 `{"success":0,"error":"未找到请求的书"}`，
+     * 用户资料接口返回 `{"success":0,"error":"登录到您的账户"}`）。
+     */
+    private fun notLoggedIn(text: String): Boolean =
+        text.contains("登录到您的账户") ||
+            (text.contains("\"success\":0") && text.contains("未找到请求的书"))
+
+    /** 登录 / 退出登录后重置：丢掉已加载页面与线路记忆，下次请求重新加载 */
+    fun reset() {
+        loadedHost = null
+        pageReady = CompletableDeferred()
+        val wv = webView ?: return
+        wv.post { runCatching { wv.loadUrl("about:blank") } }
+    }
 
     /** 由 ZlibWebHost 在主线程挂载；UA 不伪造（与登录页一致，DiamWall 会核对） */
     fun attach(view: WebView) {
@@ -92,22 +129,53 @@ object ZlibWeb {
         }
     }
 
+    /** DiamWall 挑战页反复出现时用它区分「反爬没过」与「未登录」两种失败 */
+    private class ChallengeException : Exception("diamwall-challenge")
+
     /**
-     * 取接口响应文本。首次调用（或线路变更）先加载站点首页让 DiamWall 完成验证，
-     * 之后每次请求都重试到「拿到非挑战页的内容」为止。
+     * 取接口响应文本。
+     * 线路顺序 = 有登录 Cookie 的优先（`zh.` 前缀变体也试），命中就把该线路写回设置；
+     * 若某线路返回「未登录」，自动换下一条候选（解决 host 与 Cookie 不一致导致的搜不到东西）；
+     * 挑战页则每个线路重试几次（页面里的 chlb 需要几秒算完证明）。
      */
     suspend fun fetchText(path: String): String = withContext(Dispatchers.Main) {
         val view = webView ?: throw Exception("图书会话未就绪，请退出图书页后重新进入")
-        val base = "https://" + host()
-        if (loadedHost != host()) loadAndWait(view, base + "/")
-        val url = if (path.startsWith("http")) path else base + path
-        repeat(5) {
+        val hosts = candidateHosts().sortedByDescending { hasSession(it) }
+        var sawChallenge = false
+        var notLoggedInText = ""
+        for (h in hosts) {
+            val text = try {
+                fetchOn(view, h, path)
+            } catch (e: ChallengeException) {
+                sawChallenge = true
+                continue
+            }
+            if (notLoggedIn(text)) {
+                notLoggedInText = text
+                continue
+            }
+            rememberHost(h)
+            return@withContext text
+        }
+        // 「未登录」的响应原样交回上层，由 ZlibClient 换成可操作的提示
+        if (notLoggedInText.isNotBlank()) return@withContext notLoggedInText
+        throw Exception(
+            if (sawChallenge) "Z-Library 反爬验证未通过：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次"
+            else "Z-Library 请求失败，请稍后重试"
+        )
+    }
+
+    /** 在某条线路上取接口内容（必要时先加载站点首页建会话） */
+    private suspend fun fetchOn(view: WebView, host: String, path: String): String {
+        if (loadedHost != host) loadAndWait(view, host, "https://$host/")
+        val url = if (path.startsWith("http")) path else "https://$host$path"
+        repeat(4) {
             val text = evalFetch(view, url)
-            if (!isChallenge(text)) return@withContext text
+            if (!isChallenge(text)) return text
             // 页面正处于 DiamWall 挑战中：它的 JS 需要几秒完成验证，等一会儿再试
             delay(2000)
         }
-        throw Exception("反爬验证未通过：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次")
+        throw ChallengeException()
     }
 
     /** 是否拿到了 DiamWall 挑战页 / 登录页（HTML），而不是接口 JSON */
@@ -117,8 +185,8 @@ object ZlibWeb {
             text.contains("DiamWall", true) || text.contains("Verifying your browser", true)
     }
 
-    private suspend fun loadAndWait(view: WebView, url: String) {
-        loadedHost = host()
+    private suspend fun loadAndWait(view: WebView, host: String, url: String) {
+        loadedHost = host
         val ready = CompletableDeferred<Unit>()
         pageReady = ready
         view.loadUrl(url)

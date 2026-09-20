@@ -115,8 +115,13 @@ object ZlibClient {
      */
     fun loginUrls(): List<String> = toLoginUrls(FALLBACK_HOSTS)
 
-    /** Cookie 采集用的站点根地址（登录页所在域名） */
-    fun cookieUrls(): List<String> = FALLBACK_HOSTS.map { "https://$it/" }
+    /** Cookie 采集 / 清理用的站点根地址：当前线路（含 `zh.` 变体）优先，再兜底内置域名 */
+    fun cookieUrls(): List<String> {
+        val h = SettingsStore.zlibHost.trim().removePrefix("https://").trimEnd('/')
+            .ifBlank { FALLBACK_HOSTS.first() }
+        val bare = h.removePrefix("zh.")
+        return (listOf(h, "zh.$bare", bare) + FALLBACK_HOSTS).distinct().map { "https://$it/" }
+    }
 
     /** 「中文子域 + 主域」各生成一条 /login 地址 */
     private fun toLoginUrls(hosts: List<String>): List<String> =
@@ -140,6 +145,20 @@ object ZlibClient {
         return runCatching { JSONObject(text) }.getOrElse {
             throw Exception("接口未返回数据（未登录或验证已过期）：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次")
         }
+    }
+
+    /**
+     * 站点对「未登录 / 会话过期」返回的是误导性文案——实测匿名调搜索接口
+     * 无论关键词是什么都回 `{"success":0,"error":"未找到请求的书"}`，
+     * 调用户资料接口回 `{"success":0,"error":"登录到您的账户"}`。这里统一换成可操作的提示。
+     */
+    private fun friendlyError(msg: String): String {
+        val notLoggedIn = msg.contains("未找到请求的书") || msg.contains("登录到您的账户") ||
+            msg.contains("log in", true) || msg.contains("sign in", true)
+        return if (notLoggedIn) {
+            "Z-Library 未登录或登录已失效（线路 ${SettingsStore.zlibHost}）\n" +
+                "请到 设置 → 账号管理 → Z-Library 登录 里重新登录一次"
+        } else msg
     }
 
     private fun JSONObject.toBook(): Book? {
@@ -172,9 +191,12 @@ object ZlibClient {
         val root = getJson("/eapi/book/search?message=$e&page=$page&limit=20")
         val arr = root.optJSONArray("books") ?: root.optJSONArray("exactMatch")
         if (arr == null) {
-            // 没有 books 字段 = 站点返回了错误结构（未登录/额度/接口变更），把服务端文案原样带出来
+            // 没有 books 字段 = 服务端错误（未登录最典型），把原因换成可操作的文案
             val msg = root.optString("error").trim().ifBlank { root.optString("message").trim() }
-            throw Exception(msg.ifBlank { "搜索接口返回结构异常：" + root.toString().take(120) })
+            throw Exception(
+                if (msg.isNotBlank()) friendlyError(msg)
+                else "搜索接口返回结构异常：" + root.toString().take(120)
+            )
         }
         val books = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.toBook() }
         val pag = root.optJSONObject("pagination")
@@ -204,6 +226,6 @@ object ZlibClient {
         val link = root.optJSONObject("file")?.optString("downloadLink")?.trim().orEmpty()
         if (link.isNotBlank()) return link
         val msg = root.optString("message").trim().ifBlank { root.optString("error").trim() }
-        throw Exception(msg.ifBlank { "未获取到下载链接，请确认已登录且下载额度未用尽" })
+        throw Exception(if (msg.isNotBlank()) friendlyError(msg) else "未获取到下载链接，请确认已登录且下载额度未用尽")
     }
 }

@@ -62,6 +62,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.data.zlib.ZlibClient
+import com.shangyin.app.data.zlib.ZlibWeb
 import com.shangyin.app.ui.theme.ShangYinTheme
 
 /**
@@ -436,12 +437,13 @@ class ZlibLoginActivity : ComponentActivity() {
                         startUrls = ZlibClient.loginUrls(),
                         cookieUrls = ZlibClient.cookieUrls(),
                         hint = "登录后即可搜索并下载电子书。\n" +
-                            "站点有反爬验证，若接口提示「需要重新验证」，回到这里重新登录一次即可。\n" +
+                            "站点的反爬验证由 App 自动完成；若接口提示「未登录或登录已失效」，回到这里重新登录一次即可。\n" +
                             "登录信息仅保存在本机。",
                         loginDetect = { c -> c.contains("remix_userkey", true) },
                         isLoggedIn = { SettingsStore.zlibCookie.contains("remix_userkey", true) },
-                        save = { SettingsStore.zlibCookie = it },
-                        logout = { SettingsStore.clearZlibLogin() },
+                        // 登录态变化后让接口通道丢掉旧页面与线路记忆，下次请求重新建会话
+                        save = { SettingsStore.zlibCookie = it; ZlibWeb.reset() },
+                        logout = { SettingsStore.clearZlibLogin(); ZlibWeb.reset() },
                         afterLoadJs = CLEAR_OVERLAY_JS,
                         // 站点每日换域名，打开前先从 getzlib.com 取当日验证地址（失败则用内置兜底）
                         dynamicUrls = { ZlibClient.dailyLoginUrls() },
@@ -499,23 +501,50 @@ private fun hostOf(url: String): String =
 
 @Composable
 private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess: () -> Unit) {
-    // 0 = 显示"已登录"页；1 = 显示 WebView（登录或重新验证）
+    // 0 = 显示"已登录"页；1 = 显示 WebView（登录 / 切换账号）
     var mode by remember { mutableIntStateOf(if (spec.isLoggedIn()) 0 else 1) }
+    var confirmSwitch by remember { mutableStateOf(false) }
+    val ctx = LocalContext.current
+
+    /** 退出当前账号：清 CookieManager 里的 Cookie + 清设置 */
+    fun signOut() {
+        val cm = CookieManager.getInstance()
+        val saved = collectCookies(cm, spec.cookieUrls)
+        expireCookies(cm, spec.cookieUrls, saved)
+        spec.logout()
+        cm.flush()
+    }
 
     if (mode == 0) {
-        val ctx = LocalContext.current
         AlreadyLoggedInScreen(
             title = spec.title,
             onBack = onBack,
-            onRefresh = { mode = 1 },
+            onSwitch = { confirmSwitch = true },
             onLogout = {
-                val saved = collectCookies(CookieManager.getInstance(), spec.cookieUrls)
-                spec.logout()
-                expireCookies(CookieManager.getInstance(), spec.cookieUrls, saved)
+                signOut()
                 Toast.makeText(ctx, "已退出登录", Toast.LENGTH_SHORT).show()
                 onBack()
             }
         )
+        // 「切换账号」必须先退出当前账号：否则登录页一加载就带着旧 Cookie，
+        // tryExtractCookies() 立刻判定"已登录"并自动关页面，用户根本没有输入新账号的机会。
+        if (confirmSwitch) {
+            AlertDialog(
+                onDismissRequest = { confirmSwitch = false },
+                title = { Text("切换账号 / 重新登录") },
+                text = { Text("会先退出当前账号，然后打开登录页，你可以用另一个账号登录。") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        confirmSwitch = false
+                        signOut()
+                        mode = 1
+                    }) { Text("退出并重新登录") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { confirmSwitch = false }) { Text("取消") }
+                }
+            )
+        }
     } else {
         WebViewLoginScreen(spec = spec, onBack = onBack, onLoginSuccess = onLoginSuccess)
     }
@@ -526,7 +555,7 @@ private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess:
 private fun AlreadyLoggedInScreen(
     title: String,
     onBack: () -> Unit,
-    onRefresh: () -> Unit,
+    onSwitch: () -> Unit,
     onLogout: () -> Unit
 ) {
     Scaffold(
@@ -547,12 +576,14 @@ private fun AlreadyLoggedInScreen(
         ) {
             Text("已登录", style = MaterialTheme.typography.titleLarge)
             Text(
-                "搜索 / 详情 / 下载会使用登录态。若接口提示需要重新验证，点下方「重新验证」刷新一次。",
+                "搜索 / 详情 / 下载会使用登录态。\n" +
+                    "若搜索提示「未登录或登录已失效」，点下方「切换账号 / 重新登录」——" +
+                    "它会先退出当前账号，再打开登录页让你重新登录（也可以换另一个账号）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline
             )
-            Button(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) {
-                Text("重新验证 / 切换账号")
+            Button(onClick = onSwitch, modifier = Modifier.fillMaxWidth()) {
+                Text("切换账号 / 重新登录")
             }
             OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
                 Text("退出登录")
