@@ -137,28 +137,65 @@ object ZlibClient {
         get() = SettingsStore.zlibCookie.contains("remix_userkey", ignoreCase = true)
 
     /**
-     * 调 eapi 并解析 JSON。走 [ZlibWeb]（WebView 页面内 fetch），
-     * 挑战页/HTML 响应会被它识别并重试，最终仍拿不到数据时抛出可展示的文案。
+     * 调 eapi 并解析 JSON。走 [ZlibWeb]（WebView 页面内 fetch）。
+     * [form] 非空 → POST（表单体）；null → GET。
      */
-    private suspend fun getJson(path: String): JSONObject {
-        val text = ZlibWeb.fetchText(path)
+    private suspend fun getJson(path: String, form: String? = null): JSONObject {
+        val text = ZlibWeb.fetchText(path, form)
         return runCatching { JSONObject(text) }.getOrElse {
             throw Exception("接口未返回数据（未登录或验证已过期）：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次")
         }
     }
 
     /**
-     * 站点对「未登录 / 会话过期」返回的是误导性文案——实测匿名调搜索接口
-     * 无论关键词是什么都回 `{"success":0,"error":"未找到请求的书"}`，
-     * 调用户资料接口回 `{"success":0,"error":"登录到您的账户"}`。这里统一换成可操作的提示。
+     * 先 POST（表单体）再 GET 兜底，取第一个满足 [ok] 的响应。
+     * 因为 eapi 的 GET/POST 行为不同（见 [search] 的注释），无参数的接口不确定该用哪种，就两种都试。
      */
-    private fun friendlyError(msg: String): String {
-        val notLoggedIn = msg.contains("未找到请求的书") || msg.contains("登录到您的账户") ||
-            msg.contains("log in", true) || msg.contains("sign in", true)
-        return if (notLoggedIn) {
-            "Z-Library 未登录或登录已失效（线路 ${SettingsStore.zlibHost}）\n" +
-                "请到 设置 → 账号管理 → Z-Library 登录 里重新登录一次"
-        } else msg
+    private suspend fun getJsonPreferPost(
+        path: String,
+        form: String,
+        ok: (JSONObject) -> Boolean
+    ): JSONObject {
+        val post = runCatching { getJson(path, form) }.getOrNull()
+        if (post != null && ok(post)) return post
+        val get = runCatching { getJson(path, null) }.getOrNull()
+        if (get != null && ok(get)) return get
+        return post ?: get ?: throw Exception("Z-Library 请求失败，请稍后重试")
+    }
+
+    /**
+     * 服务端校验登录态：在页面里问 `/eapi/user/profile`。
+     *
+     * ⚠️ **Cookie 里存在 `remix_userkey` ≠ 会话有效**（服务端可能早已让旧会话失效），
+     * 所以登录页的「自动判定成功」与搜索的报错文案都以这个结果为准，
+     * 否则会出现「App 一直显示已登录、接口却当成匿名请求」的死结。
+     */
+    suspend fun sessionOk(): Boolean = runCatching {
+        val text = ZlibWeb.fetchText("/eapi/user/profile")
+        !text.contains("\"success\":0") &&
+            !text.contains("登录到您的账户") &&
+            !text.contains("log in to your account", true)
+    }.getOrDefault(false)
+
+    /** 站点对「未登录 / 会话失效」返回的文案（中英两版都实测过） */
+    private val NOT_LOGGED_IN_WORDS = listOf(
+        "未找到请求的书", "requested book not found",
+        "登录到您的账户", "log in to your account"
+    )
+
+    /** 未登录/会话失效时的可操作提示 */
+    private fun notLoggedInHint(): String =
+        "Z-Library 未登录或登录已失效（线路 ${SettingsStore.zlibHost}）\n" +
+            "请到 设置 → 账号管理 → Z-Library 登录 里重新登录一次"
+
+    /**
+     * 出错时的可展示文案：命中「未登录」类关键字时再用 [sessionOk] 向服务端确认，
+     * 确认失效才提示重新登录，否则原样显示站点给的原因。
+     */
+    private suspend fun errorMessage(msg: String): String {
+        if (msg.isBlank()) return if (sessionOk()) "站点未返回数据" else notLoggedInHint()
+        if (NOT_LOGGED_IN_WORDS.none { msg.contains(it, true) }) return msg
+        return if (sessionOk()) msg else notLoggedInHint()
     }
 
     private fun JSONObject.toBook(): Book? {
@@ -188,13 +225,17 @@ object ZlibClient {
      */
     suspend fun search(keyword: String, page: Int): BookPage {
         val e = URLEncoder.encode(keyword, "UTF-8")
-        val root = getJson("/eapi/book/search?message=$e&page=$page&limit=20")
+        val path = "/eapi/book/search?message=$e&page=$page&limit=20"
+        // ⚠️ 必须用 POST（表单体）：实测同一路径 `GET` 恒返回
+        // `400 {"success":0,"error":"未找到请求的书"}`（误导性报错，与登录态无关），
+        // 只有 POST 才返回 `200 {"success":1,"books":[...]}` —— 这是「搜不到东西」的真根因。
+        val root = getJson(path, "message=$e&page=$page&limit=20")
         val arr = root.optJSONArray("books") ?: root.optJSONArray("exactMatch")
         if (arr == null) {
-            // 没有 books 字段 = 服务端错误（未登录最典型），把原因换成可操作的文案
+            // 没有 books 字段 = 服务端错误（未登录最典型）：先向服务端确认会话是否还有效，再决定文案
             val msg = root.optString("error").trim().ifBlank { root.optString("message").trim() }
             throw Exception(
-                if (msg.isNotBlank()) friendlyError(msg)
+                if (msg.isNotBlank()) errorMessage(msg)
                 else "搜索接口返回结构异常：" + root.toString().take(120)
             )
         }
@@ -210,11 +251,16 @@ object ZlibClient {
      * 不同线路返回结构有差异，这里做兼容：直接是书对象 / 包在 book 里 / 包在 books 数组里。
      */
     suspend fun detail(id: String, hash: String): Book {
-        val root = getJson("/eapi/book/$id/$hash")
+        // eapi 的 GET/POST 行为不同（见 search 注释）：POST 优先，拿不到书信息再退回 GET
+        val root = getJsonPreferPost("/eapi/book/$id/$hash", "") { o ->
+            o.optJSONObject("book") != null || o.optJSONArray("books") != null ||
+                o.optString("id").isNotBlank()
+        }
         root.optJSONObject("book")?.toBook()?.let { return it }
         root.optJSONArray("books")?.optJSONObject(0)?.toBook()?.let { return it }
         root.toBook()?.let { return it }
-        throw Exception("未获取到图书信息")
+        val msg = root.optString("error").trim().ifBlank { root.optString("message").trim() }
+        throw Exception(errorMessage(msg.ifBlank { "未获取到图书信息" }))
     }
 
     /**
@@ -222,10 +268,15 @@ object ZlibClient {
      * 未登录 / 额度用尽会返回明确错误信息。
      */
     suspend fun downloadLink(id: String, hash: String): String {
-        val root = getJson("/eapi/book/$id/$hash/file")
+        val root = getJsonPreferPost("/eapi/book/$id/$hash/file", "") { o ->
+            o.optJSONObject("file") != null || o.optString("error").isNotBlank() ||
+                o.optString("message").isNotBlank()
+        }
         val link = root.optJSONObject("file")?.optString("downloadLink")?.trim().orEmpty()
         if (link.isNotBlank()) return link
         val msg = root.optString("message").trim().ifBlank { root.optString("error").trim() }
-        throw Exception(if (msg.isNotBlank()) friendlyError(msg) else "未获取到下载链接，请确认已登录且下载额度未用尽")
+        throw Exception(
+            errorMessage(msg.ifBlank { "未获取到下载链接，请确认已登录且下载额度未用尽" })
+        )
     }
 }

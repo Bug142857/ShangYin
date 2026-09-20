@@ -137,15 +137,19 @@ object ZlibWeb {
      * 线路顺序 = 有登录 Cookie 的优先（`zh.` 前缀变体也试），命中就把该线路写回设置；
      * 若某线路返回「未登录」，自动换下一条候选（解决 host 与 Cookie 不一致导致的搜不到东西）；
      * 挑战页则每个线路重试几次（页面里的 chlb 需要几秒算完证明）。
+     *
+     * [form] 非空时用 **POST + 表单体** 提交 —— 实测（2026-09-20）eapi 的 GET/POST 行为不同：
+     * `GET /eapi/book/search?...` 恒返回 `400 {"success":0,"error":"未找到请求的书"}`（误导性报错），
+     * 而 `POST`（`application/x-www-form-urlencoded`）返回 `200 {"success":1,"books":[...]}` 正常数据。
      */
-    suspend fun fetchText(path: String): String = withContext(Dispatchers.Main) {
+    suspend fun fetchText(path: String, form: String? = null): String = withContext(Dispatchers.Main) {
         val view = webView ?: throw Exception("图书会话未就绪，请退出图书页后重新进入")
         val hosts = candidateHosts().sortedByDescending { hasSession(it) }
         var sawChallenge = false
         var notLoggedInText = ""
         for (h in hosts) {
             val text = try {
-                fetchOn(view, h, path)
+                fetchOn(view, h, path, form)
             } catch (e: ChallengeException) {
                 sawChallenge = true
                 continue
@@ -166,11 +170,11 @@ object ZlibWeb {
     }
 
     /** 在某条线路上取接口内容（必要时先加载站点首页建会话） */
-    private suspend fun fetchOn(view: WebView, host: String, path: String): String {
+    private suspend fun fetchOn(view: WebView, host: String, path: String, form: String?): String {
         if (loadedHost != host) loadAndWait(view, host, "https://$host/")
         val url = if (path.startsWith("http")) path else "https://$host$path"
         repeat(4) {
-            val text = evalFetch(view, url)
+            val text = evalFetch(view, url, form)
             if (!isChallenge(text)) return text
             // 页面正处于 DiamWall 挑战中：它的 JS 需要几秒完成验证，等一会儿再试
             delay(2000)
@@ -194,10 +198,16 @@ object ZlibWeb {
     }
 
     /** 页面内 fetch 并轮询结果（evaluateJavascript 不支持 await Promise，故把结果挂在 window 上） */
-    private suspend fun evalFetch(view: WebView, url: String): String {
+    private suspend fun evalFetch(view: WebView, url: String, form: String? = null): String {
+        val init = if (form == null) {
+            "{credentials:'include',cache:'no-store',headers:{'X-Requested-With':'XMLHttpRequest'}}"
+        } else {
+            "{method:'POST',credentials:'include',cache:'no-store'," +
+                "headers:{'Content-Type':'application/x-www-form-urlencoded'," +
+                "'X-Requested-With':'XMLHttpRequest'},body:${JSONObject.quote(form)}}"
+        }
         val js = "(function(){try{window.__syZ=null;" +
-            "fetch(${JSONObject.quote(url)},{credentials:'include',cache:'no-store'," +
-            "headers:{'X-Requested-With':'XMLHttpRequest'}})" +
+            "fetch(${JSONObject.quote(url)},$init)" +
             ".then(function(r){return r.text()})" +
             ".then(function(t){window.__syZ=t})" +
             ".catch(function(e){window.__syZ='__err__'+(e&&e.message?e.message:e)});return 1}" +

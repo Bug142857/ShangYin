@@ -53,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.data.zlib.ZlibClient
 import com.shangyin.app.data.zlib.ZlibWeb
@@ -103,6 +105,12 @@ private class LoginSpec(
     val allowUrlInput: Boolean = false,
     /** 用户手动输入地址解析出的域名 */
     val onCustomHost: ((String) -> Unit)? = null,
+    /**
+     * 服务端校验登录态（如 Z-Library 的 `/eapi/user/profile`）。
+     * ⚠️ 「Cookie 里有关键字」不等于会话有效：服务端可能早已让旧会话失效，
+     * 此时拿 Cookie 判定会一直误报「已登录」，用户也就永远重登不了。
+     */
+    val verifyLogin: (suspend () -> Boolean)? = null,
     /** 加载失败时附带的排查提示 */
     val failHint: String = ""
 )
@@ -445,6 +453,8 @@ class ZlibLoginActivity : ComponentActivity() {
                         save = { SettingsStore.zlibCookie = it; ZlibWeb.reset() },
                         logout = { SettingsStore.clearZlibLogin(); ZlibWeb.reset() },
                         afterLoadJs = CLEAR_OVERLAY_JS,
+                        // 服务端说了算：Cookie 存在不等于会话有效，必须问 /eapi/user/profile 才自动关页
+                        verifyLogin = { ZlibClient.sessionOk() },
                         // 站点每日换域名，打开前先从 getzlib.com 取当日验证地址（失败则用内置兜底）
                         dynamicUrls = { ZlibClient.dailyLoginUrls() },
                         allowUrlInput = true,
@@ -486,14 +496,32 @@ private fun collectCookies(cm: CookieManager, urls: List<String>): String {
     return all.entries.joinToString("; ") { "${it.key}=${it.value}" }
 }
 
-/** 退出登录时把已保存的 Cookie 逐个置为过期，避免 WebView 仍处于登录态 */
+/**
+ * 退出登录时把已保存的 Cookie 逐个置为过期，避免 WebView 仍处于登录态。
+ *
+ * ⚠️ 关键坑：域 Cookie（`Domain=.z-lib.sk`）**必须带同样的 Domain 属性**才删得掉，
+ * 只写 `name=; Max-Age=0; path=/` 只会命中 host-only 的同名 Cookie —— 实测表现就是
+ * 「退出登录后重进登录页，页面还没加载出来就又被判成已登录并自动关闭」。
+ * 所以这里对每个名字把 5 种 Domain 写法都试一遍，最后校验残留（还有残留就再来一轮）。
+ */
 private fun expireCookies(cm: CookieManager, urls: List<String>, cookieString: String) {
     val names = cookieString.split(";").mapNotNull { part ->
         val idx = part.indexOf('=')
         if (idx > 0) part.substring(0, idx).trim().takeIf { it.isNotEmpty() } else null
+    }.distinct()
+    if (names.isEmpty() || urls.isEmpty()) return
+    val expired = "Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/"
+    repeat(2) {
+        for (u in urls) {
+            val host = hostOf(u)
+            val bare = host.split(".").takeLast(2).joinToString(".")
+            val domains = listOf("", "; domain=$host", "; domain=.$host", "; domain=$bare", "; domain=.$bare")
+            for (n in names) for (d in domains) cm.setCookie(u, "$n=; $expired$d")
+        }
+        cm.flush()
+        val left = urls.joinToString(";") { cm.getCookie(it).orEmpty() }
+        if (names.none { left.contains("$it=") }) return
     }
-    for (u in urls) for (n in names) cm.setCookie(u, "$n=; Max-Age=0; path=/")
-    cm.flush()
 }
 
 private fun hostOf(url: String): String =
@@ -620,6 +648,10 @@ private fun WebViewLoginScreen(
     var navLog by remember { mutableStateOf(listOf<String>()) }
     // 需要动态解析线路时（如 Z-Library 每日地址），先解析完再建 WebView，避免先加载过期地址
     var urlsReady by remember { mutableStateOf(spec.dynamicUrls == null) }
+    val scope = rememberCoroutineScope()
+    // 打开本页时的 Cookie 快照：只有「本次操作期间 Cookie 真的变了」才算登录成功并自动关页。
+    // 打开时就存在的 Cookie 可能是服务端早已失效的陈旧值，若据此自动关页，用户永远没机会输入账号。
+    val initialCookies = remember { collectCookies(cookieManager, spec.cookieUrls) }
 
     LaunchedEffect(Unit) {
         val resolve = spec.dynamicUrls ?: return@LaunchedEffect
@@ -828,7 +860,23 @@ private fun WebViewLoginScreen(
                                 view?.evaluateJavascript(INSTRUMENT_JS, null)
                                 // 清理站点自动弹出的遮挡层（如 Zibll 主题的「系统公告」弹窗）
                                 spec.afterLoadJs?.let { js -> view?.evaluateJavascript(js, null) }
-                                if (tryExtractCookies()) onLoginSuccess()
+                                // 先把 Cookie 存下来（哪怕还没验证通过，保证稍后「已登录」按钮能保存最新值）
+                                val current = collectCookies(
+                                    cookieManager,
+                                    (spec.cookieUrls + currentUrl).filter { it.isNotBlank() }
+                                )
+                                if (spec.loginDetect(current)) spec.save(current)
+                                // 只有「本次进来的 Cookie 真的变了」才自动判定成功并关页；
+                                // 进来时就已经存在的 Cookie 一律不自动关页（否则用户没机会输入账号）。
+                                if (current == initialCookies) return
+                                val verify = spec.verifyLogin
+                                if (verify == null) {
+                                    onLoginSuccess()
+                                } else {
+                                    scope.launch {
+                                        if (runCatching { verify() }.getOrDefault(false)) onLoginSuccess()
+                                    }
+                                }
                             }
 
                             override fun onReceivedError(
