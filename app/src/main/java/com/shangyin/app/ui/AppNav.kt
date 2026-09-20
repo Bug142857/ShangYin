@@ -225,6 +225,9 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             // 我的下载（漫画 / 本子离线阅读）
             composable("downloads") { com.shangyin.app.ui.download.DownloadScreen(nav) }
         }
+
+        // Z-Library 接口用的常驻隐藏 WebView（DiamWall 是 JS 挑战，接口必须走浏览器环境）
+        com.shangyin.app.ui.zlib.ZlibWebHost()
     }
 
     // 导航栈安全网：NavHost 空栈或快速返回异常时强制回首页

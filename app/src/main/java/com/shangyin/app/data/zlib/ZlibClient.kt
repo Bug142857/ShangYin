@@ -34,24 +34,25 @@ data class BookPage(val books: List<Book>, val totalPages: Int, val currentPage:
  * Z-Library 客户端（eapi 协议），参考 o-lib（github.com/shiyi-0x7f/o-lib）的用法：
  * 登录态用 `remix_userid` + `remix_userkey` 两个 Cookie 表示。
  *
- * 重要约束（实测 2026-09-18）：
- *  Z-Library 全站使用 DiamWall 反爬（JS 挑战）：普通 HTTP 请求会得到
- *  307 重定向环 / HTTP 513 "Verifying your browser" 挑战页，只有真实浏览器引擎能过验证。
- *  因此本 App 走「WebView 登录（顺带完成 DiamWall 验证）→ 取出 Cookie → OkHttp 带同一 UA+Cookie 调 eapi」。
- *  DiamWall 验证有时效，过期后接口会再次返回 513，此时 UI 会提示重新登录刷新验证。
+ * ⚠️ 接口请求不走 OkHttp，而是走 [ZlibWeb]（常驻隐藏 WebView 的页面内 fetch）：
+ * Z-Library 全站 DiamWall 反爬——接口请求会 307 到自身并下发只有 5 分钟有效期的 `__diamwall`，
+ * 再请求就变成 `Verifying your browser` 挑战页（页面内嵌 iframe + chlb.lib 算证明）。
+ * 实测（2026-09-20）纯 HTTP 客户端无论带不带 cookie 都过不去，只有真浏览器引擎能跑，
+ * 所以必须复用登录页完成验证的同一浏览器环境（这也是「登录成功但搜不到东西」的根因：
+ * cookie 一过期，OkHttp 请求就全被挑战页挡下）。
  *
- * 站点域名（线路）可配置：SettingsStore.zlibHost，默认 z-library.sk。
+ * 站点域名（线路）可配置：SettingsStore.zlibHost，登录成功后由登录页写入当日验证可用的线路。
  */
 object ZlibClient {
 
     /**
-     * 请求 UA：必须与登录页 WebView 实际发出的 UA 完全一致（DiamWall 的验证 Cookie 与 UA 绑定）。
-     * 这里取 WebView 的真实默认 UA，不伪造——伪造桌面 UA 与 WebView 自动发出的 Client Hints
-     * （sec-ch-ua-platform: Android / sec-ch-ua-mobile: ?1）矛盾，会被反爬判定为机器人，
-     * 表现为「手机浏览器能打开、App 里一直转圈或反复跳转」。
+     * 请求 UA：与登录页 WebView 的真实默认 UA 保持一致（DiamWall 的验证 Cookie 与 UA 绑定）。
+     * 不伪造桌面 UA——伪造的 UA 与 WebView 自动发出的 Client Hints
+     * （sec-ch-ua-platform: Android / sec-ch-ua-mobile: ?1）矛盾，会被反爬判定为机器人。
      */
     val UA: String
         get() = com.shangyin.app.App.webViewUa.ifBlank { FALLBACK_UA }
+
 
     private const val FALLBACK_UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
@@ -77,8 +78,6 @@ object ZlibClient {
     /** 是否是本站域名（用于「记住可用线路」判断）；顺带排除 getzlib.com / cdn-zlib.sk 这类同名干扰域 */
     fun isZlibHost(host: String): Boolean {
         val h = host.lowercase()
-        // s3proxy.cdn-zlib.sk 等是下载代理域，不是登录/搜索线路（2026-09-20 实测会被误收进候选）
-        if (h.contains("cdn-zlib") || h.contains("s3proxy") || h.contains("diamwall")) return false
         return h.contains("z-lib") || h.startsWith("zlib.") || h.contains(".zlib.")
     }
 
@@ -128,57 +127,18 @@ object ZlibClient {
             )
         }.distinct()
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(25, TimeUnit.SECONDS)
-        // DiamWall 会用 307 指向自身，自动跟随会导致请求环，这里手动处理
-        .followRedirects(false)
-        .build()
-
-    private val base: String get() = "https://" + SettingsStore.zlibHost.trim().trimEnd('/').removePrefix("https://")
-
     /** 登录态是否可用（有 remix_userkey 才算真正登录） */
     val isLoggedIn: Boolean
         get() = SettingsStore.zlibCookie.contains("remix_userkey", ignoreCase = true)
 
-    private fun newRequest(url: String): Request {
-        val b = Request.Builder().url(url)
-            .header("User-Agent", UA)
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .header("Referer", "$base/")
-            .header("X-Requested-With", "XMLHttpRequest")
-        val cookie = SettingsStore.zlibCookie
-        if (cookie.isNotBlank()) b.header("Cookie", cookie)
-        return b.build()
-    }
-
-    /** 反爬/线路异常时抛出可直接展示给用户的文案 */
-    private fun failFor(code: Int, body: String): Nothing {
-        val blocked = code == 513 || code == 403 || code == 503 ||
-            body.contains("DiamWall", true) || body.contains("Verifying your browser", true)
-        throw Exception(
-            if (blocked) "需要重新验证：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次"
-            // 2026-09-20 实测：307 一律是 DiamWall 验证过期下发的挑战（Location 指回原地址），
-            // 换线路没用，重新登录刷新验证才是正解
-            else if (code == 307 || code == 302) "站点验证已过期：请到 设置 → 账号管理 → Z-Library 重新登录一次"
-            else "接口错误 HTTP $code"
-        )
-    }
-
-    private suspend fun getJson(path: String): JSONObject = withContext(Dispatchers.IO) {
-        val url = if (path.startsWith("http")) path else base + path
-        client.newCall(newRequest(url)).execute().use { resp ->
-            val body = resp.body?.string().orEmpty()
-            if (resp.code in 300..399) failFor(resp.code, body)
-            if (!resp.isSuccessful) failFor(resp.code, body)
-            if (body.isBlank()) throw Exception("站点返回空内容")
-            runCatching { JSONObject(body) }.getOrElse {
-                if (body.contains("DiamWall", true) || body.contains("Verifying", true)) {
-                    failFor(513, body)
-                }
-                throw Exception("响应格式异常，可能线路已变更")
-            }
+    /**
+     * 调 eapi 并解析 JSON。走 [ZlibWeb]（WebView 页面内 fetch），
+     * 挑战页/HTML 响应会被它识别并重试，最终仍拿不到数据时抛出可展示的文案。
+     */
+    private suspend fun getJson(path: String): JSONObject {
+        val text = ZlibWeb.fetchText(path)
+        return runCatching { JSONObject(text) }.getOrElse {
+            throw Exception("接口未返回数据（未登录或验证已过期）：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次")
         }
     }
 
@@ -210,20 +170,14 @@ object ZlibClient {
     suspend fun search(keyword: String, page: Int): BookPage {
         val e = URLEncoder.encode(keyword, "UTF-8")
         val root = getJson("/eapi/book/search?message=$e&page=$page&limit=20")
-        val arr = root.optJSONArray("books")
-            ?: root.optJSONObject("data")?.optJSONArray("books")
-            ?: root.optJSONArray("exactMatch")
+        val arr = root.optJSONArray("books") ?: root.optJSONArray("exactMatch")
         if (arr == null) {
-            // 站点限流/封禁时会有明确的 error/message；结构变化时带上原始响应片段，
-            // 不能静默返回空列表——否则用户只会看到「没有找到图书」，无从排查
+            // 没有 books 字段 = 站点返回了错误结构（未登录/额度/接口变更），把服务端文案原样带出来
             val msg = root.optString("error").trim().ifBlank { root.optString("message").trim() }
-            if (msg.isNotBlank()) throw Exception(msg)
-            val brief = root.toString().replace(Regex("\\s+"), " ").take(200)
-            throw Exception("搜索响应结构异常（线路 ${SettingsStore.zlibHost}）：$brief")
+            throw Exception(msg.ifBlank { "搜索接口返回结构异常：" + root.toString().take(120) })
         }
         val books = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.toBook() }
         val pag = root.optJSONObject("pagination")
-            ?: root.optJSONObject("data")?.optJSONObject("pagination")
         val total = pag?.optInt("total_pages", 0) ?: 0
         val current = pag?.optInt("current_page", page) ?: page
         return BookPage(books, total, current)

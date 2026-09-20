@@ -226,64 +226,96 @@ private const val INSTRUMENT_JS = """
 """
 
 /**
- * 兜底：无忧的滑块验证弹窗若只渲染出半透明遮罩、里面的卡片是透明的（主题 CSS 没生效时的表现），
- * 就补一套最简样式，保证「拖动滑块」这个动作能完成。只在检测到异常时注入，正常页面不受影响。
+ * 无忧滑块验证弹窗的**强制布局样式**（无条件注入）。
+ *
+ * 为什么无条件注入：弹窗由主题 JS（slidercaptcha.min.js）在点击「登录」后动态创建，
+ * 其内部元素尺寸完全依赖主题 CSS；实测同一 DOM 在桌面 Chrome（卡片 340x372）正常，
+ * 在 App 的 WebView 里却只剩黑色遮罩、`.modal-content` 高度 0（子元素全部塌陷）。
+ * 与其猜是哪条规则失效，不如直接把整条布局链用 !important 钉死（数值取自桌面实测值），
+ * 保证「拼图可见 + 滑块可拖」。
+ *
+ * ⚠️ 三条硬约束（改这个样式表前必读）：
+ *  1. `#SliderCaptcha` 自身**不能**写 `display:flex!important`——弹窗的显示/隐藏靠 jQuery `.hide()`
+ *     写 inline display:none，样式表里的 !important 会压过 inline 样式导致弹窗关不掉。
+ *  2. `.captcha-body-bar` / `.captcha-slider` 拖动时由 JS 写 inline `left`、`.sliderMask` 写 inline `width`，
+ *     这些属性一律不要用 !important（否则拖动失效）。
+ *  3. `.modal-colorful-header` 的 inline `height:100px` 与内容区 inline `margin-top:100px` 是对齐的一对，
+ *     不要改（改了内容会错位）。
+ *
+ * 另外顺手把主题的双重转义 bug 修掉：`.sliderText` 的文案是 `&#21521;...` 字面量，
+ * 屏幕上显示成一串实体码，这里直接写成中文。
  */
-private const val SLIDER_FALLBACK_JS = """
-(function(){
-  if (window.__sySliderFix) return;
-  window.__sySliderFix = 1;
-  var CSS = '#SliderCaptcha{display:flex;align-items:center;justify-content:center}' +
-    '#SliderCaptcha .modal-dialog{width:340px;height:auto!important;max-height:none!important;transform:none!important}' +
-    '#SliderCaptcha .modal-content{display:block!important;background:#fff;border-radius:12px;' +
-      'height:auto!important;max-height:none!important;overflow:visible!important;transform:none!important;' +
-      'box-shadow:0 10px 30px rgba(0,0,0,.3)}' +
-    '#SliderCaptcha .modal-body{display:block!important;height:auto!important;max-height:none!important;overflow:visible!important}' +
-    '#SliderCaptcha .modal-colorful-header{display:block!important;height:100px;background:#ffd45e}' +
-    '#SliderCaptcha canvas{display:block}' +
-    '#SliderCaptcha .slidercaptcha{display:block;width:280px;margin:0 auto}' +
-    '#SliderCaptcha .sliderContainer{position:relative;width:100%;height:44px;margin-top:8px;background:#f1f1f1;border-radius:6px}' +
-    '#SliderCaptcha .sliderMask{position:absolute;left:0;top:0;height:44px;background:#7ac23c;opacity:.35;border-radius:6px}' +
-    '#SliderCaptcha .captcha-slider{position:absolute;left:0;top:0;width:44px;height:44px;background:#fff;' +
-      'border:1px solid #ddd;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25);display:flex;' +
-      'align-items:center;justify-content:center;cursor:pointer;z-index:2}' +
-    '#SliderCaptcha .sliderText{position:absolute;left:0;top:0;width:100%;height:44px;line-height:44px;' +
-      'text-align:center;font-size:14px;color:#888;z-index:1}';
-  function transparent(c){ return !c || c === 'transparent' || c === 'rgba(0, 0, 0, 0)'; }
-  function force(el, props){
-    if (!el) return;
-    for (var k in props) { try { el.style.setProperty(k, props[k], 'important'); } catch (e) {} }
+private const val SLIDER_FORCE_CSS_JS = """
+;(function(){
+  if (window.__sySliderCss) return;
+  window.__sySliderCss = 1;
+  var CSS = [
+    '#SliderCaptcha{visibility:visible!important;opacity:1!important;background:rgba(0,0,0,.5)!important}',
+    '#SliderCaptcha *{transform:none!important}',
+    '#SliderCaptcha .modal-dialog{display:block!important;position:relative!important;height:auto!important;' +
+      'min-height:372px!important;max-height:none!important}',
+    '#SliderCaptcha .modal-content{display:block!important;height:auto!important;min-height:372px!important;' +
+      'max-height:none!important;overflow:visible!important;background:#fff!important;border-radius:12px!important}',
+    '#SliderCaptcha .modal-body{display:block!important;position:relative!important;height:auto!important;' +
+      'min-height:340px!important;max-height:none!important}',
+    '#SliderCaptcha .slidercaptcha{display:block!important;position:relative!important;height:auto!important;' +
+      'min-height:222px!important;overflow:visible!important}',
+    '#SliderCaptcha canvas.captcha-body-bg{display:inline-block!important;position:static!important;' +
+      'visibility:visible!important;opacity:1!important;width:278px!important;height:170px!important}',
+    '#SliderCaptcha canvas.captcha-body-bar{display:block!important;position:absolute!important;top:0!important;' +
+      'visibility:visible!important;opacity:1!important}',
+    '#SliderCaptcha .sliderContainer{display:block!important;position:relative!important;height:40px!important;' +
+      'line-height:40px!important;margin-top:8px!important;text-align:center!important;background:#f2f3f5!important;' +
+      'color:#787878!important;border-radius:4px!important}',
+    '#SliderCaptcha .sliderMask{position:absolute!important;top:0!important;height:40px!important;' +
+      'background:rgba(0,153,255,.25)!important;border-radius:4px!important}',
+    '#SliderCaptcha .captcha-slider{display:block!important;position:absolute!important;top:0!important;' +
+      'width:40px!important;height:40px!important;background:#fff!important;border-radius:4px!important;' +
+      'box-shadow:0 0 5px rgba(0,0,0,.25)!important;cursor:pointer!important;z-index:3!important}',
+    '#SliderCaptcha .sliderText{position:absolute!important;left:0!important;top:0!important;width:100%!important;' +
+      'height:40px!important;line-height:40px!important;text-align:center!important;font-size:14px!important;' +
+      'color:#787878!important;z-index:1!important}',
+    '#SliderCaptcha .refreshIcon{position:absolute!important;right:6px!important;top:6px!important;' +
+      'padding:4px 6px!important;background:rgba(255,255,255,.85)!important;color:#888!important;border:0!important;' +
+      'border-radius:4px!important;cursor:pointer!important;z-index:6!important}'
+  ].join('');
+  try {
+    var s = document.createElement('style');
+    s.id = 'sy-slider-css';
+    s.appendChild(document.createTextNode(CSS));
+    (document.head || document.body).appendChild(s);
+  } catch (e) {}
+  // 主题把「向右滑动填充拼图」写成了 HTML 实体字面量，屏幕上显示的是 &#21521;...，直接改成中文
+  function fixText(){
+    try {
+      var t = document.querySelector('#SliderCaptcha .sliderText');
+      if (t && t.textContent && t.textContent.indexOf('&#') >= 0) t.textContent = '向右滑动填充拼图';
+    } catch (e) {}
   }
-  function ensure(){
+  // 记录弹窗实际布局：万一还是渲染不出来，诊断面板里能直接看到是哪一层塌了
+  var SEL = ['.modal-dialog', '.modal-content', '.modal-body', '.slidercaptcha',
+    'canvas.captcha-body-bg', 'canvas.captcha-body-bar', '.sliderContainer'];
+  function check(){
     try {
       var m = document.getElementById('SliderCaptcha');
       if (!m) return;
-      var card = m.querySelector('.modal-content');
-      if (!card) return;
-      var r = card.getBoundingClientRect();
-      var bg = getComputedStyle(card).backgroundColor;
-      if (r.width > 60 && r.height > 60 && !transparent(bg)) return;
-      if (!document.getElementById('sy-slider-fix')) {
-        var s = document.createElement('style');
-        s.id = 'sy-slider-fix';
-        s.appendChild(document.createTextNode(CSS));
-        (document.head || document.body).appendChild(s);
+      fixText();
+      var parts = [];
+      for (var i = 0; i < SEL.length; i++) {
+        var el = m.querySelector(SEL[i]);
+        if (!el) { parts.push(SEL[i] + '=(无)'); continue; }
+        var st = getComputedStyle(el), r = el.getBoundingClientRect();
+        parts.push(SEL[i] + '=' + st.display + '/' + st.position + ' ' +
+          Math.round(r.width) + 'x' + Math.round(r.height) + ' maxH=' + st.maxHeight +
+          ' op=' + st.opacity + ' vis=' + st.visibility);
       }
-      // 实测（v2.23.5 诊断）：卡片宽340、高0、白底——弹窗在、滑块初始化了，
-      // 但 .modal-content 高度塌陷。内联 important 是最高优先级，逐级钉死几何，
-      // 不依赖猜测是主题哪条 CSS 导致的塌陷（display:none / height:0 / scaleY 都能兜住）。
-      force(m, { opacity: '1', visibility: 'visible' });
-      force(m.querySelector('.modal-dialog'), { height: 'auto', 'max-height': 'none', overflow: 'visible', transform: 'none' });
-      force(card, { display: 'block', height: 'auto', 'max-height': 'none', overflow: 'visible', transform: 'none' });
-      force(card.querySelector('.modal-body'), { display: 'block', height: 'auto', 'max-height': 'none', overflow: 'visible' });
-      force(card.querySelector('.modal-colorful-header'), { display: 'block' });
-      force(card.querySelector('.slidercaptcha'), { display: 'block' });
+      if (window.__syProbe) window.__syProbe.style = parts.join(' ｜ ');
     } catch (e) {}
   }
-  // 弹窗都是点击「登录」后才创建，故在点击后几个时间点各查一次
   document.addEventListener('click', function(){
-    setTimeout(ensure, 300); setTimeout(ensure, 900); setTimeout(ensure, 1800);
+    setTimeout(check, 400); setTimeout(check, 1200); setTimeout(check, 2500);
   }, true);
+  setTimeout(check, 400);
 })()
 """
 
@@ -297,6 +329,9 @@ private const val LIVE_PROBE_JS = """
     var out = [];
     out.push('地址: ' + location.href);
     out.push('文档状态: ' + document.readyState);
+    out.push('视口: ' + window.innerWidth + 'x' + window.innerHeight +
+      ' dpr=' + (window.devicePixelRatio || 1) +
+      ' 可视缩放=' + (window.visualViewport ? window.visualViewport.scale : '?'));
     try {
       var ctx = window.tbquire && window.tbquire.s && window.tbquire.s.contexts && window.tbquire.s.contexts._;
       var def = ctx && ctx.defined ? Object.keys(ctx.defined) : [];
@@ -316,20 +351,8 @@ private const val LIVE_PROBE_JS = """
       var card = m.querySelector('.modal-content') || m.querySelector('.modal-dialog');
       if (card) {
         var r = card.getBoundingClientRect();
-        var cs = getComputedStyle(card);
         out.push('滑块卡片: 宽=' + Math.round(r.width) + ' 高=' + Math.round(r.height) +
-          ' 背景=' + cs.backgroundColor + ' display=' + cs.display + ' transform=' + cs.transform);
-        var dlg = m.querySelector('.modal-dialog');
-        if (dlg) {
-          var dr = dlg.getBoundingClientRect();
-          out.push('滑块外框: 宽=' + Math.round(dr.width) + ' 高=' + Math.round(dr.height));
-        }
-        var mb = card.querySelector('.modal-body');
-        if (mb) {
-          var br = mb.getBoundingClientRect();
-          out.push('滑块内容体: 宽=' + Math.round(br.width) + ' 高=' + Math.round(br.height) +
-            ' display=' + getComputedStyle(mb).display);
-        }
+          ' 背景=' + getComputedStyle(card).backgroundColor);
       } else {
         out.push('滑块卡片: 不存在');
       }
@@ -340,6 +363,7 @@ private const val LIVE_PROBE_JS = """
         (c ? ' 尺寸=' + c.width + 'x' + c.height : ''));
       var sc = m.querySelector('.sliderContainer');
       out.push('滑块容器: ' + (sc ? ('class=' + sc.className) : '(无)'));
+      if (p && p.style) out.push('弹窗样式链: ' + p.style);
     } else {
       out.push('滑块弹窗: 未创建');
     }
@@ -376,7 +400,9 @@ class WygamerLoginActivity : ComponentActivity() {
                         save = { SettingsStore.wygamerCookie = it },
                         logout = { SettingsStore.clearWygamerLogin() },
                         preCookies = listOf("showed_system_notice" to "showed"),
-                        afterLoadJs = CLEAR_OVERLAY_JS + SLIDER_FALLBACK_JS,
+                        // ⚠️ 两段 JS 拼接时必须确保前一段以分号结束：IIFE 之间少了分号会被解析成
+                        // `})()(function(){...})()`（报 "is not a function"），后一段整段不执行。
+                        afterLoadJs = CLEAR_OVERLAY_JS + SLIDER_FORCE_CSS_JS,
                         failHint = "站点偶发抽风时可稍后重试。若页面能显示但点「登录」没反应，" +
                             "点右上角 ⓘ 看诊断信息并反馈（多为系统 WebView 版本过旧，" +
                             "可到应用商店更新「Android System WebView」或「Chrome」）。"
