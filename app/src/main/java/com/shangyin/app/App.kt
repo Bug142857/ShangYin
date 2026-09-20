@@ -85,11 +85,16 @@ class App : Application(), ImageLoaderFactory {
      * - 磁盘缓存 150MB（Android 低存储时系统自动限制）
      * - 内存缓存默认（按可用 RAM 自动计算）
      * 缓存目录：<appCacheDir>/image_cache（Coil 内部管理，clear/delete 都由 LRU 触发）
+     * - respectCacheHeaders=false：本子/漫画等图床常返回 no-store / no-cache，
+     *   默认策略会导致封面每次重新下载（费流量），故强制入磁盘缓存，由 LRU 负责淘汰。
+     * - addLastModifiedToFileCacheKey=false：缓存键只认 URL，避免 Last-Modified 变化导致重新下载。
      */
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .okHttpClient(getOrCreateOkHttpClient())
             .crossfade(true)
+            .respectCacheHeaders(false)
+            .addLastModifiedToFileCacheKey(false)
             .diskCache {
                 DiskCache.Builder()
                     .directory(File(cacheDir, "image_cache"))

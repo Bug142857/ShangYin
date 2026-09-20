@@ -51,12 +51,21 @@ object ZlibClient {
     const val UA =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    /** 候选线路：登录页加载失败会自动换下一个，成功后写回 SettingsStore.zlibHost */
-    val ALT_HOSTS = listOf("z-library.sk", "1lib.sk", "z-lib.fm", "z-lib.gs", "zh.z-lib.gs")
+    /**
+     * 候选线路：登录页加载失败会自动换下一个，成功后写回 SettingsStore.zlibHost。
+     * 各家镜像在不同网络下可用性差异很大，故列全一份；用户也可在登录页手动粘贴地址。
+     */
+    val ALT_HOSTS = listOf(
+        "z-library.sk", "zh.z-library.sk",
+        "1lib.sk", "zh.1lib.sk",
+        "z-lib.fm", "z-lib.gs", "zh.z-lib.gs",
+        "singlelogin.re"
+    )
 
-    /** 登录页候选地址（当前设置的线路优先） */
+    /** 登录页候选地址（当前设置的线路优先；设置值兼容整串 URL，只取域名） */
     fun candidateUrls(): List<String> {
-        val cur = SettingsStore.zlibHost
+        val cur = SettingsStore.zlibHost.trim()
+            .substringAfter("://").substringBefore("/").substringBefore("?")
         return (listOf(cur) + ALT_HOSTS.filter { it != cur }).map { "https://$it/" }
     }
 

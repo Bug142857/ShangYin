@@ -4,7 +4,9 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Message
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -21,8 +23,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -32,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -81,8 +86,50 @@ private class LoginSpec(
     /** 用桌面版 UA（站点反爬对移动端 WebView 更敏感） */
     val desktopUa: Boolean = false,
     /** 主框架加载成功后的回调，用于记住真正可用的线路 */
-    val onHostResolved: ((String) -> Unit)? = null
+    val onHostResolved: ((String) -> Unit)? = null,
+    /** 打开页面前预设的 Cookie（如关掉站点自动弹窗的标记） */
+    val preCookies: List<Pair<String, String>> = emptyList(),
+    /** 每次页面加载完成后注入的 JS（清理遮挡层等） */
+    val afterLoadJs: String? = null,
+    /** 允许手动输入地址（浏览器能打开、这里打不开时用） */
+    val allowUrlInput: Boolean = false,
+    /** 用户手动输入地址解析出的域名 */
+    val onCustomHost: ((String) -> Unit)? = null,
+    /** 加载失败时附带的排查提示 */
+    val failHint: String = ""
 )
+
+/**
+ * 关闭站点自动弹出的遮挡层。
+ * 无忧游戏库（Zibll 主题）在页面 onload 后 500ms 无条件弹出「系统公告」弹窗，
+ * WebView 里只剩一层黑色遮罩盖住登录表单（验证码/登录框都点不到），故加载后强制关掉并移除。
+ */
+private const val CLEAR_OVERLAY_JS = """
+(function(){
+  function kill(){
+    try{
+      var m = document.getElementById('modal-system-notice');
+      if (m) {
+        try { if (window.jQuery && jQuery.fn && jQuery.fn.modal) jQuery(m).modal('hide'); } catch(e){}
+        m.classList.remove('show');
+        m.style.display = 'none';
+        m.setAttribute('aria-hidden','true');
+        if (m.parentNode) m.parentNode.removeChild(m);
+      }
+      var bs = document.querySelectorAll('.modal-backdrop');
+      for (var i = 0; i < bs.length; i++) { if (bs[i].parentNode) bs[i].parentNode.removeChild(bs[i]); }
+      document.body.classList.remove('modal-open');
+      document.body.style.overflow = '';
+      document.body.style.paddingRight = '';
+    } catch(e){}
+  }
+  kill();
+  setTimeout(kill, 400);
+  setTimeout(kill, 900);
+  setTimeout(kill, 1800);
+  setTimeout(kill, 3200);
+})()
+"""
 
 /** 无忧游戏库登录（直达站点独立登录页，避免首页弹窗遮罩） */
 class WygamerLoginActivity : ComponentActivity() {
@@ -102,7 +149,10 @@ class WygamerLoginActivity : ComponentActivity() {
                         loginDetect = { c -> c.contains("wordpress_logged_in", true) },
                         isLoggedIn = { SettingsStore.isWygamerLoggedIn },
                         save = { SettingsStore.wygamerCookie = it },
-                        logout = { SettingsStore.clearWygamerLogin() }
+                        logout = { SettingsStore.clearWygamerLogin() },
+                        preCookies = listOf("showed_system_notice" to "showed"),
+                        afterLoadJs = CLEAR_OVERLAY_JS,
+                        failHint = "站点偶发抽风时可稍后重试，或到浏览器里确认能否打开。"
                     ),
                     onBack = { finish() },
                     onLoginSuccess = {
@@ -140,11 +190,16 @@ class ZlibLoginActivity : ComponentActivity() {
                         save = { SettingsStore.zlibCookie = it },
                         logout = { SettingsStore.clearZlibLogin() },
                         desktopUa = true,
+                        afterLoadJs = CLEAR_OVERLAY_JS,
+                        allowUrlInput = true,
+                        failHint = "Z-Library 需要外网 / 代理环境；若浏览器能打开而这里不行，" +
+                            "多半是浏览器走了代理或加速，请把本应用也加入代理名单，或在系统层开启全局代理。",
                         onHostResolved = { host ->
                             if (host.isNotBlank() && ZlibClient.ALT_HOSTS.contains(host)) {
                                 SettingsStore.zlibHost = host
                             }
-                        }
+                        },
+                        onCustomHost = { host -> if (host.isNotBlank()) SettingsStore.zlibHost = host }
                     ),
                     onBack = { finish() },
                     onLoginSuccess = {
@@ -260,18 +315,36 @@ private fun WebViewLoginScreen(
     onLoginSuccess: () -> Unit
 ) {
     val ctx = LocalContext.current
+    // 候选线路（手动输入的地址会插到最前）
+    var urls by remember { mutableStateOf(spec.startUrls) }
     var urlIndex by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var pageError by remember { mutableStateOf<String?>(null) }
     var lineMenu by remember { mutableStateOf(false) }
+    var urlDialog by remember { mutableStateOf(false) }
+    var customUrl by remember { mutableStateOf("") }
     val cookieManager = CookieManager.getInstance()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
     fun loadLine(wv: WebView?, index: Int) {
-        val url = spec.startUrls.getOrNull(index) ?: return
+        val url = urls.getOrNull(index) ?: return
         urlIndex = index
         pageError = null
         loading = true
+        wv?.loadUrl(url)
+    }
+
+    /** 手动输入地址（浏览器里能打开的那个）：插到线路最前并加载，同时记进设置 */
+    fun loadCustomUrl(wv: WebView?) {
+        val raw = customUrl.trim()
+        if (raw.isBlank()) return
+        val url = if (raw.startsWith("http://") || raw.startsWith("https://")) raw else "https://$raw/"
+        spec.onCustomHost?.invoke(hostOf(url))
+        urls = listOf(url) + urls
+        urlDialog = false
+        pageError = null
+        loading = true
+        urlIndex = 0
         wv?.loadUrl(url)
     }
 
@@ -312,13 +385,18 @@ private fun WebViewLoginScreen(
                     IconButton(onClick = { webViewRef?.reload() }) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
                     }
-                    if (spec.startUrls.size > 1) {
+                    if (spec.allowUrlInput) {
+                        IconButton(onClick = { urlDialog = true }) {
+                            Icon(Icons.Rounded.Link, contentDescription = "手动输入地址")
+                        }
+                    }
+                    if (urls.size > 1) {
                         Box {
                             IconButton(onClick = { lineMenu = true }) {
                                 Icon(Icons.Rounded.SwapHoriz, contentDescription = "切换线路")
                             }
                             DropdownMenu(expanded = lineMenu, onDismissRequest = { lineMenu = false }) {
-                                spec.startUrls.forEachIndexed { i, u ->
+                                urls.forEachIndexed { i, u ->
                                     DropdownMenuItem(
                                         text = {
                                             Text(
@@ -355,6 +433,11 @@ private fun WebViewLoginScreen(
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.cacheMode = WebSettings.LOAD_DEFAULT
+                        settings.loadsImagesAutomatically = true
+                        // 验证码/反爬脚本有时走 http 子资源，混合内容一律放行，避免"验证界面不出来"
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        settings.javaScriptCanOpenWindowsAutomatically = true
+                        settings.setSupportMultipleWindows(true)
                         settings.userAgentString =
                             if (spec.desktopUa) ZlibClient.UA else WygamerClient.UA
                         if (spec.desktopUa) {
@@ -367,6 +450,27 @@ private fun WebViewLoginScreen(
 
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
+                        // 预置 Cookie：站点会在 onload 后无条件弹公告遮罩，先写入标记 + 加载后强制清理
+                        val startUrl = urls.firstOrNull().orEmpty()
+                        spec.preCookies.forEach { (k, v) ->
+                            if (startUrl.isNotBlank()) cookieManager.setCookie(startUrl, "$k=$v; path=/")
+                        }
+                        cookieManager.flush()
+
+                        // 站点用 window.open 打开登录/验证浮层时，直接在同一个 WebView 里加载（否则点了没反应）
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: Message?
+                            ): Boolean {
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                transport.webView = view
+                                resultMsg.sendToTarget()
+                                return true
+                            }
+                        }
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -389,6 +493,8 @@ private fun WebViewLoginScreen(
                                 loading = false
                                 pageError = null
                                 url?.let { spec.onHostResolved?.invoke(hostOf(it)) }
+                                // 清理站点自动弹出的遮挡层（如 Zibll 主题的「系统公告」弹窗）
+                                spec.afterLoadJs?.let { js -> view?.evaluateJavascript(js, null) }
                                 if (tryExtractCookies()) onLoginSuccess()
                             }
 
@@ -401,17 +507,22 @@ private fun WebViewLoginScreen(
                                 loading = false
                                 // 自动换下一条线路
                                 val next = urlIndex + 1
-                                if (next <= spec.startUrls.lastIndex) {
+                                if (next <= urls.lastIndex) {
                                     loadLine(view, next)
                                     return
                                 }
+                                val host = hostOf(request.url?.toString().orEmpty())
                                 val desc = error?.description?.toString().orEmpty()
-                                pageError = "页面打不开" + (if (desc.isNotBlank()) "（$desc）" else "") +
-                                    "。可尝试右上角切换线路；Z-Library 需要外网网络环境。"
+                                pageError = buildString {
+                                    append("页面打不开")
+                                    if (host.isNotBlank()) append("（").append(host).append("）")
+                                    if (desc.isNotBlank()) append("：").append(desc)
+                                    if (spec.failHint.isNotBlank()) append("\n\n").append(spec.failHint)
+                                }
                             }
                         }
 
-                        loadUrl(spec.startUrls.first())
+                        loadUrl(startUrl)
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -434,14 +545,17 @@ private fun WebViewLoginScreen(
                         Text(msg, style = MaterialTheme.typography.bodyMedium)
                         Button(
                             onClick = {
-                                val next = (urlIndex + 1) % spec.startUrls.size
+                                val next = (urlIndex + 1) % urls.size
                                 loadLine(webViewRef, next)
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(if (spec.startUrls.size > 1) "换线路重试" else "重试")
+                            Text(if (urls.size > 1) "换线路重试" else "重试")
                         }
                         TextButton(onClick = { loadLine(webViewRef, urlIndex) }) { Text("重新加载本线路") }
+                        if (spec.allowUrlInput) {
+                            TextButton(onClick = { urlDialog = true }) { Text("输入其他地址") }
+                        }
                         Text(
                             spec.hint,
                             style = MaterialTheme.typography.labelSmall,
@@ -451,5 +565,34 @@ private fun WebViewLoginScreen(
                 }
             }
         }
+    }
+
+    // 手动输入地址：浏览器里能打开、WebView 里打不开时，直接把那个地址粘进来
+    if (urlDialog) {
+        AlertDialog(
+            onDismissRequest = { urlDialog = false },
+            title = { Text("输入站点地址") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "把你浏览器里能打开的那个地址粘到这里（支持整串 URL）。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = customUrl,
+                        onValueChange = { customUrl = it },
+                        label = { Text("例：https://zh.z-lib.gs/") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { loadCustomUrl(webViewRef) }) { Text("加载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { urlDialog = false }) { Text("取消") }
+            }
+        )
     }
 }
