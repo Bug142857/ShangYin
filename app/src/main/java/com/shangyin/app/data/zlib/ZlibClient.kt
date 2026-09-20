@@ -58,7 +58,7 @@ object ZlibClient {
 
     /**
      * 内置兜底线路（2026-09 经 getzlib.com 验证为 z-lib.sk）。
-     * 站点每日轮换域名，这里只做兜底，优先用 [dailyUrls] 解析出的当日地址。
+     * 站点每日轮换域名，这里只做兜底，优先用 [dailyLoginUrls] 解析出的当日地址。
      */
     private val FALLBACK_HOSTS = listOf("zh.z-lib.sk", "z-lib.sk")
 
@@ -81,10 +81,10 @@ object ZlibClient {
     }
 
     /**
-     * 从 getzlib.com 取当日验证可用的域名，展开成「中文子域 + 主域」候选地址。
+     * 从 getzlib.com 取当日验证可用的域名，展开成「中文子域 + 主域」的**登录页**地址。
      * 站点每日换域名，内置地址容易过期，所以以在线解析结果为准；解析失败回退内置地址。
      */
-    suspend fun dailyUrls(): List<String> = withContext(Dispatchers.IO) {
+    suspend fun dailyLoginUrls(): List<String> = withContext(Dispatchers.IO) {
         runCatching {
             resolver.newCall(
                 Request.Builder().url(DAILY_PAGE)
@@ -100,13 +100,31 @@ object ZlibClient {
                     .distinct()
                     .take(3)
                     .toList()
-                hosts.flatMap { h -> listOf("https://zh.$h/", "https://$h/") }.distinct()
+                toLoginUrls(hosts)
             }
         }.getOrDefault(emptyList())
     }
 
-    /** 登录页候选地址（内置兜底；动态解析结果会在登录页里插到最前） */
-    fun candidateUrls(): List<String> = FALLBACK_HOSTS.map { "https://$it/" }
+    /**
+     * 登录页候选地址（内置兜底；动态解析结果会在登录页里插到最前）。
+     *
+     * 直达 `/login` 而不是首页：首页那个「登录」是普通 `<a href="/login?redirectUrl=...">`，
+     * 但站点脚本会在 WebView 里接管点击且不产生任何可见结果（实测点击后既不跳转也无请求），
+     * 所以直接打开登录页，绕开这次点击。
+     */
+    fun loginUrls(): List<String> = toLoginUrls(FALLBACK_HOSTS)
+
+    /** Cookie 采集用的站点根地址（登录页所在域名） */
+    fun cookieUrls(): List<String> = FALLBACK_HOSTS.map { "https://$it/" }
+
+    /** 「中文子域 + 主域」各生成一条 /login 地址 */
+    private fun toLoginUrls(hosts: List<String>): List<String> =
+        hosts.flatMap { h ->
+            listOf(
+                "https://zh.$h/login?redirectUrl=https%3A%2F%2Fzh.$h%2F",
+                "https://$h/login?redirectUrl=https%3A%2F%2F$h%2F"
+            )
+        }.distinct()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)

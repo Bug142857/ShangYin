@@ -135,35 +135,131 @@ private const val CLEAR_OVERLAY_JS = """
 """
 
 /**
- * 诊断埋点：记录「点击 → 谁接管 → 有没有发请求 → 有没有报错」。
+ * 诊断埋点：记录「点击 → 谁接管 → 有没有发请求 → 有没有报错 → 哪些资源没加载上」。
  * 主题 JS 一旦没接管点击（或接管后请求静默失败），页面就表现为「能看、点不动」，
  * 静态快照看不出原因，必须把点击后的运行时证据留下来。
  */
 private const val INSTRUMENT_JS = """
 (function(){
   if (window.__syProbe) return;
-  var P = { click: '(无)', ajax: [], err: [] };
+  var P = { click: '(无)', ajax: [], err: [], res: [] };
   window.__syProbe = P;
+  function logAjax(s){
+    P.ajax.push(s);
+    while (P.ajax.length > 6) P.ajax.shift();
+  }
   function desc(el){
     if (!el) return '(?';
     var cls = (typeof el.className === 'string' ? el.className : '') || '';
-    return el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls.split(/\s+/).slice(0,2).join('.') : '');
+    var s = el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls.split(/\s+/).slice(0,2).join('.') : '');
+    var t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+    if (t) s += ' 「' + t.slice(0, 12) + '」';
+    if (el.tagName === 'A') s += ' href=' + (el.getAttribute('href') || '(空)') + ' target=' + (el.getAttribute('target') || '(空)');
+    return s;
   }
   document.addEventListener('click', function(e){
     try {
       var t = e.target;
       var el = (t && t.closest) ? (t.closest('.signsubmit-loader,.captchsubmit,a,button') || t) : t;
-      P.click = desc(el) + ' | 已阻止默认=' + e.defaultPrevented;
+      P.click = desc(el);
+      // 站点自己的处理器跑完后（冒泡阶段之后）再看一次，判断这次点击是否被吞掉
+      setTimeout(function(){
+        try { P.click = desc(el) + ' | 已被站点阻止默认=' + e.defaultPrevented; } catch (x) {}
+      }, 0);
     } catch (err) {}
   }, true);
   window.addEventListener('error', function(ev){
-    try { P.err.push((ev.message || String(ev)) + ' @' + (ev.filename || '') + ':' + (ev.lineno || 0)); } catch (err) {}
+    try {
+      var t = ev.target;
+      // 资源（图片/样式/脚本）加载失败：只有 URL 能说明问题，message 是空的
+      if (t && t !== window && t.tagName && (t.tagName === 'IMG' || t.tagName === 'LINK' || t.tagName === 'SCRIPT')) {
+        var line = t.tagName + ' 加载失败 ' + (t.src || t.href || '(无地址)');
+        if (P.res.indexOf(line) < 0) P.res.push(line);
+        while (P.res.length > 4) P.res.shift();
+        return;
+      }
+      P.err.push((ev.message || String(ev)) + ' @' + (ev.filename || '') + ':' + (ev.lineno || 0));
+      while (P.err.length > 3) P.err.shift();
+    } catch (err) {}
   }, true);
-  if (window.jQuery) {
-    jQuery(document).ajaxSend(function(e, x, s){ P.ajax.push('发送 ' + s.type + ' ' + s.url); });
-    jQuery(document).ajaxError(function(e, x, s, er){ P.ajax.push('失败 ' + ((x && x.status) || '') + ' ' + s.url + ' ' + ((er && er.message) || '')); });
-    jQuery(document).ajaxSuccess(function(e, x, s){ P.ajax.push('成功 ' + ((x && x.status) || '') + ' ' + s.url); });
+  if (window.fetch) {
+    var of = window.fetch;
+    window.fetch = function(){
+      var a = arguments[0];
+      var u = String((a && a.url) || a || '');
+      logAjax('fetch ' + u.slice(0, 70));
+      return of.apply(this, arguments).then(function(r){
+        logAjax('fetch ' + r.status + ' ' + u.slice(0, 60));
+        return r;
+      }, function(e){
+        logAjax('fetch 失败 ' + u.slice(0, 60) + ' ' + e);
+        throw e;
+      });
+    };
   }
+  try {
+    var oo = XMLHttpRequest.prototype.open, os = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function(m, u){
+      this.__syU = m + ' ' + String(u || '').slice(0, 70);
+      return oo.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function(){
+      var x = this;
+      logAjax('xhr ' + (x.__syU || ''));
+      x.addEventListener('loadend', function(){ logAjax('xhr ' + x.status + ' ' + (x.__syU || '')); });
+      return os.apply(this, arguments);
+    };
+  } catch (e) {}
+  if (window.jQuery) {
+    jQuery(document).ajaxSend(function(e, x, s){ logAjax('发送 ' + s.type + ' ' + s.url); });
+    jQuery(document).ajaxError(function(e, x, s, er){ logAjax('失败 ' + ((x && x.status) || '') + ' ' + s.url + ' ' + ((er && er.message) || '')); });
+    jQuery(document).ajaxSuccess(function(e, x, s){
+      var body = (x && x.responseText) ? String(x.responseText).replace(/\s+/g, ' ').slice(0, 70) : '';
+      logAjax('成功 ' + ((x && x.status) || '') + ' ' + s.url + (body ? ' → ' + body : ''));
+    });
+  }
+})()
+"""
+
+/**
+ * 兜底：无忧的滑块验证弹窗若只渲染出半透明遮罩、里面的卡片是透明的（主题 CSS 没生效时的表现），
+ * 就补一套最简样式，保证「拖动滑块」这个动作能完成。只在检测到异常时注入，正常页面不受影响。
+ */
+private const val SLIDER_FALLBACK_JS = """
+(function(){
+  if (window.__sySliderFix) return;
+  window.__sySliderFix = 1;
+  var CSS = '#SliderCaptcha{display:flex;align-items:center;justify-content:center}' +
+    '#SliderCaptcha .modal-dialog{width:340px}' +
+    '#SliderCaptcha .modal-content{background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.3)}' +
+    '#SliderCaptcha .modal-colorful-header{height:100px;background:#ffd45e}' +
+    '#SliderCaptcha .slidercaptcha{width:280px;margin:0 auto}' +
+    '#SliderCaptcha .sliderContainer{position:relative;width:100%;height:44px;margin-top:8px;background:#f1f1f1;border-radius:6px}' +
+    '#SliderCaptcha .sliderMask{position:absolute;left:0;top:0;height:44px;background:#7ac23c;opacity:.35;border-radius:6px}' +
+    '#SliderCaptcha .captcha-slider{position:absolute;left:0;top:0;width:44px;height:44px;background:#fff;' +
+      'border:1px solid #ddd;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25);display:flex;' +
+      'align-items:center;justify-content:center;cursor:pointer;z-index:2}' +
+    '#SliderCaptcha .sliderText{position:absolute;left:0;top:0;width:100%;height:44px;line-height:44px;' +
+      'text-align:center;font-size:14px;color:#888;z-index:1}';
+  function transparent(c){ return !c || c === 'transparent' || c === 'rgba(0, 0, 0, 0)'; }
+  function ensure(){
+    try {
+      var m = document.getElementById('SliderCaptcha');
+      if (!m || document.getElementById('sy-slider-fix')) return;
+      var card = m.querySelector('.modal-content');
+      if (!card) return;
+      var r = card.getBoundingClientRect();
+      if (r.width > 60 && r.height > 60 && !transparent(getComputedStyle(card).backgroundColor)) return;
+      var s = document.createElement('style');
+      s.id = 'sy-slider-fix';
+      s.appendChild(document.createTextNode(CSS));
+      (document.head || document.body).appendChild(s);
+    } catch (e) {}
+  }
+  // 弹窗都是点击「登录」后才创建，故在点击后几个时间点各查一次
+  document.addEventListener('click', function(){
+    setTimeout(ensure, 300); setTimeout(ensure, 900); setTimeout(ensure, 1800);
+  }, true);
 })()
 """
 
@@ -180,25 +276,42 @@ private const val LIVE_PROBE_JS = """
     try {
       var ctx = window.tbquire && window.tbquire.s && window.tbquire.s.contexts && window.tbquire.s.contexts._;
       var def = ctx && ctx.defined ? Object.keys(ctx.defined) : [];
-      out.push('已加载模块: ' + (def.length ? def.join(',') : '(无)'));
+      out.push('已加载模块: ' + (def.length ? def.join(',') : '(该站点不用 tbquire)'));
       var reg = ctx && ctx.registry ? Object.keys(ctx.registry) : [];
-      out.push('待加载模块: ' + (reg.length ? reg.join(',') : '(无)'));
+      if (reg.length) out.push('待加载模块: ' + reg.join(','));
     } catch(e) { out.push('模块信息: 读取失败 ' + e); }
     var p = window.__syProbe;
     out.push('最近点击: ' + (p ? (p.click || '(无)') : '埋点未注入'));
-    out.push('AJAX: ' + (p && p.ajax && p.ajax.length ? p.ajax.slice(-4).join(' ／ ') : '(无)'));
-    out.push('JS 错误: ' + (p && p.err && p.err.length ? p.err.slice(-3).join(' ／ ') : '(无)'));
+    out.push('请求: ' + (p && p.ajax && p.ajax.length ? p.ajax.join(' ／ ') : '(无)'));
+    out.push('JS 错误: ' + (p && p.err && p.err.length ? p.err.join(' ／ ') : '(无)'));
+    out.push('资源加载失败: ' + (p && p.res && p.res.length ? p.res.join(' ／ ') : '(无)'));
     var m = document.getElementById('SliderCaptcha');
     if (m) {
       var st = getComputedStyle(m);
-      out.push('滑块弹层: 存在 display=' + st.display + ' opacity=' + st.opacity + ' visibility=' + st.visibility);
-      out.push('滑块组件: .slidercaptcha 数量=' + document.querySelectorAll('.slidercaptcha').length);
+      out.push('滑块弹窗: display=' + st.display + ' opacity=' + st.opacity + ' visibility=' + st.visibility);
+      var card = m.querySelector('.modal-content') || m.querySelector('.modal-dialog');
+      if (card) {
+        var r = card.getBoundingClientRect();
+        out.push('滑块卡片: 宽=' + Math.round(r.width) + ' 高=' + Math.round(r.height) +
+          ' 背景=' + getComputedStyle(card).backgroundColor);
+      } else {
+        out.push('滑块卡片: 不存在');
+      }
+      var t = m.querySelector('.sliderText');
+      out.push('滑块提示文字: ' + (t ? (t.textContent || '(空)').trim() : '(无)'));
+      var c = m.querySelector('canvas');
+      out.push('滑块画布: 数量=' + m.querySelectorAll('canvas').length +
+        (c ? ' 尺寸=' + c.width + 'x' + c.height : ''));
+      var sc = m.querySelector('.sliderContainer');
+      out.push('滑块容器: ' + (sc ? ('class=' + sc.className) : '(无)'));
     } else {
-      out.push('滑块弹层: 未创建');
+      out.push('滑块弹窗: 未创建');
     }
     var s = document.querySelector('[machine-verification]');
-    out.push('验证标记: ' + (s ? (s.getAttribute('machine-verification') || '?') + ' captcha_mode=' + (s.getAttribute('value') || '') + ' slider-id=' + (s.getAttribute('slider-id') || '(空)') : '(无)'));
-    out.push('登录按钮: .signsubmit-loader 数量=' + document.querySelectorAll('.signsubmit-loader').length);
+    out.push('验证标记: ' + (s ? (s.getAttribute('machine-verification') || '?') + ' captcha_mode=' + (s.getAttribute('value') || '') : '(无)'));
+    out.push('登录按钮: .signsubmit-loader 数量=' + document.querySelectorAll('.signsubmit-loader').length +
+      ' ／ 表单: ' + document.querySelectorAll('form').length +
+      ' ／ 密码框: ' + document.querySelectorAll('input[type=password]').length);
     return out.join('\n');
   }catch(e){ return 'probe-error: ' + e; }
 })()
@@ -227,7 +340,7 @@ class WygamerLoginActivity : ComponentActivity() {
                         save = { SettingsStore.wygamerCookie = it },
                         logout = { SettingsStore.clearWygamerLogin() },
                         preCookies = listOf("showed_system_notice" to "showed"),
-                        afterLoadJs = CLEAR_OVERLAY_JS,
+                        afterLoadJs = CLEAR_OVERLAY_JS + SLIDER_FALLBACK_JS,
                         failHint = "站点偶发抽风时可稍后重试。若页面能显示但点「登录」没反应，" +
                             "点右上角 ⓘ 看诊断信息并反馈（多为系统 WebView 版本过旧，" +
                             "可到应用商店更新「Android System WebView」或「Chrome」）。"
@@ -258,8 +371,8 @@ class ZlibLoginActivity : ComponentActivity() {
                 WebLoginContent(
                     spec = LoginSpec(
                         title = "Z-Library 登录",
-                        startUrls = ZlibClient.candidateUrls(),
-                        cookieUrls = ZlibClient.candidateUrls(),
+                        startUrls = ZlibClient.loginUrls(),
+                        cookieUrls = ZlibClient.cookieUrls(),
                         hint = "登录后即可搜索并下载电子书。\n" +
                             "站点有反爬验证，若接口提示「需要重新验证」，回到这里重新登录一次即可。\n" +
                             "登录信息仅保存在本机。",
@@ -269,7 +382,7 @@ class ZlibLoginActivity : ComponentActivity() {
                         logout = { SettingsStore.clearZlibLogin() },
                         afterLoadJs = CLEAR_OVERLAY_JS,
                         // 站点每日换域名，打开前先从 getzlib.com 取当日验证地址（失败则用内置兜底）
-                        dynamicUrls = { ZlibClient.dailyUrls() },
+                        dynamicUrls = { ZlibClient.dailyLoginUrls() },
                         allowUrlInput = true,
                         failHint = "若手机上的 Chrome 能打开而这里打不开，是 App 内 WebView 环境的问题" +
                             "（本站反爬会校验浏览器指纹）：请点右上角 ⓘ 把诊断信息发给我，" +
@@ -410,6 +523,8 @@ private fun WebViewLoginScreen(
     var consoleErrors by remember { mutableStateOf(listOf<String>()) }
     var probeText by remember { mutableStateOf("") }
     var currentUrl by remember { mutableStateOf("") }
+    // 页面跳转记录：点击链接后到底有没有真的发起导航（首页链接点了不动时靠它判断）
+    var navLog by remember { mutableStateOf(listOf<String>()) }
     // 需要动态解析线路时（如 Z-Library 每日地址），先解析完再建 WebView，避免先加载过期地址
     var urlsReady by remember { mutableStateOf(spec.dynamicUrls == null) }
 
@@ -596,6 +711,7 @@ private fun WebViewLoginScreen(
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 loading = true
                                 currentUrl = url.orEmpty()
+                                navLog = (navLog + url.orEmpty()).takeLast(4)
                                 // 反爬验证可能自我重定向若干次，超过阈值说明该线路过不去
                                 if (url == lastUrl) {
                                     repeatCount++
@@ -733,6 +849,7 @@ private fun WebViewLoginScreen(
                 ) {
                     DiagLine("WebView UA", webViewUaText())
                     DiagLine("页面实时状态", probeText.ifBlank { "（未取到）" })
+                    DiagLine("页面跳转记录", if (navLog.isEmpty()) "无" else navLog.joinToString("\n"))
                     DiagLine(
                         "JS 报错",
                         if (consoleErrors.isEmpty()) "无" else consoleErrors.joinToString("\n")
