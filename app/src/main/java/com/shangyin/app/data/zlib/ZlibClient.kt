@@ -57,22 +57,56 @@ object ZlibClient {
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     /**
-     * 候选线路：登录页加载失败会自动换下一个，成功后写回 SettingsStore.zlibHost。
-     * 各家镜像在不同网络下可用性差异很大，故列全一份；用户也可在登录页手动粘贴地址。
+     * 内置兜底线路（2026-09 经 getzlib.com 验证为 z-lib.sk）。
+     * 站点每日轮换域名，这里只做兜底，优先用 [dailyUrls] 解析出的当日地址。
      */
-    val ALT_HOSTS = listOf(
-        "z-library.sk", "zh.z-library.sk",
-        "1lib.sk", "zh.1lib.sk",
-        "z-lib.fm", "z-lib.gs", "zh.z-lib.gs",
-        "singlelogin.re"
-    )
+    private val FALLBACK_HOSTS = listOf("zh.z-lib.sk", "z-lib.sk")
 
-    /** 登录页候选地址（当前设置的线路优先；设置值兼容整串 URL，只取域名） */
-    fun candidateUrls(): List<String> {
-        val cur = SettingsStore.zlibHost.trim()
-            .substringAfter("://").substringBefore("/").substringBefore("?")
-        return (listOf(cur) + ALT_HOSTS.filter { it != cur }).map { "https://$it/" }
+    /** getzlib.com 的每日验证页（页面上列出的才是当前真实可用的域名） */
+    private const val DAILY_PAGE = "https://getzlib.com/zh"
+
+    private val HOST_RE = Regex("""https://([a-z0-9.\-]+)/""", RegexOption.IGNORE_CASE)
+
+    /** 动态线路解析用：允许跟随跳转、超时短，避免拖慢登录页打开 */
+    private val resolver = OkHttpClient.Builder()
+        .connectTimeout(6, TimeUnit.SECONDS)
+        .readTimeout(6, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .build()
+
+    /** 是否是本站域名（用于「记住可用线路」判断）；顺带排除 getzlib.com / cdn-zlib.sk 这类同名干扰域 */
+    fun isZlibHost(host: String): Boolean {
+        val h = host.lowercase()
+        return h.contains("z-lib") || h.startsWith("zlib.") || h.contains(".zlib.")
     }
+
+    /**
+     * 从 getzlib.com 取当日验证可用的域名，展开成「中文子域 + 主域」候选地址。
+     * 站点每日换域名，内置地址容易过期，所以以在线解析结果为准；解析失败回退内置地址。
+     */
+    suspend fun dailyUrls(): List<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            resolver.newCall(
+                Request.Builder().url(DAILY_PAGE)
+                    .header("User-Agent", UA)
+                    .header("Accept-Language", "zh-CN,zh;q=0.9")
+                    .build()
+            ).execute().use { resp ->
+                if (!resp.isSuccessful) return@use emptyList()
+                val html = resp.body?.string().orEmpty()
+                val hosts = HOST_RE.findAll(html)
+                    .map { it.groupValues[1].lowercase().removeSuffix(".") }
+                    .filter { isZlibHost(it) }
+                    .distinct()
+                    .take(3)
+                    .toList()
+                hosts.flatMap { h -> listOf("https://zh.$h/", "https://$h/") }.distinct()
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    /** 登录页候选地址（内置兜底；动态解析结果会在登录页里插到最前） */
+    fun candidateUrls(): List<String> = FALLBACK_HOSTS.map { "https://$it/" }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)

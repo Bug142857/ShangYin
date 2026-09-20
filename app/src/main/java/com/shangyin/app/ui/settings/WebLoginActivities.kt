@@ -92,8 +92,8 @@ private class LoginSpec(
     val preCookies: List<Pair<String, String>> = emptyList(),
     /** 每次页面加载完成后注入的 JS（清理遮挡层等） */
     val afterLoadJs: String? = null,
-    /** 加载完成后执行的探针 JS，返回值（JSON）显示在诊断面板里，用于定位页面 JS 是否正常 */
-    val probeJs: String? = null,
+    /** 动态线路解析：打开登录页前先解析（如 Z-Library 从 getzlib.com 取每日验证地址），结果插到候选最前 */
+    val dynamicUrls: (suspend () -> List<String>)? = null,
     /** 允许手动输入地址（浏览器能打开、这里打不开时用） */
     val allowUrlInput: Boolean = false,
     /** 用户手动输入地址解析出的域名 */
@@ -135,23 +135,71 @@ private const val CLEAR_OVERLAY_JS = """
 """
 
 /**
- * 诊断探针：报告页面里的 JS 环境与登录组件状态。
- * 无忧游戏库的登录按钮是 `<button type="button">`，完全依赖 Zibll 主题 JS 接管点击，
- * 所以「页面能看、点登录没反应」几乎一定是主题的 JS 模块没跑起来；这里把证据取回来。
+ * 诊断埋点：记录「点击 → 谁接管 → 有没有发请求 → 有没有报错」。
+ * 主题 JS 一旦没接管点击（或接管后请求静默失败），页面就表现为「能看、点不动」，
+ * 静态快照看不出原因，必须把点击后的运行时证据留下来。
  */
-private const val PROBE_JS = """
+private const val INSTRUMENT_JS = """
+(function(){
+  if (window.__syProbe) return;
+  var P = { click: '(无)', ajax: [], err: [] };
+  window.__syProbe = P;
+  function desc(el){
+    if (!el) return '(?';
+    var cls = (typeof el.className === 'string' ? el.className : '') || '';
+    return el.tagName + (el.id ? '#' + el.id : '') + (cls ? '.' + cls.split(/\s+/).slice(0,2).join('.') : '');
+  }
+  document.addEventListener('click', function(e){
+    try {
+      var t = e.target;
+      var el = (t && t.closest) ? (t.closest('.signsubmit-loader,.captchsubmit,a,button') || t) : t;
+      P.click = desc(el) + ' | 已阻止默认=' + e.defaultPrevented;
+    } catch (err) {}
+  }, true);
+  window.addEventListener('error', function(ev){
+    try { P.err.push((ev.message || String(ev)) + ' @' + (ev.filename || '') + ':' + (ev.lineno || 0)); } catch (err) {}
+  }, true);
+  if (window.jQuery) {
+    jQuery(document).ajaxSend(function(e, x, s){ P.ajax.push('发送 ' + s.type + ' ' + s.url); });
+    jQuery(document).ajaxError(function(e, x, s, er){ P.ajax.push('失败 ' + ((x && x.status) || '') + ' ' + s.url + ' ' + ((er && er.message) || '')); });
+    jQuery(document).ajaxSuccess(function(e, x, s){ P.ajax.push('成功 ' + ((x && x.status) || '') + ' ' + s.url); });
+  }
+})()
+"""
+
+/**
+ * 实时探针：打开诊断面板时当场取一次（点击、请求都发生在页面加载之后，静态快照看不到）。
+ * 返回「每行一条」的纯文本，由界面按行展示。
+ */
+private const val LIVE_PROBE_JS = """
 (function(){
   try{
+    var out = [];
+    out.push('地址: ' + location.href);
+    out.push('文档状态: ' + document.readyState);
+    try {
+      var ctx = window.tbquire && window.tbquire.s && window.tbquire.s.contexts && window.tbquire.s.contexts._;
+      var def = ctx && ctx.defined ? Object.keys(ctx.defined) : [];
+      out.push('已加载模块: ' + (def.length ? def.join(',') : '(无)'));
+      var reg = ctx && ctx.registry ? Object.keys(ctx.registry) : [];
+      out.push('待加载模块: ' + (reg.length ? reg.join(',') : '(无)'));
+    } catch(e) { out.push('模块信息: 读取失败 ' + e); }
+    var p = window.__syProbe;
+    out.push('最近点击: ' + (p ? (p.click || '(无)') : '埋点未注入'));
+    out.push('AJAX: ' + (p && p.ajax && p.ajax.length ? p.ajax.slice(-4).join(' ／ ') : '(无)'));
+    out.push('JS 错误: ' + (p && p.err && p.err.length ? p.err.slice(-3).join(' ／ ') : '(无)'));
+    var m = document.getElementById('SliderCaptcha');
+    if (m) {
+      var st = getComputedStyle(m);
+      out.push('滑块弹层: 存在 display=' + st.display + ' opacity=' + st.opacity + ' visibility=' + st.visibility);
+      out.push('滑块组件: .slidercaptcha 数量=' + document.querySelectorAll('.slidercaptcha').length);
+    } else {
+      out.push('滑块弹层: 未创建');
+    }
     var s = document.querySelector('[machine-verification]');
-    var o = {
-      ready: document.readyState,
-      tbquire: typeof window.tbquire,
-      jquery: typeof window.jQuery,
-      loginBtn: document.querySelectorAll('.signsubmit-loader').length,
-      sliderId: s ? String(s.getAttribute('slider-id') || '(空)') : '(无此元素)',
-      captchaDom: document.querySelectorAll('.slidercaptcha, .captcha-box, .captcha-img').length
-    };
-    return JSON.stringify(o);
+    out.push('验证标记: ' + (s ? (s.getAttribute('machine-verification') || '?') + ' captcha_mode=' + (s.getAttribute('value') || '') + ' slider-id=' + (s.getAttribute('slider-id') || '(空)') : '(无)'));
+    out.push('登录按钮: .signsubmit-loader 数量=' + document.querySelectorAll('.signsubmit-loader').length);
+    return out.join('\n');
   }catch(e){ return 'probe-error: ' + e; }
 })()
 """
@@ -180,7 +228,6 @@ class WygamerLoginActivity : ComponentActivity() {
                         logout = { SettingsStore.clearWygamerLogin() },
                         preCookies = listOf("showed_system_notice" to "showed"),
                         afterLoadJs = CLEAR_OVERLAY_JS,
-                        probeJs = PROBE_JS,
                         failHint = "站点偶发抽风时可稍后重试。若页面能显示但点「登录」没反应，" +
                             "点右上角 ⓘ 看诊断信息并反馈（多为系统 WebView 版本过旧，" +
                             "可到应用商店更新「Android System WebView」或「Chrome」）。"
@@ -221,12 +268,14 @@ class ZlibLoginActivity : ComponentActivity() {
                         save = { SettingsStore.zlibCookie = it },
                         logout = { SettingsStore.clearZlibLogin() },
                         afterLoadJs = CLEAR_OVERLAY_JS,
+                        // 站点每日换域名，打开前先从 getzlib.com 取当日验证地址（失败则用内置兜底）
+                        dynamicUrls = { ZlibClient.dailyUrls() },
                         allowUrlInput = true,
                         failHint = "若手机上的 Chrome 能打开而这里打不开，是 App 内 WebView 环境的问题" +
                             "（本站反爬会校验浏览器指纹）：请点右上角 ⓘ 把诊断信息发给我，" +
                             "或到应用商店更新「Android System WebView」/「Chrome」后重试。",
                         onHostResolved = { host ->
-                            if (host.isNotBlank() && ZlibClient.ALT_HOSTS.contains(host)) {
+                            if (host.isNotBlank() && ZlibClient.isZlibHost(host)) {
                                 SettingsStore.zlibHost = host
                             }
                         },
@@ -361,10 +410,19 @@ private fun WebViewLoginScreen(
     var consoleErrors by remember { mutableStateOf(listOf<String>()) }
     var probeText by remember { mutableStateOf("") }
     var currentUrl by remember { mutableStateOf("") }
+    // 需要动态解析线路时（如 Z-Library 每日地址），先解析完再建 WebView，避免先加载过期地址
+    var urlsReady by remember { mutableStateOf(spec.dynamicUrls == null) }
+
+    LaunchedEffect(Unit) {
+        val resolve = spec.dynamicUrls ?: return@LaunchedEffect
+        val list = runCatching { resolve() }.getOrDefault(emptyList())
+        if (list.isNotEmpty()) urls = list + urls
+        urlsReady = true
+    }
 
     // 页面加载超时：停止转圈并提示，避免一直白屏转圈干等（反爬挑战页/挂住的子资源会拖住 onPageFinished）
-    LaunchedEffect(loading) {
-        if (loading) {
+    LaunchedEffect(loading, urlsReady) {
+        if (loading && urlsReady) {
             delay(LOAD_TIMEOUT_MS)
             if (loading) {
                 loading = false
@@ -414,7 +472,8 @@ private fun WebViewLoginScreen(
 
     /** 尝试提取并保存 cookie，成功返回 true */
     fun tryExtractCookies(): Boolean {
-        val merged = collectCookies(cookieManager, spec.cookieUrls)
+        // 动态线路（如 Z-Library 每日地址）不在内置列表里，故把当前页地址也并入采集范围
+        val merged = collectCookies(cookieManager, (spec.cookieUrls + currentUrl).filter { it.isNotBlank() })
         if (!spec.loginDetect(merged)) return false
         spec.save(merged)
         cookieManager.flush()
@@ -431,7 +490,11 @@ private fun WebViewLoginScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { diagOpen = true }) {
+                    IconButton(onClick = {
+                        // 实时取一次探针：点击/请求都发生在加载之后，必须当场读才看得到
+                        webViewRef?.evaluateJavascript(LIVE_PROBE_JS) { r -> probeText = jsResultToText(r) }
+                        diagOpen = true
+                    }) {
                         Icon(Icons.Rounded.Info, contentDescription = "诊断信息")
                     }
                     IconButton(onClick = { webViewRef?.reload() }) {
@@ -476,7 +539,7 @@ private fun WebViewLoginScreen(
         }
     ) { pad ->
         Box(modifier = Modifier.fillMaxSize().padding(pad)) {
-            AndroidView(
+            if (urlsReady) AndroidView(
                 factory = { c ->
                     var lastUrl = ""
                     var repeatCount = 0
@@ -488,9 +551,12 @@ private fun WebViewLoginScreen(
                         settings.loadsImagesAutomatically = true
                         // 验证码/反爬脚本有时走 http 子资源，混合内容一律放行，避免"验证界面不出来"
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        // 不再伪造 UA、不再改动多窗口/自动弹窗行为：与 Chrome 保持一致。
-                        // 伪造的 UA 与 WebView 自动发出的 Client Hints 矛盾，反爬会直接判定为机器人
-                        // （表现为手机 Chrome 能开、App 里一直转圈或过不了验证）。
+                        // UA 不伪造（伪造的桌面 UA 与 WebView 自动发出的 Client Hints 矛盾，
+                        // 反爬会判定为机器人：表现为手机 Chrome 能开、App 里一直转圈或过不了验证）。
+                        // 但 window.open / target=_blank 必须放行：站点常用它打开登录或跳转，
+                        // WebView 默认会静默丢弃这类新窗口请求，表现为「点了没反应」。
+                        settings.setSupportMultipleWindows(true)
+                        settings.javaScriptCanOpenWindowsAutomatically = true
 
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -510,6 +576,19 @@ private fun WebViewLoginScreen(
                                     consoleErrors = (consoleErrors + line).takeLast(8)
                                 }
                                 return false
+                            }
+
+                            // window.open / target=_blank：在当前 WebView 里打开，避免「点了没反应」
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: android.os.Message?
+                            ): Boolean {
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                transport.webView = view
+                                resultMsg.sendToTarget()
+                                return true
                             }
                         }
 
@@ -536,12 +615,10 @@ private fun WebViewLoginScreen(
                                 pageError = null
                                 currentUrl = url.orEmpty()
                                 url?.let { spec.onHostResolved?.invoke(hostOf(it)) }
+                                // 埋点：记录点击 / AJAX / JS 报错，供诊断面板取证（页面能看但点不动时唯一线索）
+                                view?.evaluateJavascript(INSTRUMENT_JS, null)
                                 // 清理站点自动弹出的遮挡层（如 Zibll 主题的「系统公告」弹窗）
                                 spec.afterLoadJs?.let { js -> view?.evaluateJavascript(js, null) }
-                                // 探针：把页面 JS 环境结果取回来给诊断面板
-                                spec.probeJs?.let { js ->
-                                    view?.evaluateJavascript(js) { r -> probeText = r.orEmpty() }
-                                }
                                 if (tryExtractCookies()) onLoginSuccess()
                             }
 
@@ -629,7 +706,7 @@ private fun WebViewLoginScreen(
                     OutlinedTextField(
                         value = customUrl,
                         onValueChange = { customUrl = it },
-                        label = { Text("例：https://zh.z-lib.gs/") },
+                        label = { Text("例：https://zh.z-lib.sk/") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -655,8 +732,7 @@ private fun WebViewLoginScreen(
                     modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())
                 ) {
                     DiagLine("WebView UA", webViewUaText())
-                    DiagLine("当前地址", currentUrl.ifBlank { "（未开始加载）" })
-                    DiagLine("页面探针", probeText.ifBlank { "（未取到）" })
+                    DiagLine("页面实时状态", probeText.ifBlank { "（未取到）" })
                     DiagLine(
                         "JS 报错",
                         if (consoleErrors.isEmpty()) "无" else consoleErrors.joinToString("\n")
@@ -685,3 +761,12 @@ private fun DiagLine(label: String, value: String) {
 /** WebView 真实 UA（当前页面实际发出的那个） */
 private fun webViewUaText(): String =
     com.shangyin.app.App.webViewUa.ifBlank { "（未捕获）" }
+
+/** evaluateJavascript 回来的字符串字面量（带引号、转义换行）转成可读文本 */
+private fun jsResultToText(raw: String?): String {
+    val s = raw.orEmpty().trim()
+    if (s.isEmpty() || s == "null") return "（未取到）"
+    return s.removeSurrounding("\"")
+        .replace("\\n", "\n")
+        .replace("\\\"", "\"")
+}
