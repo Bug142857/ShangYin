@@ -45,11 +45,16 @@ data class BookPage(val books: List<Book>, val totalPages: Int, val currentPage:
 object ZlibClient {
 
     /**
-     * 与 WebView 登录页保持一致的 UA（Cookie 与 UA 绑定，必须一致）。
-     * 用桌面版 Chrome：DiamWall 的 JS 挑战对移动端 WebView 的 UA 更敏感。
+     * 请求 UA：必须与登录页 WebView 实际发出的 UA 完全一致（DiamWall 的验证 Cookie 与 UA 绑定）。
+     * 这里取 WebView 的真实默认 UA，不伪造——伪造桌面 UA 与 WebView 自动发出的 Client Hints
+     * （sec-ch-ua-platform: Android / sec-ch-ua-mobile: ?1）矛盾，会被反爬判定为机器人，
+     * 表现为「手机浏览器能打开、App 里一直转圈或反复跳转」。
      */
-    const val UA =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    val UA: String
+        get() = com.shangyin.app.App.webViewUa.ifBlank { FALLBACK_UA }
+
+    private const val FALLBACK_UA =
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     /**
      * 候选线路：登录页加载失败会自动换下一个，成功后写回 SettingsStore.zlibHost。

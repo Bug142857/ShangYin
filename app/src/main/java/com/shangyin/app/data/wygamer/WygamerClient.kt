@@ -66,8 +66,11 @@ object WygamerClient {
 
     const val BASE = "https://www.wygamer.com"
 
-    /** 与 WebView 登录页保持一致的移动端 UA */
-    const val UA =
+    /** 与登录页 WebView 实际发出的 UA 保持一致（取 WebView 真实默认 UA，不伪造） */
+    val UA: String
+        get() = com.shangyin.app.App.webViewUa.ifBlank { FALLBACK_UA }
+
+    private const val FALLBACK_UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
     /** 封面占位图文件名，出现即代表该 img 没有真实图 */

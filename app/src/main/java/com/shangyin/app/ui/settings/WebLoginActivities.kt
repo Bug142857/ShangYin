@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.os.Message
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -21,8 +20,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.SwapHoriz
@@ -43,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.delay
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.data.zlib.ZlibClient
 import com.shangyin.app.ui.theme.ShangYinTheme
@@ -83,14 +86,14 @@ private class LoginSpec(
     val isLoggedIn: () -> Boolean,
     val save: (String) -> Unit,
     val logout: () -> Unit,
-    /** 用桌面版 UA（站点反爬对移动端 WebView 更敏感） */
-    val desktopUa: Boolean = false,
     /** 主框架加载成功后的回调，用于记住真正可用的线路 */
     val onHostResolved: ((String) -> Unit)? = null,
     /** 打开页面前预设的 Cookie（如关掉站点自动弹窗的标记） */
     val preCookies: List<Pair<String, String>> = emptyList(),
     /** 每次页面加载完成后注入的 JS（清理遮挡层等） */
     val afterLoadJs: String? = null,
+    /** 加载完成后执行的探针 JS，返回值（JSON）显示在诊断面板里，用于定位页面 JS 是否正常 */
+    val probeJs: String? = null,
     /** 允许手动输入地址（浏览器能打开、这里打不开时用） */
     val allowUrlInput: Boolean = false,
     /** 用户手动输入地址解析出的域名 */
@@ -131,6 +134,31 @@ private const val CLEAR_OVERLAY_JS = """
 })()
 """
 
+/**
+ * 诊断探针：报告页面里的 JS 环境与登录组件状态。
+ * 无忧游戏库的登录按钮是 `<button type="button">`，完全依赖 Zibll 主题 JS 接管点击，
+ * 所以「页面能看、点登录没反应」几乎一定是主题的 JS 模块没跑起来；这里把证据取回来。
+ */
+private const val PROBE_JS = """
+(function(){
+  try{
+    var s = document.querySelector('[machine-verification]');
+    var o = {
+      ready: document.readyState,
+      tbquire: typeof window.tbquire,
+      jquery: typeof window.jQuery,
+      loginBtn: document.querySelectorAll('.signsubmit-loader').length,
+      sliderId: s ? String(s.getAttribute('slider-id') || '(空)') : '(无此元素)',
+      captchaDom: document.querySelectorAll('.slidercaptcha, .captcha-box, .captcha-img').length
+    };
+    return JSON.stringify(o);
+  }catch(e){ return 'probe-error: ' + e; }
+})()
+"""
+
+/** 页面加载超时（毫秒）：超时后停止转圈并给出提示，避免一直白屏转圈干等 */
+private const val LOAD_TIMEOUT_MS = 25_000L
+
 /** 无忧游戏库登录（直达站点独立登录页，避免首页弹窗遮罩） */
 class WygamerLoginActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -152,7 +180,10 @@ class WygamerLoginActivity : ComponentActivity() {
                         logout = { SettingsStore.clearWygamerLogin() },
                         preCookies = listOf("showed_system_notice" to "showed"),
                         afterLoadJs = CLEAR_OVERLAY_JS,
-                        failHint = "站点偶发抽风时可稍后重试，或到浏览器里确认能否打开。"
+                        probeJs = PROBE_JS,
+                        failHint = "站点偶发抽风时可稍后重试。若页面能显示但点「登录」没反应，" +
+                            "点右上角 ⓘ 看诊断信息并反馈（多为系统 WebView 版本过旧，" +
+                            "可到应用商店更新「Android System WebView」或「Chrome」）。"
                     ),
                     onBack = { finish() },
                     onLoginSuccess = {
@@ -189,11 +220,11 @@ class ZlibLoginActivity : ComponentActivity() {
                         isLoggedIn = { SettingsStore.zlibCookie.contains("remix_userkey", true) },
                         save = { SettingsStore.zlibCookie = it },
                         logout = { SettingsStore.clearZlibLogin() },
-                        desktopUa = true,
                         afterLoadJs = CLEAR_OVERLAY_JS,
                         allowUrlInput = true,
-                        failHint = "Z-Library 需要外网 / 代理环境；若浏览器能打开而这里不行，" +
-                            "多半是浏览器走了代理或加速，请把本应用也加入代理名单，或在系统层开启全局代理。",
+                        failHint = "若手机上的 Chrome 能打开而这里打不开，是 App 内 WebView 环境的问题" +
+                            "（本站反爬会校验浏览器指纹）：请点右上角 ⓘ 把诊断信息发给我，" +
+                            "或到应用商店更新「Android System WebView」/「Chrome」后重试。",
                         onHostResolved = { host ->
                             if (host.isNotBlank() && ZlibClient.ALT_HOSTS.contains(host)) {
                                 SettingsStore.zlibHost = host
@@ -325,6 +356,24 @@ private fun WebViewLoginScreen(
     var customUrl by remember { mutableStateOf("") }
     val cookieManager = CookieManager.getInstance()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    // 诊断信息（右上角 ⓘ 查看）：WebView 环境 + 当前地址 + JS 报错 + 页面探针结果
+    var diagOpen by remember { mutableStateOf(false) }
+    var consoleErrors by remember { mutableStateOf(listOf<String>()) }
+    var probeText by remember { mutableStateOf("") }
+    var currentUrl by remember { mutableStateOf("") }
+
+    // 页面加载超时：停止转圈并提示，避免一直白屏转圈干等（反爬挑战页/挂住的子资源会拖住 onPageFinished）
+    LaunchedEffect(loading) {
+        if (loading) {
+            delay(LOAD_TIMEOUT_MS)
+            if (loading) {
+                loading = false
+                val host = if (currentUrl.isNotBlank()) "（${hostOf(currentUrl)}）" else ""
+                pageError = "页面加载超过 25 秒仍未完成$host" +
+                    "\n\n可换线路 / 重新加载重试，或点右上角 ⓘ 查看诊断信息。"
+            }
+        }
+    }
 
     fun loadLine(wv: WebView?, index: Int) {
         val url = urls.getOrNull(index) ?: return
@@ -382,6 +431,9 @@ private fun WebViewLoginScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { diagOpen = true }) {
+                        Icon(Icons.Rounded.Info, contentDescription = "诊断信息")
+                    }
                     IconButton(onClick = { webViewRef?.reload() }) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
                     }
@@ -436,17 +488,9 @@ private fun WebViewLoginScreen(
                         settings.loadsImagesAutomatically = true
                         // 验证码/反爬脚本有时走 http 子资源，混合内容一律放行，避免"验证界面不出来"
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                        settings.javaScriptCanOpenWindowsAutomatically = true
-                        settings.setSupportMultipleWindows(true)
-                        settings.userAgentString =
-                            if (spec.desktopUa) ZlibClient.UA else WygamerClient.UA
-                        if (spec.desktopUa) {
-                            // 桌面版页面在手机上需要缩放查看
-                            settings.useWideViewPort = true
-                            settings.loadWithOverviewMode = true
-                            settings.builtInZoomControls = true
-                            settings.displayZoomControls = false
-                        }
+                        // 不再伪造 UA、不再改动多窗口/自动弹窗行为：与 Chrome 保持一致。
+                        // 伪造的 UA 与 WebView 自动发出的 Client Hints 矛盾，反爬会直接判定为机器人
+                        // （表现为手机 Chrome 能开、App 里一直转圈或过不了验证）。
 
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -457,24 +501,22 @@ private fun WebViewLoginScreen(
                         }
                         cookieManager.flush()
 
-                        // 站点用 window.open 打开登录/验证浮层时，直接在同一个 WebView 里加载（否则点了没反应）
+                        // 收集页面 JS 报错：主题/反爬脚本一旦报错，页面会「能看但点不动」
                         webChromeClient = object : WebChromeClient() {
-                            override fun onCreateWindow(
-                                view: WebView?,
-                                isDialog: Boolean,
-                                isUserGesture: Boolean,
-                                resultMsg: Message?
-                            ): Boolean {
-                                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
-                                transport.webView = view
-                                resultMsg.sendToTarget()
-                                return true
+                            override fun onConsoleMessage(msg: android.webkit.ConsoleMessage?): Boolean {
+                                val m = msg ?: return false
+                                if (m.messageLevel() == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                                    val line = "[${m.sourceId()}:${m.lineNumber()}] ${m.message()}"
+                                    consoleErrors = (consoleErrors + line).takeLast(8)
+                                }
+                                return false
                             }
                         }
 
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 loading = true
+                                currentUrl = url.orEmpty()
                                 // 反爬验证可能自我重定向若干次，超过阈值说明该线路过不去
                                 if (url == lastUrl) {
                                     repeatCount++
@@ -492,9 +534,14 @@ private fun WebViewLoginScreen(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 loading = false
                                 pageError = null
+                                currentUrl = url.orEmpty()
                                 url?.let { spec.onHostResolved?.invoke(hostOf(it)) }
                                 // 清理站点自动弹出的遮挡层（如 Zibll 主题的「系统公告」弹窗）
                                 spec.afterLoadJs?.let { js -> view?.evaluateJavascript(js, null) }
+                                // 探针：把页面 JS 环境结果取回来给诊断面板
+                                spec.probeJs?.let { js ->
+                                    view?.evaluateJavascript(js) { r -> probeText = r.orEmpty() }
+                                }
                                 if (tryExtractCookies()) onLoginSuccess()
                             }
 
@@ -556,6 +603,7 @@ private fun WebViewLoginScreen(
                         if (spec.allowUrlInput) {
                             TextButton(onClick = { urlDialog = true }) { Text("输入其他地址") }
                         }
+                        TextButton(onClick = { pageError = null }) { Text("关闭提示") }
                         Text(
                             spec.hint,
                             style = MaterialTheme.typography.labelSmall,
@@ -595,4 +643,45 @@ private fun WebViewLoginScreen(
             }
         )
     }
+
+    // 诊断信息：登录页不对劲时把真实证据带回来（WebView 版本 / JS 报错 / 页面探针）
+    if (diagOpen) {
+        AlertDialog(
+            onDismissRequest = { diagOpen = false },
+            title = { Text("诊断信息") },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())
+                ) {
+                    DiagLine("WebView UA", webViewUaText())
+                    DiagLine("当前地址", currentUrl.ifBlank { "（未开始加载）" })
+                    DiagLine("页面探针", probeText.ifBlank { "（未取到）" })
+                    DiagLine(
+                        "JS 报错",
+                        if (consoleErrors.isEmpty()) "无" else consoleErrors.joinToString("\n")
+                    )
+                    Text(
+                        "若页面能显示但点不动、或一直转圈，把以上内容截图发我即可定位。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            },
+            confirmButton = { TextButton(onClick = { diagOpen = false }) { Text("关闭") } }
+        )
+    }
 }
+
+/** 一行诊断信息（等宽小字，方便截图） */
+@Composable
+private fun DiagLine(label: String, value: String) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.outline)
+        Text(value, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+/** WebView 真实 UA（当前页面实际发出的那个） */
+private fun webViewUaText(): String =
+    com.shangyin.app.App.webViewUa.ifBlank { "（未捕获）" }

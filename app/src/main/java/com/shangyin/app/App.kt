@@ -23,6 +23,10 @@ class App : Application(), ImageLoaderFactory {
         instance = this
         Repo.init(this)
         SettingsStore.init(this)
+        // 记录 WebView 的真实默认 UA：登录页与接口请求必须用同一个 UA（Cookie 与 UA 绑定），
+        // 且不能伪造——伪造的桌面 UA 会与 WebView 自动发出的 Client Hints（sec-ch-ua-platform: Android）
+        // 互相矛盾，反爬系统会判定为机器人，表现为「浏览器能打开、App 里一直转圈/过不了验证」。
+        webViewUa = runCatching { android.webkit.WebSettings.getDefaultUserAgent(this) }.getOrDefault("")
         // 关键配置恢复（豆瓣Cookie/坚果云/片源）——从公共目录备份文件补缺，防卸载重装丢配置
         runCatching { com.shangyin.app.data.ConfigBackup.restoreIfNeeded(this) }
         // 首次使用播种内置默认采集源（在线观影）
@@ -112,6 +116,9 @@ class App : Application(), ImageLoaderFactory {
     companion object {
         lateinit var instance: App
             private set
+
+        /** WebView 真实默认 UA（启动时捕获）；站点登录页与接口请求共用，保证 Cookie 与 UA 一致 */
+        var webViewUa: String = ""
 
         /** 清理 Coil 图片缓存 + OkHttp HTTP 缓存 */
         fun clearAllCaches(ctx: Context) {

@@ -25,7 +25,6 @@ import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SportsEsports
-import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -62,7 +61,7 @@ import java.util.Locale
 
 /**
  * 账号管理：云端同步（坚果云 WebDAV）、豆瓣登录、哔咔登录、
- * 无忧游戏库登录、Z-Library 登录（含线路域名设置）。
+ * 无忧游戏库登录、Z-Library 登录（线路域名在登录页内切换，登录成功后自动写回设置）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -107,7 +106,6 @@ fun AccountScreen(nav: NavHostController) {
     var zlibLoginKey by remember { mutableStateOf(0) }
     val isZlibLoggedIn = remember(zlibLoginKey) { com.shangyin.app.data.zlib.ZlibClient.isLoggedIn }
     var showZlibLogout by remember { mutableStateOf(false) }
-    var showZlibHost by remember { mutableStateOf(false) }
     val zlibLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -216,19 +214,6 @@ fun AccountScreen(nav: NavHostController) {
                     else zlibLauncher.launch(Intent(context, ZlibLoginActivity::class.java))
                 }
             )
-
-            // Z-Library 线路（反爬验证与线路相关，失效时可换域名）
-            SettingCard(
-                icon = {
-                    Icon(
-                        Icons.Rounded.SwapHoriz, contentDescription = null,
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                },
-                title = "Z-Library 线路",
-                subtitle = "当前：${SettingsStore.zlibHost}，接口报错时可更换",
-                onClick = { showZlibHost = true }
-            )
         }
     }
 
@@ -322,52 +307,6 @@ fun AccountScreen(nav: NavHostController) {
                 ) { Text("退出", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { showZlibLogout = false }) { Text("取消") } }
-        )
-    }
-
-    // Z-Library 线路设置
-    if (showZlibHost) {
-        var hostInput by remember { mutableStateOf(SettingsStore.zlibHost) }
-        AlertDialog(
-            onDismissRequest = { showZlibHost = false },
-            title = { Text("Z-Library 线路") },
-            text = {
-                Column {
-                    Text(
-                        "填写站点域名（不含 https://）。接口报「需要重新验证」时先重新登录；" +
-                            "报「线路不可用」时可在此更换域名。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = hostInput,
-                        onValueChange = { hostInput = it },
-                        placeholder = { Text("例如 z-library.sk") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = {
-                            SettingsStore.zlibHost = hostInput
-                            showZlibHost = false
-                            zlibLoginKey++
-                            Toast.makeText(context, "线路已保存", Toast.LENGTH_SHORT).show()
-                        }),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        SettingsStore.zlibHost = hostInput
-                        showZlibHost = false
-                        zlibLoginKey++
-                        Toast.makeText(context, "线路已保存", Toast.LENGTH_SHORT).show()
-                    },
-                    enabled = hostInput.isNotBlank()
-                ) { Text("保存") }
-            },
-            dismissButton = { TextButton(onClick = { showZlibHost = false }) { Text("取消") } }
         )
     }
 }
