@@ -44,9 +44,21 @@ data class BookPage(val books: List<Book>, val totalPages: Int, val currentPage:
  */
 object ZlibClient {
 
-    /** 与 WebView 登录页保持一致的 UA（Cookie 与 UA 绑定，必须一致） */
+    /**
+     * 与 WebView 登录页保持一致的 UA（Cookie 与 UA 绑定，必须一致）。
+     * 用桌面版 Chrome：DiamWall 的 JS 挑战对移动端 WebView 的 UA 更敏感。
+     */
     const val UA =
-        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    /** 候选线路：登录页加载失败会自动换下一个，成功后写回 SettingsStore.zlibHost */
+    val ALT_HOSTS = listOf("z-library.sk", "1lib.sk", "z-lib.fm", "z-lib.gs", "zh.z-lib.gs")
+
+    /** 登录页候选地址（当前设置的线路优先） */
+    fun candidateUrls(): List<String> {
+        val cur = SettingsStore.zlibHost
+        return (listOf(cur) + ALT_HOSTS.filter { it != cur }).map { "https://$it/" }
+    }
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(12, TimeUnit.SECONDS)

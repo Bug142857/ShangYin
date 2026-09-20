@@ -67,6 +67,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavHostController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.shangyin.app.data.ComicCacheStore
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.bika.BikaChapter
 import com.shangyin.app.data.bika.BikaClient
@@ -86,6 +87,15 @@ import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+/** 详情 + 章节列表的磁盘缓存结构（看过的本子再打开秒开，不再重复联网） */
+@Serializable
+private data class BikaDetailCache(val detail: BikaComic, val chapters: List<BikaChapter>)
+
+private val bikaCacheJson = Json { ignoreUnknownKeys = true }
 
 /**
  * 哔咔漫画详情页：封面/简介/标签/章节列表，点章节取全部图片后全屏翻页阅读。
@@ -96,11 +106,23 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    // 磁盘缓存：看过的本子再打开（含 App 重启）直接展示，不再空等重新加载
+    val diskCache = remember(id) {
+        runCatching {
+            ComicCacheStore.read(context, "bika_$id")
+                ?.let { bikaCacheJson.decodeFromString<BikaDetailCache>(it) }
+        }.getOrNull()
+    }
+
     // 优先用会话缓存：从阅读页返回详情秒开
-    var comic by remember { mutableStateOf(BikaUiCache.details[id]) }
+    var comic by remember { mutableStateOf(BikaUiCache.details[id] ?: diskCache?.detail) }
     var detailError by remember { mutableStateOf<String?>(null) }
-    var chapters by remember { mutableStateOf(BikaUiCache.chapters[id] ?: emptyList()) }
-    var chaptersLoading by remember { mutableStateOf(!BikaUiCache.chapters.containsKey(id)) }
+    var chapters by remember {
+        mutableStateOf(BikaUiCache.chapters[id] ?: diskCache?.chapters.orEmpty())
+    }
+    var chaptersLoading by remember {
+        mutableStateOf(BikaUiCache.chapters[id] == null && diskCache?.chapters.isNullOrEmpty())
+    }
 
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
@@ -153,6 +175,14 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         nav.safePopBackStack()
     }
 
+    /** 把当前详情 + 章节列表写盘（供下次打开秒开） */
+    fun persistCache() {
+        val d = comic ?: return
+        runCatching {
+            ComicCacheStore.write(context, "bika_$id", bikaCacheJson.encodeToString(BikaDetailCache(d, chapters)))
+        }
+    }
+
     // 详情 + 章节并行加载，互不影响
     LaunchedEffect(id) {
         scope.launch {
@@ -160,6 +190,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 .onSuccess {
                     comic = it
                     BikaUiCache.details[id] = it
+                    persistCache()
                 }
                 .onFailure {
                     if (it is BikaClient.BikaAuthException) handleAuthError()
@@ -171,6 +202,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                 .onSuccess {
                     chapters = it
                     BikaUiCache.chapters[id] = it
+                    persistCache()
                 }
                 .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
             chaptersLoading = false

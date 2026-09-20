@@ -79,6 +79,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.shangyin.app.data.ComicCacheStore
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.download.ComicDownloadManager
 import com.shangyin.app.data.download.DownloadedChapter
@@ -118,6 +119,16 @@ private data class ComicHomeCache(
     val nextOffset: Int,
     val items: List<KomiicComic>
 )
+
+/** 详情 + 章节列表的磁盘缓存结构（看过的漫画再打开秒开，不再重复联网） */
+@Serializable
+private data class ComicDetailCache(val detail: KomiicComic, val chapters: List<KomiicChapter>)
+
+/** 详情/章节的会话级内存缓存：从阅读页返回详情秒开 */
+private object ComicUiCache {
+    val details = mutableMapOf<String, KomiicComic>()
+    val chapters = mutableMapOf<String, List<KomiicChapter>>()
+}
 
 /** 状态徽标文案 */
 private fun statusLabel(s: String?) = when (s) {
@@ -472,9 +483,20 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var detail by remember { mutableStateOf<KomiicComic?>(null) }
-    var chapters by remember { mutableStateOf<List<KomiicChapter>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    // 磁盘缓存：看过的漫画再打开（含 App 重启）直接展示，不再空等重新加载
+    val diskCache = remember(comicId) {
+        runCatching {
+            ComicCacheStore.read(context, "komiic_$comicId")
+                ?.let { komiicJson.decodeFromString<ComicDetailCache>(it) }
+        }.getOrNull()
+    }
+
+    // 优先用会话缓存：从阅读页返回详情秒开
+    var detail by remember { mutableStateOf(ComicUiCache.details[comicId] ?: diskCache?.detail) }
+    var chapters by remember {
+        mutableStateOf(ComicUiCache.chapters[comicId] ?: diskCache?.chapters.orEmpty())
+    }
+    var loading by remember { mutableStateOf(detail == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
     var retried by remember { mutableStateOf(false) }
@@ -515,7 +537,8 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     LaunchedEffect(comicId) { ComicDownloadManager.refresh(context) }
 
     LaunchedEffect(retryKey) {
-        loading = true
+        // 有缓存（内存/磁盘）时不显示加载态，后台静默刷新，避免"看过的还要重新等"
+        loading = detail == null
         error = null
         if (comicId.isBlank()) {
             error = "参数异常：漫画 ID 为空，请返回后重新进入"
@@ -525,12 +548,24 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
         // 串行请求：避免并行协程取消连锁导致错误信息丢失（message=null 只能显示"网络错误"）
         runCatching {
             val d = KomiicClient.comicById(comicId)
+            val list = KomiicClient.chapters(comicId)
             detail = d
-            chapters = KomiicClient.chapters(comicId)
+            chapters = list
+            ComicUiCache.details[comicId] = d
+            ComicUiCache.chapters[comicId] = list
+            runCatching {
+                ComicCacheStore.write(
+                    context, "komiic_$comicId",
+                    komiicJson.encodeToString(ComicDetailCache(d, list))
+                )
+            }
         }.onFailure {
-            error = buildString {
-                append(it::class.simpleName ?: "Exception")
-                it.message?.takeIf { m -> m.isNotBlank() }?.let { m -> append(": $m") }
+            // 已有缓存内容时不打断展示（后台刷新失败静默忽略，用户仍能看缓存）
+            if (detail == null) {
+                error = buildString {
+                    append(it::class.simpleName ?: "Exception")
+                    it.message?.takeIf { m -> m.isNotBlank() }?.let { m -> append(": $m") }
+                }
             }
             // 网络抖动自动重试一次
             if (!retried) {

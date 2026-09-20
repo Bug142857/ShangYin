@@ -23,6 +23,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /** 哔咔漫画条目（列表项 / 详情共用，详情字段可能不全） */
+@kotlinx.serialization.Serializable
 data class BikaComic(
     val id: String,
     val title: String,
@@ -41,6 +42,7 @@ data class BikaComic(
 )
 
 /** 哔咔章节 */
+@kotlinx.serialization.Serializable
 data class BikaChapter(val id: String, val title: String?, val order: Int)
 
 /** 哔咔分类（thumbUrl 用于首页分类封面网格，参考 haka_comic） */

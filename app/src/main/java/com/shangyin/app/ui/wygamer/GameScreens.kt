@@ -12,6 +12,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +21,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,9 +32,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
@@ -76,6 +82,7 @@ import com.shangyin.app.data.wygamer.GameDetail
 import com.shangyin.app.data.wygamer.GameDownload
 import com.shangyin.app.data.wygamer.GameItem
 import com.shangyin.app.data.wygamer.WygamerClient
+import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.CancellationException
@@ -103,7 +110,7 @@ private val resolvedCache = mutableMapOf<String, String>()
  * 游戏主页（无忧游戏库）：搜索框 + 分类 chips + 两列封面网格 + 加载更多。
  * 数据源是 WordPress 站点 HTML（见 WygamerClient 注释），分类表走 WP REST。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun GameHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
@@ -119,6 +126,7 @@ fun GameHomeScreen(nav: NavHostController) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var categories by remember { mutableStateOf<List<GameCategory>>(emptyList()) }
+    var catExpanded by rememberSaveable { mutableStateOf(false) }   // 分类下拉展开/收起
     var loadedKey by remember { mutableStateOf<String?>(null) }
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
@@ -208,25 +216,72 @@ fun GameHomeScreen(nav: NavHostController) {
             )
 
             if (keyword.isBlank()) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp)
-                ) {
-                    FilterChip(
-                        selected = catUrl.isBlank(),
-                        onClick = { catUrl = "" },
-                        label = { Text("最新") },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                    categories.forEach { c ->
-                        FilterChip(
-                            selected = catUrl == c.url,
-                            onClick = { catUrl = c.url },
-                            label = { Text(c.name) },
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        )
+                // 分类：收起=横滑一行 + 下拉箭头；展开=换行 chips（限高可滚）
+                if (!catExpanded) {
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            FilterChip(
+                                selected = catUrl.isBlank(),
+                                onClick = { catUrl = "" },
+                                label = { Text("最新") },
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            categories.forEach { c ->
+                                FilterChip(
+                                    selected = catUrl == c.url,
+                                    onClick = { catUrl = c.url },
+                                    label = { Text(c.name) },
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = { catExpanded = true }) {
+                            Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开分类")
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .padding(horizontal = 12.dp, vertical = 2.dp)
+                            .heightIn(max = 260.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("全部分类", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { catExpanded = false }) {
+                                Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起分类")
+                            }
+                        }
+                        FlowRow(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            FilterChip(
+                                selected = catUrl.isBlank(),
+                                onClick = { catUrl = ""; catExpanded = false },
+                                label = { Text("最新") }
+                            )
+                            categories.forEach { c ->
+                                FilterChip(
+                                    selected = catUrl == c.url,
+                                    onClick = { catUrl = c.url; catExpanded = false },
+                                    label = { Text(c.name) }
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -349,6 +404,7 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
     var showDownloads by remember { mutableStateOf(false) }
     var resolving by remember { mutableStateOf<String?>(null) }   // 正在解析的 payUrl
     var resolved by remember { mutableStateOf<String?>(null) }    // 解析结果（网盘分享链接）
+    var viewerIndex by remember { mutableStateOf<Int?>(null) }    // 截图放大查看
 
     LaunchedEffect(gameId, retryKey) {
         loading = true
@@ -536,6 +592,7 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
                                             modifier = Modifier.weight(1f).aspectRatio(4f / 3f)
                                                 .clip(RoundedCornerShape(8.dp))
                                                 .background(MaterialTheme.colorScheme.surfaceVariant)
+                                                .clickable { viewerIndex = idx }
                                         )
                                     } else {
                                         Spacer(Modifier.weight(1f))
@@ -546,6 +603,19 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
                     }
                 }
             }
+        }
+    }
+
+    // 截图放大查看（复用阅读器：缩放 / 长按保存 / 左右翻页）
+    viewerIndex?.let { idx ->
+        val shots = detail?.screenshots.orEmpty()
+        if (idx in shots.indices) {
+            PhotoViewerDialog(
+                urls = shots,
+                initialIndex = idx,
+                onDismiss = { viewerIndex = null },
+                chapterLabel = "游戏截图"
+            )
         }
     }
 
