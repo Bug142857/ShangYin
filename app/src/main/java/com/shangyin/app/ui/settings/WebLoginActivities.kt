@@ -2,6 +2,9 @@ package com.shangyin.app.ui.settings
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.webkit.CookieManager
@@ -17,6 +20,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -838,7 +842,13 @@ private fun WebViewLoginScreen(
     }
 
     // 诊断信息：登录页不对劲时把真实证据带回来（WebView 版本 / JS 报错 / 页面探针）
+    // 提供「复制」：截图里常带站点图片，容易被内容安全审核拦下，纯文本粘贴最稳
     if (diagOpen) {
+        val context = LocalContext.current
+        val uaValue = webViewUaText()
+        val probeValue = probeText.ifBlank { "（未取到）" }
+        val navValue = if (navLog.isEmpty()) "无" else navLog.joinToString("\n")
+        val errValue = if (consoleErrors.isEmpty()) "无" else consoleErrors.joinToString("\n")
         AlertDialog(
             onDismissRequest = { diagOpen = false },
             title = { Text("诊断信息") },
@@ -847,21 +857,33 @@ private fun WebViewLoginScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState())
                 ) {
-                    DiagLine("WebView UA", webViewUaText())
-                    DiagLine("页面实时状态", probeText.ifBlank { "（未取到）" })
-                    DiagLine("页面跳转记录", if (navLog.isEmpty()) "无" else navLog.joinToString("\n"))
-                    DiagLine(
-                        "JS 报错",
-                        if (consoleErrors.isEmpty()) "无" else consoleErrors.joinToString("\n")
-                    )
+                    DiagLine("WebView UA", uaValue)
+                    DiagLine("页面实时状态", probeValue)
+                    DiagLine("页面跳转记录", navValue)
+                    DiagLine("JS 报错", errValue)
                     Text(
-                        "若页面能显示但点不动、或一直转圈，把以上内容截图发我即可定位。",
+                        "若页面能显示但点不动、或一直转圈，点「复制」把文字发我即可定位。",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
                 }
             },
-            confirmButton = { TextButton(onClick = { diagOpen = false }) { Text("关闭") } }
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        val dump = listOf(
+                            "WebView UA" to uaValue,
+                            "页面实时状态" to probeValue,
+                            "页面跳转记录" to navValue,
+                            "JS 报错" to errValue
+                        ).joinToString("\n\n") { it.first + "：\n" + it.second }
+                        val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("诊断信息", dump))
+                        Toast.makeText(context, "诊断信息已复制", Toast.LENGTH_SHORT).show()
+                    }) { Text("复制") }
+                    TextButton(onClick = { diagOpen = false }) { Text("关闭") }
+                }
+            }
         )
     }
 }
