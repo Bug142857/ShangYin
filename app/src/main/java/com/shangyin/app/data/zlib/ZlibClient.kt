@@ -77,6 +77,8 @@ object ZlibClient {
     /** 是否是本站域名（用于「记住可用线路」判断）；顺带排除 getzlib.com / cdn-zlib.sk 这类同名干扰域 */
     fun isZlibHost(host: String): Boolean {
         val h = host.lowercase()
+        // s3proxy.cdn-zlib.sk 等是下载代理域，不是登录/搜索线路（2026-09-20 实测会被误收进候选）
+        if (h.contains("cdn-zlib") || h.contains("s3proxy") || h.contains("diamwall")) return false
         return h.contains("z-lib") || h.startsWith("zlib.") || h.contains(".zlib.")
     }
 
@@ -157,7 +159,9 @@ object ZlibClient {
             body.contains("DiamWall", true) || body.contains("Verifying your browser", true)
         throw Exception(
             if (blocked) "需要重新验证：请在 设置 → 账号管理 → Z-Library 登录 里重新登录一次"
-            else if (code == 307 || code == 302) "线路不可用：请更换线路域名后重试"
+            // 2026-09-20 实测：307 一律是 DiamWall 验证过期下发的挑战（Location 指回原地址），
+            // 换线路没用，重新登录刷新验证才是正解
+            else if (code == 307 || code == 302) "站点验证已过期：请到 设置 → 账号管理 → Z-Library 重新登录一次"
             else "接口错误 HTTP $code"
         )
     }
@@ -206,9 +210,20 @@ object ZlibClient {
     suspend fun search(keyword: String, page: Int): BookPage {
         val e = URLEncoder.encode(keyword, "UTF-8")
         val root = getJson("/eapi/book/search?message=$e&page=$page&limit=20")
-        val arr = root.optJSONArray("books") ?: root.optJSONArray("exactMatch") ?: org.json.JSONArray()
+        val arr = root.optJSONArray("books")
+            ?: root.optJSONObject("data")?.optJSONArray("books")
+            ?: root.optJSONArray("exactMatch")
+        if (arr == null) {
+            // 站点限流/封禁时会有明确的 error/message；结构变化时带上原始响应片段，
+            // 不能静默返回空列表——否则用户只会看到「没有找到图书」，无从排查
+            val msg = root.optString("error").trim().ifBlank { root.optString("message").trim() }
+            if (msg.isNotBlank()) throw Exception(msg)
+            val brief = root.toString().replace(Regex("\\s+"), " ").take(200)
+            throw Exception("搜索响应结构异常（线路 ${SettingsStore.zlibHost}）：$brief")
+        }
         val books = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.toBook() }
         val pag = root.optJSONObject("pagination")
+            ?: root.optJSONObject("data")?.optJSONObject("pagination")
         val total = pag?.optInt("total_pages", 0) ?: 0
         val current = pag?.optInt("current_page", page) ?: page
         return BookPage(books, total, current)

@@ -242,7 +242,11 @@ fun BookHomeScreen(nav: NavHostController) {
                     TextButton(onClick = { nav.safeNavigate("account") }) { Text("去登录 / 换线路") }
                 }
                 items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("没有找到图书", color = MaterialTheme.colorScheme.outline)
+                    Text(
+                        "没有找到图书\n线路：${SettingsStore.zlibHost}",
+                        color = MaterialTheme.colorScheme.outline,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
                 }
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(3),

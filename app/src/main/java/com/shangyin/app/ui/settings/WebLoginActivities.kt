@@ -234,10 +234,14 @@ private const val SLIDER_FALLBACK_JS = """
   if (window.__sySliderFix) return;
   window.__sySliderFix = 1;
   var CSS = '#SliderCaptcha{display:flex;align-items:center;justify-content:center}' +
-    '#SliderCaptcha .modal-dialog{width:340px}' +
-    '#SliderCaptcha .modal-content{background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.3)}' +
-    '#SliderCaptcha .modal-colorful-header{height:100px;background:#ffd45e}' +
-    '#SliderCaptcha .slidercaptcha{width:280px;margin:0 auto}' +
+    '#SliderCaptcha .modal-dialog{width:340px;height:auto!important;max-height:none!important;transform:none!important}' +
+    '#SliderCaptcha .modal-content{display:block!important;background:#fff;border-radius:12px;' +
+      'height:auto!important;max-height:none!important;overflow:visible!important;transform:none!important;' +
+      'box-shadow:0 10px 30px rgba(0,0,0,.3)}' +
+    '#SliderCaptcha .modal-body{display:block!important;height:auto!important;max-height:none!important;overflow:visible!important}' +
+    '#SliderCaptcha .modal-colorful-header{display:block!important;height:100px;background:#ffd45e}' +
+    '#SliderCaptcha canvas{display:block}' +
+    '#SliderCaptcha .slidercaptcha{display:block;width:280px;margin:0 auto}' +
     '#SliderCaptcha .sliderContainer{position:relative;width:100%;height:44px;margin-top:8px;background:#f1f1f1;border-radius:6px}' +
     '#SliderCaptcha .sliderMask{position:absolute;left:0;top:0;height:44px;background:#7ac23c;opacity:.35;border-radius:6px}' +
     '#SliderCaptcha .captcha-slider{position:absolute;left:0;top:0;width:44px;height:44px;background:#fff;' +
@@ -246,18 +250,34 @@ private const val SLIDER_FALLBACK_JS = """
     '#SliderCaptcha .sliderText{position:absolute;left:0;top:0;width:100%;height:44px;line-height:44px;' +
       'text-align:center;font-size:14px;color:#888;z-index:1}';
   function transparent(c){ return !c || c === 'transparent' || c === 'rgba(0, 0, 0, 0)'; }
+  function force(el, props){
+    if (!el) return;
+    for (var k in props) { try { el.style.setProperty(k, props[k], 'important'); } catch (e) {} }
+  }
   function ensure(){
     try {
       var m = document.getElementById('SliderCaptcha');
-      if (!m || document.getElementById('sy-slider-fix')) return;
+      if (!m) return;
       var card = m.querySelector('.modal-content');
       if (!card) return;
       var r = card.getBoundingClientRect();
-      if (r.width > 60 && r.height > 60 && !transparent(getComputedStyle(card).backgroundColor)) return;
-      var s = document.createElement('style');
-      s.id = 'sy-slider-fix';
-      s.appendChild(document.createTextNode(CSS));
-      (document.head || document.body).appendChild(s);
+      var bg = getComputedStyle(card).backgroundColor;
+      if (r.width > 60 && r.height > 60 && !transparent(bg)) return;
+      if (!document.getElementById('sy-slider-fix')) {
+        var s = document.createElement('style');
+        s.id = 'sy-slider-fix';
+        s.appendChild(document.createTextNode(CSS));
+        (document.head || document.body).appendChild(s);
+      }
+      // 实测（v2.23.5 诊断）：卡片宽340、高0、白底——弹窗在、滑块初始化了，
+      // 但 .modal-content 高度塌陷。内联 important 是最高优先级，逐级钉死几何，
+      // 不依赖猜测是主题哪条 CSS 导致的塌陷（display:none / height:0 / scaleY 都能兜住）。
+      force(m, { opacity: '1', visibility: 'visible' });
+      force(m.querySelector('.modal-dialog'), { height: 'auto', 'max-height': 'none', overflow: 'visible', transform: 'none' });
+      force(card, { display: 'block', height: 'auto', 'max-height': 'none', overflow: 'visible', transform: 'none' });
+      force(card.querySelector('.modal-body'), { display: 'block', height: 'auto', 'max-height': 'none', overflow: 'visible' });
+      force(card.querySelector('.modal-colorful-header'), { display: 'block' });
+      force(card.querySelector('.slidercaptcha'), { display: 'block' });
     } catch (e) {}
   }
   // 弹窗都是点击「登录」后才创建，故在点击后几个时间点各查一次
@@ -296,8 +316,20 @@ private const val LIVE_PROBE_JS = """
       var card = m.querySelector('.modal-content') || m.querySelector('.modal-dialog');
       if (card) {
         var r = card.getBoundingClientRect();
+        var cs = getComputedStyle(card);
         out.push('滑块卡片: 宽=' + Math.round(r.width) + ' 高=' + Math.round(r.height) +
-          ' 背景=' + getComputedStyle(card).backgroundColor);
+          ' 背景=' + cs.backgroundColor + ' display=' + cs.display + ' transform=' + cs.transform);
+        var dlg = m.querySelector('.modal-dialog');
+        if (dlg) {
+          var dr = dlg.getBoundingClientRect();
+          out.push('滑块外框: 宽=' + Math.round(dr.width) + ' 高=' + Math.round(dr.height));
+        }
+        var mb = card.querySelector('.modal-body');
+        if (mb) {
+          var br = mb.getBoundingClientRect();
+          out.push('滑块内容体: 宽=' + Math.round(br.width) + ' 高=' + Math.round(br.height) +
+            ' display=' + getComputedStyle(mb).display);
+        }
       } else {
         out.push('滑块卡片: 不存在');
       }
