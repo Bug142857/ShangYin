@@ -56,16 +56,33 @@ class App : Application(), ImageLoaderFactory {
      * SP 里还写着「已登录」，WebView 却以匿名身份加载站点 →
      * 表现就是用户说的「明明登录着、却又要我登录一次」。
      * 启动回填一次，登录态才能真正跟着 SP 保持住。
+     *
+     * ⚠️⚠️ **不能把整串 Cookie 原样写回**（v2.23.18 就是这么干的，踩了坑）：
+     * 保存下来的串里还包含**反爬风控 / 一次性会话** Cookie（zlib 实测有
+     * `__diamwall`、`c_token`、`bsrv`）。把**已经过期**的风控票据写回去，反爬会进入
+     * 「带错票据 → 307 跳回自己 → 再带同一个错票据」的**死循环**，
+     * WebView 直接报 `net::ERR_TOO_MANY_REDIRECTS`（用户反馈："zlib 登录显示网页无法打开"）。
+     * 所以：风控/临时 Cookie 一律**不回填**，交给站点自己重新下发；
+     * zlib 更进一步——只回填登录票据 `remix_userid`/`remix_userkey`。
      */
     private fun restoreCookiesToWebView() {
         val cm = runCatching { android.webkit.CookieManager.getInstance() }.getOrNull() ?: return
         runCatching { cm.setAcceptCookie(true) }
 
-        fun put(url: String, cookie: String) {
+        /** 反爬风控 / 一次性会话票据：绝不回填（过期值会让风控死循环） */
+        val transientNames = setOf("__diamwall", "c_token", "bsrv")
+
+        /** [only] 非空时只回填这些名字 */
+        fun put(url: String, cookie: String, only: Set<String>? = null) {
             if (cookie.isBlank()) return
             cookie.split(";").forEach { part ->
                 val kv = part.trim()
-                if (kv.indexOf('=') > 0) runCatching { cm.setCookie(url, "$kv; path=/") }
+                val i = kv.indexOf('=')
+                if (i <= 0) return@forEach
+                val name = kv.substring(0, i).trim().lowercase()
+                if (name in transientNames) return@forEach
+                if (only != null && name !in only) return@forEach
+                runCatching { cm.setCookie(url, "$kv; path=/") }
             }
         }
 
@@ -83,11 +100,12 @@ class App : Application(), ImageLoaderFactory {
         put("https://www.wygamer.com/", SettingsStore.wygamerCookie)
 
         // Z-Library：站点每日换域名，且登录票据是 host-only（换 host 就不发送），
-        // 所以当前线路 + zh. 变体都写一份
+        // 所以当前线路 + zh. 变体都写一份；只写登录票据，风控 Cookie 由站点重新下发
+        val zlibLoginOnly = setOf("remix_userid", "remix_userkey")
         val host = SettingsStore.zlibHost
         setOf(host, "zh.$host", host.removePrefix("zh."))
             .filter { it.isNotBlank() }
-            .forEach { put("https://$it/", SettingsStore.zlibCookie) }
+            .forEach { put("https://$it/", SettingsStore.zlibCookie, only = zlibLoginOnly) }
 
         runCatching { cm.flush() }
     }

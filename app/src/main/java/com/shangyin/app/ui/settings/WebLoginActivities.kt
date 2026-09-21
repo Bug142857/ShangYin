@@ -856,6 +856,8 @@ private fun WebViewLoginScreen(
                 factory = { c ->
                     var lastUrl = ""
                     var repeatCount = 0
+                    // 重定向死循环只自愈一次（清理 Cookie 后重载），再犯就按普通失败处理，避免无限重载
+                    var redirectLoopFixed = false
                     WebView(c).apply {
                         webViewRef = this
                         settings.javaScriptEnabled = true
@@ -965,6 +967,26 @@ private fun WebViewLoginScreen(
                             ) {
                                 if (request?.isForMainFrame != true) return
                                 loading = false
+                                // ★ ERR_TOO_MANY_REDIRECTS（= ERROR_REDIRECT_LOOP，-9）自愈：
+                                // 站点风控/半失效 Cookie 会让它反复 307 跳回自己（zlib 实测报
+                                // `net::ERR_TOO_MANY_REDIRECTS`，页面永远打不开）。
+                                // 清掉本站 Cookie 与本地登录态（显然已不可用），再重新加载一次。
+                                if (error?.errorCode == android.webkit.WebViewClient.ERROR_REDIRECT_LOOP &&
+                                    !redirectLoopFixed
+                                ) {
+                                    redirectLoopFixed = true
+                                    val cm = CookieManager.getInstance()
+                                    expireCookies(cm, spec.cookieUrls, collectCookies(cm, spec.cookieUrls))
+                                    spec.logout()
+                                    cm.flush()
+                                    Toast.makeText(
+                                        ctx,
+                                        "登录状态异常（站点风控），已自动清理，正在重试…",
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    urls.getOrNull(urlIndex)?.let { view?.loadUrl(it) }
+                                    return
+                                }
                                 // 自动换下一条线路
                                 val next = urlIndex + 1
                                 if (next <= urls.lastIndex) {
