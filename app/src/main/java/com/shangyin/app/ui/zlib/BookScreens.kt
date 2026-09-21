@@ -1,6 +1,8 @@
 package com.shangyin.app.ui.zlib
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +70,7 @@ import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -148,6 +151,16 @@ fun BookHomeScreen(nav: NavHostController) {
 
     // 预热站点页面：首页加载实测约 7.4 秒，提前做掉，别让第一次搜索把时间花在页面加载上
     LaunchedEffect(Unit) { runCatching { ZlibClient.warmup() } }
+
+    // 输入停顿 700ms 就先按这个词搜一次：站点第一次搜某词要服务端冷启动（约 6 秒），
+    // 预热过之后用户按下搜索基本秒出；同词重复预取会被 ZlibClient 内的缓存挡掉
+    LaunchedEffect(input) {
+        val k = input.trim()
+        if (k.length >= 2 && k != keyword) {
+            delay(700)
+            runCatching { ZlibClient.prefetch(k) }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -318,6 +331,32 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Pair<Long, Long>?>(null) }
 
+    // 下载流程：先弹系统「保存到…」让用户选目录/文件名，再取文件写入所选位置
+    val savePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult   // 用户取消
+        val b = book ?: return@rememberLauncherForActivityResult
+        downloading = true
+        progress = null
+        scope.launch {
+            runCatching {
+                val target = ZlibClient.downloadTarget(b.id, b.hash, b.dl)
+                BookDownload.saveTo(context, uri, target) { done, total -> progress = done to total }
+            }.onSuccess {
+                Toast.makeText(context, "已保存：${it.name}", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(
+                    context,
+                    it.message?.takeIf { m -> m.isNotBlank() } ?: "下载失败",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            downloading = false
+            progress = null
+        }
+    }
+
     LaunchedEffect(bookId, hashId, retryKey) {
         loading = true
         error = null
@@ -335,26 +374,9 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     fun download() {
         val b = book ?: return
         if (downloading) return
-        downloading = true
-        progress = null
-        scope.launch {
-            runCatching {
-                // 站点下载入口 → WebView 交出真实文件地址 → OkHttp 存进系统下载目录
-                val target = ZlibClient.downloadTarget(b.id, b.hash, b.dl)
-                val fallback = b.extension?.takeIf { it.isNotBlank() }?.let { "${b.title}.$it" } ?: b.title
-                BookDownload.save(context, target, fallback) { done, total -> progress = done to total }
-            }.onSuccess { r ->
-                Toast.makeText(context, "已保存到 ${r.where}", Toast.LENGTH_LONG).show()
-            }.onFailure { e ->
-                Toast.makeText(
-                    context,
-                    e.message?.takeIf { m -> m.isNotBlank() } ?: "下载失败",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            downloading = false
-            progress = null
-        }
+        // 先让用户选保存位置（系统「保存到…」），选完再取文件下载
+        val suggested = b.extension?.takeIf { it.isNotBlank() }?.let { "${b.title}.$it" } ?: b.title
+        savePicker.launch(suggested.replace(Regex("[\\\\/:*?\"<>|\\r\\n]"), "_"))
     }
 
     Scaffold(

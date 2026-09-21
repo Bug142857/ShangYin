@@ -771,8 +771,19 @@ object DoubanClient {
     /**
      * 演职员/作者（影视条目有 celebrities 端点，图书/游戏从详情 API 构造再搜索富化）。
      * fallbackNames：本地已保存的作者/开发商名（rexxar 详情拉取失败时兜底，保证卡片仍能显示头像）。
+     *
+     * ⚠️ 结果按 id 去重（[distinctBy]）：影视的 `directors` 与 `actors` 里**同一个人会出现两次**
+     * （既当导演又参演，如 养鬼吃人9 的 维克特·加西亚），界面用 id 当 LazyRow 的 key，
+     * 重复 key 会让 Compose 直接抛 `Key ... was already used` 崩溃。
      */
     suspend fun fetchCelebrities(
+        category: Category,
+        doubanId: String,
+        fallbackNames: List<String> = emptyList()
+    ): List<DoubanCelebrity> =
+        fetchCelebritiesRaw(category, doubanId, fallbackNames).distinctBy { it.id }
+
+    private suspend fun fetchCelebritiesRaw(
         category: Category,
         doubanId: String,
         fallbackNames: List<String> = emptyList()
@@ -1126,7 +1137,7 @@ object DoubanClient {
                 rating = w["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull,
                 coverUrl = w["cover_url"]?.jsonPrimitive?.contentOrNull
             )
-        }.orEmpty()
+        }.orEmpty().distinctBy { it.id }   // 同一部作品可能以不同角色重复出现 → 界面 key 必须唯一
     }.getOrDefault(emptyList())
 
     /**
@@ -1305,8 +1316,11 @@ object DoubanClient {
             val a = li.selectFirst("a.name") ?: return@mapNotNull null
             val name = a.text().trim().takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val href = a.attr("href")
+            // 没有数字 id 的（点进去也没有影人页）直接丢掉，避免产生空 id 的卡片
+            val cid = Regex("""celebrity/(\d+)""").find(href)?.groupValues?.get(1)
+                ?: return@mapNotNull null
             DoubanCelebrity(
-                id = Regex("""celebrity/(\d+)""").find(href)?.groupValues?.get(1).orEmpty(),
+                id = cid,
                 name = name,
                 role = li.selectFirst("span.role")?.text()?.trim().orEmpty(),
                 avatarUrl = largeImageUrl(li.selectFirst("div.avatar img")?.attr("src")?.trim())

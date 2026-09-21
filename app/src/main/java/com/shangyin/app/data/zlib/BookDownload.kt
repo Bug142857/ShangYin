@@ -1,29 +1,24 @@
 package com.shangyin.app.data.zlib
 
-import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import android.webkit.CookieManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.File
-import java.io.OutputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * 电子书文件下载：把站点交给 WebView 的真实文件地址用 OkHttp 拉下来，存进系统「下载」目录。
+ * 电子书文件下载：把站点交给 WebView 的真实文件地址用 OkHttp 拉下来，
+ * 写到用户通过系统「保存到…」（SAF）选定的位置。
  *
  * ⚠️ Cookie 要按**文件地址所属域**取：文件可能落在 CDN 域，
  * 也可能仍在站点域且需要 `__diamwall` 反爬票据（所以这里从 CookieManager 取值，而不是自己拼）。
  */
 object BookDownload {
 
-    data class Result(val name: String, val where: String, val uri: Uri?)
+    data class Result(val name: String, val where: String, val uri: Uri)
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -31,10 +26,14 @@ object BookDownload {
         .followRedirects(true)
         .build()
 
-    suspend fun save(
+    /**
+     * 下载到用户选定的目标（`ACTION_CREATE_DOCUMENT` 返回的 URI）。
+     * 写入前先确认响应确实是文件（不是额度用尽/未登录的 HTML 页面）。
+     */
+    suspend fun saveTo(
         context: Context,
+        targetUri: Uri,
         target: ZlibWeb.DownloadTarget,
-        fallbackName: String,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Result = withContext(Dispatchers.IO) {
         val ck = CookieManager.getInstance().getCookie(target.fileUrl)
@@ -47,19 +46,22 @@ object BookDownload {
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw Exception("下载失败：站点返回 HTTP ${resp.code}")
             val mime = resp.header("Content-Type").orEmpty()
-            val text = if (mime.contains("text/html", true)) resp.body?.string().orEmpty() else null
-            if (text != null) throw Exception(htmlReason(text))
-            val name = pickName(target, fallbackName, mime)
-            val sink = openSink(context, name, mime)
+            if (mime.contains("text/html", true)) {
+                throw Exception(htmlReason(resp.body?.string().orEmpty()))
+            }
+            val name = fileNameFromUri(targetUri.toString())
+                ?: suggestName(target, "book")
             val declared = resp.body?.contentLength() ?: -1L
+            val out = context.contentResolver.openOutputStream(targetUri)
+                ?: throw Exception("无法写入所选位置（请换一个目录）")
             try {
                 resp.body?.byteStream()?.use { input ->
-                    sink.stream.use { out ->
+                    out.use { o ->
                         val buf = ByteArray(64 * 1024)
                         var done = 0L
                         var n = input.read(buf)
                         while (n > 0) {
-                            out.write(buf, 0, n)
+                            o.write(buf, 0, n)
                             done += n
                             onProgress(done, declared)
                             n = input.read(buf)
@@ -67,86 +69,33 @@ object BookDownload {
                     }
                 }
             } catch (e: Exception) {
-                sink.abort()
+                runCatching { context.contentResolver.delete(targetUri, null, null) }
                 throw e
             }
-            sink.commit()
-            Result(name, sink.where, sink.uri)
+            Result(name = name, where = "所选位置/$name", uri = targetUri)
         }
     }
 
-    /** 下载到「系统下载目录」：Android 10+ 走 MediaStore（无需权限），低版本写公共目录，再兜底应用目录 */
-    private class Sink(
-        val uri: Uri?,
-        val stream: OutputStream,
-        val where: String,
-        private val onAbort: () -> Unit,
-        private val onCommit: () -> Unit
-    ) {
-        fun commit() = onCommit()
-        fun abort() = runCatching { onAbort() }
-    }
-
-    private fun openSink(context: Context, name: String, mime: String): Sink {
-        val type = mime.substringBefore(';').trim().ifBlank { guessMime(name) }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            runCatching {
-                val values = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                    put(MediaStore.MediaColumns.MIME_TYPE, type)
-                    put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                    put(MediaStore.MediaColumns.IS_PENDING, 1)
-                }
-                val resolver = context.contentResolver
-                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                    ?: throw IllegalStateException("insert 返回空")
-                val out = resolver.openOutputStream(uri) ?: throw IllegalStateException("openOutputStream 返回空")
-                Sink(
-                    uri = uri,
-                    stream = out,
-                    where = "下载/$name",
-                    onAbort = { resolver.delete(uri, null, null) },
-                    onCommit = {
-                        val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-                        runCatching { resolver.update(uri, done, null, null) }
-                    }
-                )
-            }.getOrNull()?.let { return it }
-        }
-        // 兼容旧系统 / MediaStore 失败：写公共下载目录，再兜底应用专属目录
-        val dir = runCatching {
-            @Suppress("DEPRECATION")
-            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        }.getOrNull()
-        if (dir != null && (dir.exists() || dir.mkdirs()) && canWrite(dir)) {
-            val f = File(dir, name)
-            return Sink(null, f.outputStream(), "下载/${f.name}", onAbort = { f.delete() }, onCommit = {})
-        }
-        val app = File(context.getExternalFilesDir(null) ?: context.filesDir, "books").apply { mkdirs() }
-        val f = File(app, name)
-        return Sink(null, f.outputStream(), f.absolutePath, onAbort = { f.delete() }, onCommit = {})
-    }
-
-    private fun canWrite(dir: File): Boolean = runCatching {
-        val probe = File(dir, ".sy_write_test")
-        val ok = probe.createNewFile() || probe.exists()
-        probe.delete()
-        ok
-    }.getOrDefault(false)
-
-    /** 文件名：优先站点给的 Content-Disposition，其次 URL 末段，最后用书名 + 站点给的扩展名 */
-    private fun pickName(target: ZlibWeb.DownloadTarget, fallback: String, mime: String): String {
+    /** 建议文件名：优先站点给的 Content-Disposition，其次 URL 末段，最后用书名 + 站点给的扩展名 */
+    fun suggestName(target: ZlibWeb.DownloadTarget, fallback: String): String {
         val fromUrl = runCatching {
             val p = java.net.URI(target.fileUrl).path.orEmpty()
             p.substringAfterLast('/').trim().takeIf { it.isNotBlank() && it.contains('.') }
         }.getOrNull()
         val raw = nameFromDisposition(target.fileName) ?: fromUrl ?: fallback
         val clean = raw.replace(Regex("[\\\\/:*?\"<>|\\r\\n]"), "_").trim().take(120).ifBlank { "book" }
-        // 没有扩展名时按 MIME 补一个，方便系统用它选打开方式
         if (clean.contains('.')) return clean
-        val ext = extFromMime(target.mimeType.orEmpty()) ?: extFromMime(mime)
+        val ext = extFromMime(target.mimeType.orEmpty())
         return if (ext.isNullOrBlank()) clean else "$clean.$ext"
     }
+
+    /** 从 SAF 返回的 URI 里取文件名（形如 `primary:Download/肠子.epub`） */
+    private fun fileNameFromUri(uri: String): String? =
+        java.net.URLDecoder.decode(uri, "UTF-8")
+            .substringAfterLast('/')
+            .substringAfter(':')
+            .trim()
+            .takeIf { it.isNotBlank() && it.contains('.') }
 
     /** Content-Disposition → 文件名（兼容 filename*=UTF-8''xxx 与 filename="xxx" 两种写法） */
     private fun nameFromDisposition(cd: String?): String? {
@@ -168,15 +117,6 @@ object BookDownload {
         mime.contains("text/plain", true) -> "txt"
         mime.contains("zip", true) -> "zip"
         else -> null
-    }
-
-    private fun guessMime(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
-        "epub" -> "application/epub+zip"
-        "pdf" -> "application/pdf"
-        "mobi", "azw", "azw3" -> "application/x-mobipocket-ebook"
-        "txt" -> "text/plain"
-        "zip" -> "application/zip"
-        else -> "application/octet-stream"
     }
 
     /** 拿到的是 HTML 页面而不是文件（额度用尽 / 未登录 / 反爬），把页面文字翻成可操作提示 */

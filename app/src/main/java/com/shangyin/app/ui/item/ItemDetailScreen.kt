@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -378,7 +377,9 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     item(span = { GridItemSpan(3) }) {
                         Text("$celebTitle(${celebrities.size})", style = MaterialTheme.typography.titleMedium)
                     }
-                    gridItems(celebrities, key = { "ac${it.id}" }) { c ->
+                    // key 带上下标：影视演职员里同一个人可能同时是导演和演员（id 相同），
+                    // 用 id 当 key 会因重复 key 直接崩溃
+                    gridItemsIndexed(celebrities, key = { i, c -> "ac$i${c.id}" }) { i, c ->
                         CelebrityGridCard(c) { openCelebrity(c) }
                     }
                 }
@@ -523,7 +524,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     }
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(celebrities, key = { it.id }) { c ->
+                        itemsIndexed(celebrities, key = { i, c -> "c$i${c.id}" }) { _, c ->
                             CelebrityCard(c) { openCelebrity(c) }
                         }
                     }
@@ -582,7 +583,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     Text("预告片", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(videos, key = { "v${it.id}" }) { v ->
+                        itemsIndexed(videos, key = { i, v -> "v$i${v.id}" }) { _, v ->
                             VideoCard(v) { videoUrl = v.videoUrl }
                         }
                     }

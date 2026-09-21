@@ -17,10 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -281,7 +282,7 @@ fun CelebrityScreen(
                         )
                     }
                 } else {
-                    itemsIndexed(allPhotoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
+                    gridItemsIndexed(allPhotoUrls, key = { i, _ -> "ap$i" }) { idx, url ->
                         CoverImage(
                             url = url,
                             modifier = Modifier
@@ -418,7 +419,8 @@ fun CelebrityScreen(
                     }
                     Spacer(Modifier.height(10.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(detailPreview, key = { it.id }) { work ->
+                        // key 带下标：同一部作品可能以不同角色重复出现，纯 id 当 key 会崩溃
+                        itemsIndexed(detailPreview, key = { i, w -> "w$i${w.id}" }) { _, work ->
                             CelebrityWorkCard(work) { openWorkInternal(work) }
                         }
                     }

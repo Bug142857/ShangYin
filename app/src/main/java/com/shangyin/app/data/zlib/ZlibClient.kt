@@ -2,6 +2,8 @@ package com.shangyin.app.data.zlib
 
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -168,6 +170,45 @@ object ZlibClient {
     /** 预热：进图书页时把站点首页先加载好（实测约 7.4 秒），省得用户搜完还要等页面加载 */
     suspend fun warmup() = ZlibWeb.warmup()
 
+    // ---------------- 搜索预取（解决「第一次搜索很慢」） ----------------
+
+    /**
+     * 搜索串行化：预取与用户点击的搜索共用一把锁，避免同一关键词并发发两次请求
+     * （站点对密集请求会 429 限流）。
+     */
+    private val searchLock = Mutex()
+
+    /** 预取缓存：用户敲字停顿时先搜一次，按下搜索直接命中 */
+    @Volatile
+    private var prefetched: Pair<String, BookPage>? = null
+
+    @Volatile
+    private var prefetchedAt = 0L
+
+    private const val PREFETCH_TTL_MS = 120_000L
+
+    private fun cacheKey(keyword: String, page: Int) = "$page|${keyword.trim()}"
+
+    private fun prefetchFresh() = System.currentTimeMillis() - prefetchedAt < PREFETCH_TTL_MS
+
+    /**
+     * 预取：输入停顿后先替用户把这次搜索打出去。
+     * 实测同一关键词的第二次请求只要 <1 秒（第一次是服务端冷启动，约 6 秒），
+     * 所以预热过的关键词，按下搜索几乎立刻出结果。
+     */
+    suspend fun prefetch(keyword: String, page: Int = 1) {
+        val kw = keyword.trim()
+        if (kw.length < 2) return
+        val key = cacheKey(kw, page)
+        searchLock.withLock {
+            if (prefetched?.first == key && prefetchFresh()) return@withLock
+            runCatching { searchNetwork(kw, page) }.onSuccess {
+                prefetched = key to it
+                prefetchedAt = System.currentTimeMillis()
+            }
+        }
+    }
+
     /** 站点对「未登录 / 会话失效」返回的文案（中英两版都实测过） */
     private val NOT_LOGGED_IN_WORDS = listOf(
         "未找到请求的书", "requested book not found",
@@ -235,7 +276,19 @@ object ZlibClient {
      * 搜索。返回书列表 + 总页数。
      * eapi：`/eapi/book/search?message={kw}&page={n}&limit=20`
      */
-    suspend fun search(keyword: String, page: Int): BookPage {
+    suspend fun search(keyword: String, page: Int): BookPage = searchLock.withLock {
+        // 命中预取结果就直接用（用掉即失效，避免翻页/换词时误用旧数据）
+        val key = cacheKey(keyword, page)
+        prefetched?.let { (k, v) ->
+            if (k == key && prefetchFresh()) {
+                prefetched = null
+                return@withLock v
+            }
+        }
+        searchNetwork(keyword, page)
+    }
+
+    private suspend fun searchNetwork(keyword: String, page: Int): BookPage {
         val e = URLEncoder.encode(keyword, "UTF-8")
         val path = "/eapi/book/search?message=$e&page=$page&limit=20"
         // ⚠️ 必须用 POST（表单体）：实测同一路径 `GET` 恒返回
