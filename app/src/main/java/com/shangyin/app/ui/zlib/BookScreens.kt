@@ -330,6 +330,7 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
 
     var downloading by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Pair<Long, Long>?>(null) }
+    var quota by remember { mutableStateOf<ZlibClient.DownloadQuota?>(null) }
 
     // 下载流程：先弹系统「保存到…」让用户选目录/文件名，再取文件写入所选位置
     val savePicker = rememberLauncherForActivityResult(
@@ -354,6 +355,8 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
             }
             downloading = false
             progress = null
+            // 下载会消耗当日额度，重新拉一次账号额度显示
+            quota = runCatching { ZlibClient.downloadQuota() }.getOrNull()
         }
     }
 
@@ -369,6 +372,8 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
             .onSuccess { book = it }
             .onFailure { error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "加载失败" }
         loading = false
+        // 顺带取一次账号当日下载额度（站点按账号限制每日下载次数）
+        quota = runCatching { ZlibClient.downloadQuota() }.getOrNull()
     }
 
     fun download() {
@@ -503,6 +508,18 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error
                             )
+                        }
+                    } else {
+                        // 账号当日下载额度（站点按账号限制每日次数；取不到字段就不显示）
+                        quota?.let { q ->
+                            item {
+                                Text(
+                                    q.text,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (q.reached) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.outline
+                                )
+                            }
                         }
                     }
 

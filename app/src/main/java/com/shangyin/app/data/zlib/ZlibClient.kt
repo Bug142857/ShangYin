@@ -209,6 +209,65 @@ object ZlibClient {
         }
     }
 
+    /**
+     * 账号每日下载额度。Z-Library 按账号限制每日下载次数，
+     * 站点在 `/eapi/user/profile` 里给（字段名各线路不完全一致，这里按关键字宽解析：
+     * 含 limit/max/quota 的当上限、含 today/used/count 的当已用、含 reach 的当「已用完」）。
+     * 拿不到任何 download 字段就返回 null（界面不显示避免误导）。
+     */
+    data class DownloadQuota(
+        val used: Int?,
+        val limit: Int?,
+        val reached: Boolean,
+        val raw: List<Pair<String, String>>
+    ) {
+        /** 给界面用的一句话 */
+        val text: String
+            get() = when {
+                reached -> "今日下载额度已用完" + (limit?.let { "（上限 $it 次）" } ?: "")
+                limit != null && used != null -> "今日下载额度：已用 $used / $limit 次"
+                limit != null -> "今日下载额度：上限 $limit 次"
+                used != null -> "今日已下载 $used 次"
+                else -> raw.joinToString(" · ") { "${it.first}=${it.second}" }
+            }
+    }
+
+    private fun collectDownloadFields(o: JSONObject, out: MutableMap<String, String>) {
+        val keys = o.keys()
+        while (keys.hasNext()) {
+            val k = keys.next()
+            when (val v = o.opt(k)) {
+                is JSONObject -> collectDownloadFields(v, out)
+                is org.json.JSONArray -> for (i in 0 until v.length()) {
+                    (v.opt(i) as? JSONObject)?.let { collectDownloadFields(it, out) }
+                }
+                else -> if (k.contains("download", ignoreCase = true)) out[k] = v?.toString().orEmpty()
+            }
+        }
+    }
+
+    suspend fun downloadQuota(): DownloadQuota? = runCatching {
+        val root = JSONObject(ZlibWeb.fetchText("/eapi/user/profile"))
+        if (root.optString("success").trim() == "0") return@runCatching null
+        val fields = LinkedHashMap<String, String>()
+        collectDownloadFields(root, fields)
+        if (fields.isEmpty()) return@runCatching null
+        var used: Int? = null
+        var limit: Int? = null
+        var reached = false
+        fields.forEach { (k, v) ->
+            val lk = k.lowercase()
+            val n = v.toIntOrNull()
+            val truthy = v.equals("true", true) || v == "1"
+            when {
+                lk.contains("reach") -> if (truthy) reached = true
+                lk.contains("limit") || lk.contains("max") || lk.contains("quota") -> if (n != null) limit = n
+                lk.contains("today") || lk.contains("used") || lk.contains("count") -> if (n != null) used = n
+            }
+        }
+        DownloadQuota(used, limit, reached, fields.toList())
+    }.getOrNull()
+
     /** 站点对「未登录 / 会话失效」返回的文案（中英两版都实测过） */
     private val NOT_LOGGED_IN_WORDS = listOf(
         "未找到请求的书", "requested book not found",

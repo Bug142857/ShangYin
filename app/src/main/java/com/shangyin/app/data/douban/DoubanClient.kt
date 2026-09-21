@@ -571,45 +571,47 @@ object DoubanClient {
 
     /**
      * 桌面条目页 `#info` → 标签/取值映射。
-     * 结构是「文本 + `<span class="pl">标签</span>` + `: ` + `<a>值</a>`」交替，值可能多段用 ` / ` 连接。
+     *
+     * ⚠️ 实测（2026-09-21）有两种结构，**必须都支持**（旧实现只遍历 `#info` 的直接子节点，
+     * 结果漏掉了嵌套的 导演/编剧/主演，详情页因此一直缺演职员）：
+     *  ① 演职员行：`<span><span class="pl">导演</span>: <span class="attrs"><a>大卫·布鲁克纳</a></span></span><br>`
+     *     —— `.pl` 被包在一个 `span` 里，值在同级 `span.attrs`；
+     *  ② 属性行：`<span class="pl">类型:</span> <span property="v:genre">惊悚</span> / <span>恐怖</span><br>`
+     *     —— `.pl` 是 `#info` 的直接子节点，值在后续文本/元素里，到 `<br>` 为止。
      */
     private fun desktopInfoPairs(doc: org.jsoup.nodes.Document): Map<String, String> {
         val info = doc.selectFirst("#info") ?: return emptyMap()
         val out = LinkedHashMap<String, String>()
-        val buf = StringBuilder()
-        var label: String? = null
-        fun flush() {
-            val l = label
-            if (l != null) {
-                val v = buf.toString().trim().trim(':', '：').trim()
-                if (v.isNotBlank()) out[l] = v
-            }
-            buf.setLength(0)
-        }
-        info.childNodes().forEach { node ->
-            when {
-                node is org.jsoup.nodes.Element && node.hasClass("pl") -> {
-                    flush()
-                    label = node.text().trim().trimEnd(':', '：').trim()
+        for (pl in info.select("span.pl")) {
+            val key = pl.text().trim().trimEnd(':', '：').trim()
+            if (key.isBlank()) continue
+            val parent = pl.parent()
+            // 仅当父节点是「只含这一个 .pl 的行容器」时才用它的 span.attrs（否则会串到别的行）
+            val attrs = parent?.takeIf { it.select("span.pl").size == 1 }?.selectFirst("span.attrs")
+            val value = if (attrs != null) {
+                val clone = attrs.clone()
+                clone.select("a.more-attrs").remove()                       // 「更多...」
+                clone.select("[style]").forEach { el ->                     // 折叠起来的多余演员
+                    if (el.attr("style").contains("display: none")) el.remove()
                 }
-                node is org.jsoup.nodes.TextNode -> {
-                    val t = node.text().trim()
-                    // 只有含字母数字的文本才算值（冒号、斜杠这类分隔符忽略）
-                    if (t.isNotEmpty() && t.any { it.isLetterOrDigit() } && label != null) {
-                        if (buf.isNotEmpty()) buf.append(" / ")
-                        buf.append(t)
+                clone.text()
+            } else {
+                val sb = StringBuilder()
+                var n: org.jsoup.nodes.Node? = pl.nextSibling()
+                while (n != null) {
+                    if (n is org.jsoup.nodes.Element) {
+                        if (n.hasClass("pl") || n.tagName() == "br") break
+                        if (!n.hasClass("more-attrs")) sb.append(n.text())
+                    } else if (n is org.jsoup.nodes.TextNode) {
+                        sb.append(n.wholeText)
                     }
+                    n = n.nextSibling()
                 }
-                node is org.jsoup.nodes.Element -> {
-                    val t = node.text().trim()
-                    if (t.isNotBlank() && label != null) {
-                        if (buf.isNotEmpty()) buf.append(" / ")
-                        buf.append(t)
-                    }
-                }
+                sb.toString()
             }
+            val v = value.replace(Regex("\\s+"), " ").trim().trim(':', '：').trim()
+            if (v.isNotBlank() && key !in out) out[key] = v
         }
-        flush()
         return out
     }
 
@@ -760,11 +762,45 @@ object DoubanClient {
     /** 单独拉预告片（详情页实时展示用，不落库） */
     suspend fun fetchTrailers(category: Category, doubanId: String): List<DoubanVideo> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            val fromRexxar = runCatching {
                 val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
                 parseVideos(json.parseToJsonElement(rexxarBody(apiUrl, referer)).jsonObject)
             }.getOrDefault(emptyList())
+            // rexxar 拿不到预告片时走网页：条目页拿 trailer id → 预告片页取 mp4 直链
+            if (fromRexxar.isNotEmpty()) fromRexxar
+            else if (category == Category.MOVIE || category == Category.TV) fetchMovieTrailersHtml(doubanId)
+            else emptyList()
         }
+
+    /** 影视预告片网页兜底：条目页里找 `/trailer/{id}/`，再进预告片页取 mp4 直链与封面 */
+    private fun fetchMovieTrailersHtml(doubanId: String): List<DoubanVideo> = runCatching {
+        val subjectUrl = "https://movie.douban.com/subject/$doubanId/"
+        val html = httpGetMobile(subjectUrl, "https://movie.douban.com/")
+        Regex("""/trailer/(\d+)/""").findAll(html)
+            .map { it.groupValues[1] }
+            .distinct()
+            .take(4)
+            .mapNotNull { tid ->
+                val tUrl = "https://movie.douban.com/trailer/$tid/"
+                val tHtml = runCatching { httpGetMobile(tUrl, subjectUrl) }.getOrNull()
+                    ?: return@mapNotNull null
+                val mp4 = Regex("""<source[^>]+src="([^"]+\.mp4[^"]*)"""")
+                    .find(tHtml)?.groupValues?.get(1)
+                    ?: Regex("""(?:"video_url"|"url")\s*:\s*"(https?://[^"]+\.mp4[^"]*)"""")
+                        .find(tHtml)?.groupValues?.get(1)
+                    ?: Regex("""(https?://vt\d*\.doubanio\.com/[^\s"']+\.mp4)""")
+                        .find(tHtml)?.groupValues?.get(1)
+                    ?: return@mapNotNull null
+                DoubanVideo(
+                    id = tid,
+                    title = Regex("""<title>([^<]+)</title>""").find(tHtml)
+                        ?.groupValues?.get(1)?.trim()?.take(40).orEmpty().ifBlank { "预告片" },
+                    videoUrl = mp4,
+                    coverUrl = Regex("""poster="([^"]+)"""").find(tHtml)?.groupValues?.get(1)
+                )
+            }
+            .toList()
+    }.getOrDefault(emptyList())
 
     // ---------------- 演职员 / 剧照 / 短评 ----------------
 
@@ -1001,7 +1037,7 @@ object DoubanClient {
     /** 网友短评（热门在前，取有文字的）；多端点兜底，游戏/影视都能拿到 */
     suspend fun fetchInterests(category: Category, doubanId: String): List<DoubanInterest> =
         withContext(Dispatchers.IO) {
-            runCatching {
+            val fromRexxar = runCatching {
                 val (apiUrl, referer) = rexxarUrl(category, doubanId) ?: return@runCatching emptyList()
                 // 依次尝试：不带 status（全量）→ done（看过）→ collect（玩过），任一拿到评论即返回
                 val urls = listOf(
@@ -1032,7 +1068,37 @@ object DoubanClient {
                 }
                 emptyList()
             }.getOrDefault(emptyList())
+            // rexxar 拿不到短评时走桌面短评页，保证详情页不是空白
+            if (fromRexxar.isNotEmpty()) fromRexxar
+            else if (category == Category.MOVIE || category == Category.TV) fetchMovieInterestsHtml(doubanId)
+            else emptyList()
         }
+
+    /** 影视短评网页兜底：解析桌面短评页的 `div.comment-item`（昵称/星级/正文/时间/有用数） */
+    private fun fetchMovieInterestsHtml(doubanId: String): List<DoubanInterest> = runCatching {
+        val referer = "https://movie.douban.com/subject/$doubanId/"
+        val html = httpGetMobile(
+            "https://movie.douban.com/subject/$doubanId/comments?status=P&sort=new_score",
+            referer
+        )
+        val doc = Jsoup.parse(html, referer)
+        doc.select("div.comment-item").mapNotNull { item ->
+            val comment = cleanText(item.selectFirst("span.short")?.text()) ?: return@mapNotNull null
+            val user = item.selectFirst("span.comment-info a") ?: return@mapNotNull null
+            val ratingClass = item.selectFirst("span.comment-info span.rating")?.attr("class").orEmpty()
+            val rating = Regex("""allstar(\d+)""").find(ratingClass)
+                ?.groupValues?.get(1)?.toFloatOrNull()?.div(10f)
+            val time = item.selectFirst("span.comment-time")
+            DoubanInterest(
+                userName = user.text().trim().ifBlank { "豆瓣用户" },
+                rating = rating,
+                comment = comment,
+                date = time?.attr("title")?.take(10)?.ifBlank { null }
+                    ?: time?.text()?.trim().orEmpty(),
+                votes = item.selectFirst("span.votes")?.text()?.trim()?.toIntOrNull() ?: 0
+            )
+        }.take(12)
+    }.getOrDefault(emptyList())
 
     // ---------------- 影人详情 ----------------
 
@@ -1307,7 +1373,12 @@ object DoubanClient {
         return out
     }
 
-    /** 影视演职员网页兜底：rexxar 不可用时解析桌面条目页的演职员表 */
+    /**
+     * 影视演职员网页兜底：rexxar 不可用时解析桌面条目页的演职员表。
+     * ⚠️ 实测（2026-09-21）该页链接是 **`/personage/<id>/`**（不是 `/celebrity/<id>/`——
+     * 旧实现只认 celebrity，导致所有影人被丢弃、演职员表整块空白），
+     * 头像在 `div.avatar` 的 **inline `background-image: url(...)`** 里（页面里没有 `<img>`）。
+     */
     private fun fetchMovieCelebritiesHtml(doubanId: String): List<DoubanCelebrity> = runCatching {
         val url = "https://movie.douban.com/subject/$doubanId/celebrities"
         val html = httpGetMobile(url, referer = "https://movie.douban.com/subject/$doubanId/")
@@ -1316,23 +1387,28 @@ object DoubanClient {
             val a = li.selectFirst("a.name") ?: return@mapNotNull null
             val name = a.text().trim().takeIf { it.isNotBlank() } ?: return@mapNotNull null
             val href = a.attr("href")
-            // 没有数字 id 的（点进去也没有影人页）直接丢掉，避免产生空 id 的卡片
-            val cid = Regex("""celebrity/(\d+)""").find(href)?.groupValues?.get(1)
+            val cid = Regex("""(?:personage|celebrity)/(\d+)""").find(href)?.groupValues?.get(1)
                 ?: return@mapNotNull null
+            val avatarStyle = li.selectFirst("div.avatar")?.attr("style").orEmpty()
+            val avatar = Regex("""url\((['"]?)([^)'"]+)\1\)""").find(avatarStyle)?.groupValues?.get(2)
             DoubanCelebrity(
                 id = cid,
                 name = name,
                 role = li.selectFirst("span.role")?.text()?.trim().orEmpty(),
-                avatarUrl = largeImageUrl(li.selectFirst("div.avatar img")?.attr("src")?.trim())
+                avatarUrl = largeImageUrl(avatar?.trim())
             )
         }.take(40)
     }.getOrDefault(emptyList())
 
-    /** 影视剧照网页兜底：rexxar 不可用时解析桌面条目页剧照墙 */
+    /**
+     * 影视剧照网页兜底：rexxar 不可用时解析桌面条目页剧照墙。
+     * ⚠️ 实测（2026-09-21）剧照资源尺寸段是 **`m`**（`/view/photo/m/public/p<数字>.webp`），
+     * 旧实现只认 albumicon/thumb/photo，导致一张都匹配不到、剧照整块空白。
+     */
     private fun fetchMoviePhotosHtml(doubanId: String): List<DoubanPhoto> = runCatching {
         val url = "https://movie.douban.com/subject/$doubanId/photos?type=all"
         val html = httpGetMobile(url, referer = "https://movie.douban.com/subject/$doubanId/")
-        Regex("""view/photo/(?:albumicon|thumb|photo)/public/(p\d+)\.(?:jpg|png|webp)""")
+        Regex("""view/photo/[a-z0-9_]+/public/(p\d+)\.(?:jpg|jpeg|png|webp)""")
             .findAll(html)
             .map { it.groupValues[1] }
             .distinct()
