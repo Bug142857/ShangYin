@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.data.zlib.ZlibClient
 import com.shangyin.app.data.zlib.ZlibWeb
@@ -392,6 +393,9 @@ private const val LIVE_PROBE_JS = """
 /** 页面加载超时（毫秒）：超时后停止转圈并给出提示，避免一直白屏转圈干等 */
 private const val LOAD_TIMEOUT_MS = 25_000L
 
+/** 登录态校验超时（毫秒）：通道卡住时按"测不出来"处理，落到登录页而不是一直转圈 */
+private const val VERIFY_TIMEOUT_MS = 8_000L
+
 /** 无忧游戏库登录（直达站点独立登录页，避免首页弹窗遮罩） */
 class WygamerLoginActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -558,15 +562,18 @@ private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess:
         cm.flush()
     }
 
-    // ⚠️ 本地 Cookie 存在 ≠ 会话有效：站点让旧会话失效后，本页会一直停在"已登录"，
-    // 用户只能「退出登录」、没有重新登录的机会，而搜索/下载却全按匿名走。
-    // 因此有 verifyLogin 的站点一律以服务端结论为准：**只有明确失效（== false）才进登录页**。
-    // 注意两点：① 这里**不**主动清本地 Cookie —— 网络抖动同样会验失败，清掉会误删有效登录；
-    // ② null（网络/被墙，测不出来）按"已登录"展示，不能骗用户重新登录。
+    // 入口判定：**只有服务端明确确认有效（== true）才显示"已登录"页**；
+    // false（确认失效）与 null（测不出来：网络/被墙/反爬挑战）都进登录页。
+    // ⚠️ v2.23.18 把 null 也当成"已登录"，结果 zlib 会话测不出来时**登录页永远打不开**
+    // （用户："账号管理里 zlib 登录页打不开了，上个版本还能打开"）——
+    // 登录页必须始终可达，用户才有机会重新登录；"已登录"页只是便利，不能挡住入口。
+    // 另外加超时：校验通道（zlib 走隐藏 WebView）卡住时也必须落到登录页，不能一直转圈。
     LaunchedEffect(Unit) {
         if (mode != 2) return@LaunchedEffect
-        val ok = runCatching { spec.verifyLogin?.invoke() }.getOrNull()
-        mode = if (ok == false) 1 else 0
+        val ok = withTimeoutOrNull(VERIFY_TIMEOUT_MS) {
+            runCatching { spec.verifyLogin?.invoke() }.getOrNull()
+        }
+        mode = if (ok == true) 0 else 1
     }
 
     if (mode == 2) {

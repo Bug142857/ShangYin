@@ -83,36 +83,37 @@ object WygamerClient {
         .build()
 
     /**
-     * 服务端校验登录态：请求 `GET /wp-admin/profile.php`，看是否被弹回登录页。
+     * 服务端校验登录态：拉一次站点首页，看服务端渲染出来的是"已登录"还是"未登录"。
      *
-     * ⚠️ **不要用 WP REST `/wp-json/wp/v2/users/me` 判登录**（v2.23.16/17 就是这么写的，是错的）：
-     * WordPress 的 Cookie 认证**必须带 `wp_rest` nonce**；没有 nonce 时 WP 会当成未登录，
-     * 直接回 `401 {"code":"rest_not_logged_in"}` —— 本站首页也没有输出 `wpApiSettings`，
-     * 拿不到 nonce。结果就是**已登录也回 401** → 账号页永远显示「登录已失效」，
-     * 登录成功后 `verifyLogin` 永远 false、永远不自动关页（表现为"登录了但说没登录"）。
+     * ⚠️ 前两种写法都踩过坑（别再回去用）：
+     *  1) `GET /wp-json/wp/v2/users/me`：WP 的 REST **Cookie 认证必须带 `wp_rest` nonce**，
+     *     没 nonce 时**已登录也回** `401 rest_not_logged_in`；本站首页也没有输出 `wpApiSettings`
+     *     （拿不到 nonce）→ 永远误报"登录已失效"。
+     *  2) `GET /wp-admin/profile.php` 是否被弹回登录页：wp-admin 校验走的是 **`auth` 方案**
+     *     （`wordpress_<hash>` cookie，**path 是 `/wp-content/plugins`**），而 App 存的
+     *     `wygamerCookie` 是从 `https://www.wygamer.com/` 采集的（这个 path 的 cookie 不会被带上）
+     *     → 也永远误报失效。
      *
-     * 实测（匿名，2026-09-21）：
-     *  - `GET /wp-admin/profile.php` → **302 跳 `wp-login.php`**（浏览器 UA 下 Zibll 还会再跳
-     *    `/user-sign-2?tab=signin`）→ 明确未登录
-     *  - 有效登录 Cookie → 200 停在 profile.php
+     * 正确判据（服务端渲染，用的正是 `logged_in` 方案、path=/ 的 cookie —— 我们手上就有）：
+     *  - 已登录：WP `body_class()` 会给 `<body>` 加 `logged-in`，且页面里有带 nonce 的退出链接
+     *  - 未登录：实测匿名拉首页 → `class="home blog wp-theme-zibll white-theme nav-fixed site-layout-1"`
+     *    （**无** logged-in、**无** action=logout）
      *
-     * @return true = 会话有效；false = 确认未登录/已失效；null = 网络异常等无法判断（不提示过期，避免误报）
+     * @return true = 会话有效；false = 确认未登录/已失效；null = 网络异常/页面异常等无法判断
      */
     suspend fun sessionOk(): Boolean? = withContext(Dispatchers.IO) {
         val cookie = SettingsStore.wygamerCookie
         if (cookie.isBlank()) return@withContext false
-        val req = Request.Builder().url("$BASE/wp-admin/profile.php")
-            .header("User-Agent", UA)
-            .header("Accept", "text/html,application/xhtml+xml")
-            .header("Cookie", cookie)
-            .build()
         try {
-            client.newCall(req).execute().use { resp ->
-                val finalUrl = resp.request.url.toString()
+            client.newCall(newRequest("$BASE/")).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                val html = resp.body?.string().orEmpty()
+                if (html.isBlank()) return@withContext null
                 when {
-                    // 被弹回登录页 → 没有有效会话
-                    finalUrl.contains("wp-login.php") || finalUrl.contains("user-sign") -> false
-                    resp.isSuccessful -> true
+                    LOGGED_IN_BODY_CLASS.containsMatchIn(html) || html.contains("action=logout") -> true
+                    // 拿到的确实是主题渲染的正常页面，但没有任何登录痕迹 → 会话确实失效
+                    html.contains("wp-theme-") -> false
+                    // 其它页面（维护页/挑战页等）→ 不判断，避免误报
                     else -> null
                 }
             }
@@ -120,6 +121,9 @@ object WygamerClient {
             null
         }
     }
+
+    /** 已登录页面才有的标记：WP body_class 里的 logged-in（匿名页面没有） */
+    private val LOGGED_IN_BODY_CLASS = Regex("""<body[^>]*class="[^"]*\blogged-in\b""")
 
     private fun newRequest(url: String): Request {
         val cookie = SettingsStore.wygamerCookie

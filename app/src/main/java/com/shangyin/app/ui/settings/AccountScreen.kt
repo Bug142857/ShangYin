@@ -56,9 +56,17 @@ import com.shangyin.app.data.bika.BikaClient
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/**
+ * 登录态校验（带超时）：通道卡住（如 zlib 走隐藏 WebView、站点无响应）时按「无法确认」处理，
+ * 不能一直停在"正在检测登录状态…"，更不能因此误报"登录已失效"。
+ */
+private suspend fun checkSession(block: suspend () -> Boolean?): Boolean? =
+    runCatching { withTimeoutOrNull(8_000L) { block() } }.getOrNull()
 
 /**
  * 账号管理：云端同步（坚果云 WebDAV）、豆瓣登录、哔咔登录、
@@ -73,10 +81,16 @@ fun AccountScreen(nav: NavHostController) {
     // 豆瓣登录状态
     var doubanLoginKey by remember { mutableStateOf(0) }
     val isDoubanLoggedIn = remember(doubanLoginKey) { SettingsStore.isDoubanLoggedIn }
-    // 服务端校验的登录态：null = 检测中；false = Cookie 已过期（本地仍显示已登录）
+    // 服务端校验的登录态：null = 未确认（可能无法判断）；false = Cookie 已过期（本地仍显示已登录）
+    // checked：区分"还在检测"与"检测完了但测不出来"——否则后者会永远停在"正在检测…"
     var doubanSessionOk by remember(doubanLoginKey) { mutableStateOf<Boolean?>(null) }
+    var doubanChecked by remember(doubanLoginKey) { mutableStateOf(false) }
     LaunchedEffect(doubanLoginKey) {
-        if (isDoubanLoggedIn) doubanSessionOk = com.shangyin.app.data.douban.DoubanClient.sessionOk(force = true)
+        doubanChecked = false
+        if (isDoubanLoggedIn) {
+            doubanSessionOk = checkSession { com.shangyin.app.data.douban.DoubanClient.sessionOk(force = true) }
+        }
+        doubanChecked = true
     }
     var showDoubanLogout by remember { mutableStateOf(false) }
     val doubanLauncher = rememberLauncherForActivityResult(
@@ -113,24 +127,33 @@ fun AccountScreen(nav: NavHostController) {
     val isZlibLoggedIn = remember(zlibLoginKey) { com.shangyin.app.data.zlib.ZlibClient.isLoggedIn }
     var showZlibLogout by remember { mutableStateOf(false) }
 
-    // 其余三个账号同样做「服务端登录态校验」：null = 检测中，false = 已失效（本地却显示已登录）
+    // 其余三个账号同样做「服务端登录态校验」：null = 未确认，false = 已失效（本地却显示已登录）
     var bikaSessionOk by remember(bikaLoginKey) { mutableStateOf<Boolean?>(null) }
     var wygamerSessionOk by remember(wygamerLoginKey) { mutableStateOf<Boolean?>(null) }
     var zlibSessionOk by remember(zlibLoginKey) { mutableStateOf<Boolean?>(null) }
+    var bikaChecked by remember(bikaLoginKey) { mutableStateOf(false) }
+    var wygamerChecked by remember(wygamerLoginKey) { mutableStateOf(false) }
+    var zlibChecked by remember(zlibLoginKey) { mutableStateOf(false) }
     LaunchedEffect(bikaLoginKey) {
+        bikaChecked = false
         if (SettingsStore.bikaToken.isNotBlank()) {
-            bikaSessionOk = com.shangyin.app.data.bika.BikaClient.sessionOk()
+            bikaSessionOk = checkSession { com.shangyin.app.data.bika.BikaClient.sessionOk() }
         }
+        bikaChecked = true
     }
     LaunchedEffect(wygamerLoginKey) {
+        wygamerChecked = false
         if (SettingsStore.isWygamerLoggedIn) {
-            wygamerSessionOk = com.shangyin.app.data.wygamer.WygamerClient.sessionOk()
+            wygamerSessionOk = checkSession { com.shangyin.app.data.wygamer.WygamerClient.sessionOk() }
         }
+        wygamerChecked = true
     }
     LaunchedEffect(zlibLoginKey) {
+        zlibChecked = false
         if (com.shangyin.app.data.zlib.ZlibClient.isLoggedIn) {
-            zlibSessionOk = com.shangyin.app.data.zlib.ZlibClient.sessionOk()
+            zlibSessionOk = checkSession { com.shangyin.app.data.zlib.ZlibClient.sessionOk() }
         }
+        zlibChecked = true
     }
     val zlibLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -183,13 +206,15 @@ fun AccountScreen(nav: NavHostController) {
                 title = "豆瓣登录",
                 subtitle = when {
                     !isDoubanLoggedIn -> "未登录，登录后搜索结果更全（老片需要登录才搜得到）"
-                    doubanSessionOk == null -> "已登录，正在检测登录状态…"
+                    !doubanChecked -> "已登录，正在检测登录状态…"
                     doubanSessionOk == false -> "登录已过期！搜索结果会变少（老片搜不到），点这里重新登录"
+                    doubanSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
                     else -> "已登录，搜索结果更全"
                 },
                 onClick = {
-                    // 过期时点击直接重新登录（而不是弹退出确认）
-                    if (isDoubanLoggedIn && doubanSessionOk != false) showDoubanLogout = true
+                    // 只有服务端**确认有效**才弹退出确认；未确认/已过期都直达登录页
+                    // （未确认时也可能只是网络问题，让用户能直接重登，别只给一个「退出」）
+                    if (isDoubanLoggedIn && doubanSessionOk == true) showDoubanLogout = true
                     else doubanLauncher.launch(Intent(context, DoubanLoginActivity::class.java))
                 }
             )
@@ -206,12 +231,13 @@ fun AccountScreen(nav: NavHostController) {
                 title = "哔咔登录",
                 subtitle = when {
                     !isBikaLoggedIn -> "未登录，登录后可在里世界浏览本子"
-                    bikaSessionOk == null -> "已登录，正在检测登录状态…"
+                    !bikaChecked -> "已登录，正在检测登录状态…"
                     bikaSessionOk == false -> "登录已失效！点这里重新登录（否则本子页会一直报错）"
+                    bikaSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
                     else -> "已登录，可浏览本子漫画"
                 },
                 onClick = {
-                    if (isBikaLoggedIn && bikaSessionOk != false) showBikaLogout = true
+                    if (isBikaLoggedIn && bikaSessionOk == true) showBikaLogout = true
                     else showBikaLogin = true
                 }
             )
@@ -228,12 +254,13 @@ fun AccountScreen(nav: NavHostController) {
                 title = "无忧游戏库登录",
                 subtitle = when {
                     !isWygamerLoggedIn -> "未登录，登录后可查看部分资源下载链接"
-                    wygamerSessionOk == null -> "已登录，正在检测登录状态…"
+                    !wygamerChecked -> "已登录，正在检测登录状态…"
                     wygamerSessionOk == false -> "登录已失效！部分资源看不到下载链接，点这里重新登录"
+                    wygamerSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
                     else -> "已登录，可查看资源下载链接"
                 },
                 onClick = {
-                    if (isWygamerLoggedIn && wygamerSessionOk != false) showWygamerLogout = true
+                    if (isWygamerLoggedIn && wygamerSessionOk == true) showWygamerLogout = true
                     else wygamerLauncher.launch(Intent(context, WygamerLoginActivity::class.java))
                 }
             )
@@ -250,12 +277,13 @@ fun AccountScreen(nav: NavHostController) {
                 title = "Z-Library 登录",
                 subtitle = when {
                     !isZlibLoggedIn -> "未登录，登录后才能下载电子书"
-                    zlibSessionOk == null -> "已登录，正在检测登录状态…"
+                    !zlibChecked -> "已登录，正在检测登录状态…"
                     zlibSessionOk == false -> "登录已失效！搜索/下载会失败，点这里重新登录"
+                    zlibSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
                     else -> "已登录，可搜索并下载电子书"
                 },
                 onClick = {
-                    if (isZlibLoggedIn && zlibSessionOk != false) showZlibLogout = true
+                    if (isZlibLoggedIn && zlibSessionOk == true) showZlibLogout = true
                     else zlibLauncher.launch(Intent(context, ZlibLoginActivity::class.java))
                 }
             )

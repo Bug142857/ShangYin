@@ -110,8 +110,9 @@ private fun DoubanLoginContent(
             runCatching { DoubanClient.sessionOkBlocking() }.getOrNull()
         }
         // 不主动清本地 cookie：网络抖动同样会验失败，直接清会误删有效登录。
-        // null = 无法判断 → 按"已登录"展示（别骗用户重新登录）；只有明确失效才进登录页
-        state = if (ok == false) 2 else 1
+        // 只有服务端**确认有效（true）**才显示"已登录"页；false/null 都进登录页 ——
+        // 「测不出来」绝不能挡住登录入口（v2.23.18 的 zlib 就是栽在这：登录页永远打不开）
+        state = if (ok == true) 1 else 2
     }
 
     when (state) {
