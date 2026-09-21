@@ -37,7 +37,15 @@ object ZlibWeb {
     private var loadedHost: String? = null
     private var pageReady = CompletableDeferred<Unit>()
 
+    /** 站点把文件地址交给 WebView（DownloadListener）时用它把结果送回 openDownloadPage */
+    private var pendingFile = CompletableDeferred<String>()
+    private var lastFileName: String? = null
+    private var lastFileMime: String? = null
+
     val attached: Boolean get() = webView != null
+
+    /** 站点交给 WebView 的下载目标（真实文件地址 + 文件名/类型） */
+    data class DownloadTarget(val pageUrl: String, val fileUrl: String, val fileName: String?, val mimeType: String?)
 
     /**
      * 候选线路：设置里记的域名，以及补/去 `zh.` 前缀的变体。
@@ -75,7 +83,9 @@ object ZlibWeb {
 
     /** 登录 / 退出登录后重置：只丢弃线路记忆（页面本身保留，避免又付一次约 7 秒的首页加载） */
     fun reset() {
-        pageReady = CompletableDeferred()
+        // 页面还在（只是换了账号），必须让等待信号处于已完成态，
+        // 否则下一次请求会等一个永远不会完成的 pageReady 直到超时
+        pageReady = CompletableDeferred<Unit>().apply { complete(Unit) }
     }
 
     /**
@@ -117,6 +127,13 @@ object ZlibWeb {
                 resultMsg.sendToTarget()
                 return true
             }
+        }
+        // 站点的下载按钮就是 `window.open(href)`，href 是服务端渲染的 `/dl/{token}`（前端不拼地址）。
+        // 所以「下载」必须走站点自己的流程：打开 /dl/ 页面，让站点把真实文件地址交给 WebView。
+        view.setDownloadListener { url, _, contentDisposition, mimeType, _ ->
+            lastFileName = contentDisposition
+            lastFileMime = mimeType
+            pendingFile.complete(url)
         }
         view.webViewClient = object : WebViewClient() {
             override fun onPageStarted(v: WebView?, url: String?, favicon: Bitmap?) {
@@ -187,18 +204,132 @@ object ZlibWeb {
         )
     }
 
-    /** 在某条线路上取接口内容（必要时先加载站点首页建会话） */
+    /**
+     * 在某条线路上取接口内容（必要时先加载站点首页建会话）。
+     *
+     * ⚠️ 实测（2026-09-20）**必须等页面稳定后再发请求**：首页要 7.4 秒才加载完，
+     * 若在导航过程中发 fetch，导航会打断请求 → 页面里报 `Failed to fetch`
+     * （这就是「每次打开 App 第一次搜索必失败、重试才行」的根因）。
+     * 另外请求地址用**页面自身的 origin**（相对路径）拼接，永远同源，
+     * 不会因为站点重定向换域而变成跨域请求失败。
+     */
     private suspend fun fetchOn(view: WebView, host: String, path: String, form: String?): String {
         if (loadedHost != host) loadAndWait(view, host, "https://$host/")
-        val url = if (path.startsWith("http")) path else "https://$host$path"
-        repeat(4) {
-            val text = evalFetch(view, url, form)
-            if (!isChallenge(text)) return text
+        if (!awaitPageUsable(view, host)) {
+            // 页面跑到了站外（例如下载后停在 CDN）或一直不可用：回站点首页重建会话
+            loadAndWait(view, host, "https://$host/")
+            awaitPageUsable(view, host)
+        }
+        var lastError: Exception? = null
+        repeat(4) { attempt ->
+            val text = try {
+                evalFetch(view, path, form)
+            } catch (e: Exception) {
+                // 导航打断 / 连接重置这类瞬时失败：等页面稳定后重试
+                lastError = e
+                delay(900L * (attempt + 1))
+                awaitPageUsable(view, host)
+                return@repeat
+            }
+            if (!isChallenge(text)) {
+                rememberActualHost(view)
+                return text
+            }
             // 页面正处于 DiamWall 挑战中：它的 JS 需要几秒完成验证，等一会儿再试
             delay(2000)
+            awaitPageUsable(view, host)
         }
-        throw ChallengeException()
+        throw lastError ?: ChallengeException()
     }
+
+    /**
+     * 走站点自己的下载流程：打开书籍给的 `/dl/{token}` 页面，
+     * 等站点把真实文件地址交给 WebView（DownloadListener）。
+     * 拿不到就把页面上能读到的原因交回上层（最常见：每日额度用尽 / 未登录 / 反爬）。
+     *
+     * 为什么不自己拼下载地址：实测站点前端从不拼地址，按钮 href 就是服务端渲染的
+     * `/dl/{token}`（10 位短 token），前端只做 `window.open(href)`；
+     * 我们拼 `/dl/{id}/{hash}/{文件名}` 只会得到主题化 404 页面（`Requested page not found` 的由来）。
+     */
+    suspend fun openDownloadPage(path: String, timeoutMs: Long = 25_000): DownloadTarget =
+        withContext(Dispatchers.Main) {
+            val view = webView ?: throw Exception("图书会话未就绪，请退出图书页后重新进入")
+            val host = candidateHosts().firstOrNull { hasSession(it) } ?: candidateHosts().first()
+            val url = if (path.startsWith("http")) path else "https://$host$path"
+            pendingFile = CompletableDeferred()
+            lastFileName = null
+            lastFileMime = null
+            loadedHost = host
+            view.loadUrl(url)
+            var file = withTimeoutOrNull(8_000) { pendingFile.await() }
+            if (file == null) {
+                // 有些线路的下载页要用户点一下「下载」才开始：自动点一次站点的下载入口再等
+                runCatching {
+                    evalValue(
+                        view,
+                        "(function(){var a=document.querySelector('a.addDownloadedBook,a.dlButton," +
+                            "a[href*=\"/dl/\"],button.dlDropdownBtn');if(!a)return '';a.click();return 'ok'})()"
+                    )
+                }
+                file = withTimeoutOrNull((timeoutMs - 8_000).coerceAtLeast(5_000)) { pendingFile.await() }
+            }
+            if (file != null) {
+                return@withContext DownloadTarget(url, file, lastFileName, lastFileMime)
+            }
+            val text = runCatching {
+                evalValue(view, "(document.body&&document.body.innerText||'').slice(0,600)")
+            }.getOrNull().orEmpty()
+            throw Exception(pageReason(text))
+        }
+
+    /** 下载页没能给出文件地址时，把页面上的原因翻译成可操作提示 */
+    private fun pageReason(text: String): String {
+        val t = text.replace(Regex("\\s+"), " ").trim()
+        return when {
+            t.contains("限额") || t.contains("limit", true) ->
+                "Z-Library 提示：每日下载额度已用完（站点按账号/IP 限制），额度恢复后再试"
+            t.contains("登录") || t.contains("log in", true) || t.contains("sign in", true) ->
+                "需要登录 Z-Library 才能下载，请到 设置 → 账号管理 → Z-Library 登录"
+            t.isBlank() -> "站点没有给出文件地址（可能被反爬拦截），请重试"
+            else -> "站点没有给出文件地址：" + t.take(160)
+        }
+    }
+
+    private fun isZlibHost(host: String): Boolean {
+        val h = host.lowercase()
+        return h.contains("z-lib") || h.startsWith("zlib.") || h.contains(".zlib.")
+    }
+
+    /** 把页面真实 host 记回来（站点可能从 z-lib.sk 重定向到 zh.z-lib.sk） */
+    private suspend fun rememberActualHost(view: WebView) {
+        val h = evalValue(view, "location.host")?.trim().orEmpty()
+        if (h.isNotBlank() && isZlibHost(h)) rememberHost(h)
+    }
+
+    /**
+     * 等页面真的可用：文档已提交、`readyState` 脱离 loading，且仍在站点域内。
+     * 返回 false 表示页面已跑到站外（例如下载后停在 CDN）或始终没就绪 —— 调用方需要重新加载首页。
+     */
+    private suspend fun awaitPageUsable(view: WebView, host: String, timeoutMs: Long = 25_000): Boolean {
+        withTimeoutOrNull(timeoutMs) { pageReady.await() }
+        var usable = false
+        withTimeoutOrNull(timeoutMs) {
+            while (true) {
+                val info = evalValue(view, "(document.readyState||'')+'|'+(location.host||'')")
+                val ready = info?.substringBefore('|').orEmpty()
+                val cur = info?.substringAfter('|', "").orEmpty()
+                if (cur.isNotBlank() && !isZlibHost(cur)) return@withTimeoutOrNull
+                if (ready.isNotBlank() && ready != "loading" && cur.isNotBlank()) {
+                    if (cur != host) rememberHost(cur)
+                    usable = true
+                    return@withTimeoutOrNull
+                }
+                delay(200)
+            }
+        }
+        return usable
+    }
+
 
     /** 是否拿到了 DiamWall 挑战页 / 登录页（HTML），而不是接口 JSON */
     private fun isChallenge(text: String): Boolean {
@@ -215,8 +346,14 @@ object ZlibWeb {
         withTimeoutOrNull(20_000) { ready.await() }
     }
 
-    /** 页面内 fetch 并轮询结果（evaluateJavascript 不支持 await Promise，故把结果挂在 window 上） */
-    private suspend fun evalFetch(view: WebView, url: String, form: String? = null): String {
+    /**
+     * 页面内 fetch 并轮询结果（evaluateJavascript 不支持 await Promise，故把结果挂在 window 上）。
+     * [path] 为相对路径时用**页面自身的 origin** 拼接：永远同源，站点重定向换域也不会变成跨域失败
+     * （实测未登录请求 `/eapi/book/search` 时站点会 307 到 `zh.` 子域，用绝对地址就是跨域 → `Failed to fetch`）。
+     *
+     * 用自增序号当令牌，避免上一次请求的迟到结果被这一次误读。
+     */
+    private suspend fun evalFetch(view: WebView, path: String, form: String? = null): String {
         val init = if (form == null) {
             "{credentials:'include',cache:'no-store',headers:{'X-Requested-With':'XMLHttpRequest'}}"
         } else {
@@ -224,14 +361,19 @@ object ZlibWeb {
                 "headers:{'Content-Type':'application/x-www-form-urlencoded'," +
                 "'X-Requested-With':'XMLHttpRequest'},body:${JSONObject.quote(form)}}"
         }
-        val js = "(function(){try{window.__syZ=null;" +
-            "fetch(${JSONObject.quote(url)},$init)" +
+        val target = if (path.startsWith("http")) {
+            JSONObject.quote(path)
+        } else {
+            "(location.origin + " + JSONObject.quote(if (path.startsWith("/")) path else "/$path") + ")"
+        }
+        val js = "(function(){try{var id=(window.__syZi=(window.__syZi||0)+1);window.__syZ=null;" +
+            "fetch($target,$init)" +
             ".then(function(r){return r.text()})" +
-            ".then(function(t){window.__syZ=t})" +
-            ".catch(function(e){window.__syZ='__err__'+(e&&e.message?e.message:e)});return 1}" +
+            ".then(function(t){if(window.__syZi===id)window.__syZ=t})" +
+            ".catch(function(e){if(window.__syZi===id)window.__syZ='__err__'+(e&&e.message?e.message:e)});return 1}" +
             "catch(e){window.__syZ='__err__'+e;return 0}})()"
         view.evaluateJavascript(js, null)
-        repeat(60) {
+        repeat(100) {
             delay(150)
             val v = evalValue(view, "window.__syZ") ?: return@repeat
             if (v.startsWith("__err__")) {

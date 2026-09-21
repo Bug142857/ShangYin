@@ -297,6 +297,9 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 val dateLine = if (cat == com.shangyin.app.data.Category.BOOK) entity.subTitle else entity.info
                 val needRefresh = entity.summary.isBlank() || entity.info.isBlank() ||
                     (entity.directors.isBlank() && entity.casts.isBlank()) ||
+                    // 旧数据里可能存着带标签/带「类型: 制片国家/地区:」标签的原始文本（显示为乱码+拼接混乱），
+                    // 这种也要重新抓一次换成清理后的内容
+                    looksGarbled(entity.info) || looksGarbled(entity.summary) ||
                     (dateLine.isNotBlank() && !monthDayRe.containsMatchIn(dateLine))
                 if (needRefresh) {
                     runCatching {
@@ -307,7 +310,9 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                                 title = detail.title ?: entity.title,
                                 doubanRating = detail.rating ?: entity.doubanRating,
                                 coverUrl = entity.coverUrl ?: detail.coverUrl,
-                                summary = entity.summary.ifBlank { detail.summary.orEmpty() },
+                                summary = if (entity.summary.isBlank() || looksGarbled(entity.summary))
+                                    detail.summary.orEmpty().ifBlank { entity.summary }
+                                else entity.summary,
                 // 影视/游戏：info 行直接替换为含完整日期的新内容；
                                 // 图书：头部 subTitle 替换（基本信息块不显示）
                                 info = if (cat == com.shangyin.app.data.Category.BOOK)
@@ -474,7 +479,8 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             ReviewSection(entity)
 
             // 基本信息（制片国家/上映时间/片长等）；图书头部已显示作者等信息，不再重复
-            entity.info.takeIf { it.isNotBlank() && !isBook }?.let { info ->
+            val cleanInfo = com.shangyin.app.data.douban.DoubanClient.cleanText(entity.info)
+            cleanInfo?.takeIf { it.isNotBlank() && !isBook }?.let { info ->
                 Column {
                     Text("基本信息", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(6.dp))
@@ -487,12 +493,13 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
 
             // 简介
-            if (entity.summary.isNotBlank()) {
+            val cleanSummary = com.shangyin.app.data.douban.DoubanClient.cleanText(entity.summary)
+            if (!cleanSummary.isNullOrBlank()) {
                 Column {
                     Text("简介", style = MaterialTheme.typography.titleSmall)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        entity.summary,
+                        cleanSummary,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -630,6 +637,17 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             )
         }
     }
+}
+
+/**
+ * 是否是「脏」文本：带 HTML 标签，或带豆瓣网页那种「类型: / 制片国家/地区:」标签串。
+ * 这类内容显示出来就是乱码 + 拼接混乱，需要重抓详情替换掉。
+ */
+private fun looksGarbled(s: String?): Boolean {
+    if (s.isNullOrBlank()) return false
+    return s.contains('<') || s.contains('>') ||
+        s.contains("类型:") || s.contains("类型：") || s.contains("制片国家") ||
+        s.contains("上映日期:") || s.contains("上映日期：") || s.contains("片长:")
 }
 
 /** 顶栏收藏状态：已在任意清单 → 对号（点按提示所在清单）；未收藏 → 加号打开添加对话框 */

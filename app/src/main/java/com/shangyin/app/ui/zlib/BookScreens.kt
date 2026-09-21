@@ -1,10 +1,5 @@
 package com.shangyin.app.ui.zlib
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -29,12 +24,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -65,9 +57,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.shangyin.app.data.zlib.Book
+import com.shangyin.app.data.zlib.BookDownload
 import com.shangyin.app.data.zlib.ZlibClient
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -304,7 +298,10 @@ fun BookHomeScreen(nav: NavHostController) {
     }
 }
 
-/** 图书详情：封面 + 元信息 + 简介 + 下载（取直链后浏览器打开 / 复制链接） */
+/**
+ * 图书详情：封面 + 标题/作者 + 出版信息 + 下载（走站点自己的 `/dl/{token}` 入口，存到系统下载目录）+ 简介。
+ * 简介来自站点，是带 `<p>`/`<br>` 的 HTML，已在 [ZlibClient] 里清成纯文本。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
@@ -318,8 +315,8 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     var error by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
 
-    var resolving by remember { mutableStateOf(false) }
-    var link by remember { mutableStateOf<String?>(null) }
+    var downloading by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf<Pair<Long, Long>?>(null) }
 
     LaunchedEffect(bookId, hashId, retryKey) {
         loading = true
@@ -335,20 +332,28 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
         loading = false
     }
 
-    fun fetchLink() {
-        if (resolving || hashId.isBlank()) return
-        resolving = true
+    fun download() {
+        val b = book ?: return
+        if (downloading) return
+        downloading = true
+        progress = null
         scope.launch {
-            runCatching { ZlibClient.downloadLink(bookId, hashId) }
-                .onSuccess { link = it }
-                .onFailure {
-                    Toast.makeText(
-                        context,
-                        it.message?.takeIf { m -> m.isNotBlank() } ?: "获取下载链接失败",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            resolving = false
+            runCatching {
+                // 站点下载入口 → WebView 交出真实文件地址 → OkHttp 存进系统下载目录
+                val target = ZlibClient.downloadTarget(b.id, b.hash, b.dl)
+                val fallback = b.extension?.takeIf { it.isNotBlank() }?.let { "${b.title}.$it" } ?: b.title
+                BookDownload.save(context, target, fallback) { done, total -> progress = done to total }
+            }.onSuccess { r ->
+                Toast.makeText(context, "已保存到 ${r.where}", Toast.LENGTH_LONG).show()
+            }.onFailure { e ->
+                Toast.makeText(
+                    context,
+                    e.message?.takeIf { m -> m.isNotBlank() } ?: "下载失败",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            downloading = false
+            progress = null
         }
     }
 
@@ -380,10 +385,18 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
             }
             else -> {
                 val b = book ?: return@Scaffold
+                val rows = listOfNotNull(
+                    b.publisher?.takeIf { it.isNotBlank() }?.let { "出版社" to it },
+                    b.year?.takeIf { it.isNotBlank() }?.let { "出版年份" to "$it 年" },
+                    b.language?.takeIf { it.isNotBlank() }?.let { "语言" to it },
+                    b.extension?.takeIf { it.isNotBlank() }?.let { "格式" to it.uppercase() },
+                    b.filesize?.takeIf { it.isNotBlank() }?.let { "大小" to fmtSize(it) },
+                    b.rating?.takeIf { it.isNotBlank() && it != "0" }?.let { "评分" to it }
+                )
                 LazyColumn(
                     Modifier.padding(pad).fillMaxSize(),
                     contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     item {
                         Row {
@@ -391,45 +404,68 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
                                 model = b.cover,
                                 contentDescription = null,
                                 contentScale = ContentScale.Crop,
-                                modifier = Modifier.width(110.dp).aspectRatio(1f / 1.4f)
-                                    .clip(RoundedCornerShape(8.dp))
+                                modifier = Modifier.width(118.dp).aspectRatio(1f / 1.4f)
+                                    .clip(RoundedCornerShape(10.dp))
                                     .background(MaterialTheme.colorScheme.surfaceVariant)
                             )
-                            Spacer(Modifier.width(12.dp))
+                            Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(b.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                b.author?.let {
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                val meta = listOfNotNull(
-                                    b.year?.takeIf { it.isNotBlank() }?.let { "$it 年" },
-                                    b.language,
-                                    b.extension?.uppercase(),
-                                    b.filesize?.let { fmtSize(it) },
-                                    b.publisher
+                                Text(
+                                    b.title,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
                                 )
-                                if (meta.isNotEmpty()) {
+                                b.author?.takeIf { it.isNotBlank() }?.let {
                                     Spacer(Modifier.height(6.dp))
                                     Text(
-                                        meta.joinToString(" · "),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
+                                        it,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                }
-                                b.rating?.takeIf { it.isNotBlank() && it != "0" }?.let {
-                                    Spacer(Modifier.height(4.dp))
-                                    Text("评分 $it", style = MaterialTheme.typography.labelSmall)
                                 }
                             }
                         }
                     }
+
+                    if (rows.isNotEmpty()) {
+                        item {
+                            Column(
+                                Modifier.fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                rows.forEach { (label, value) ->
+                                    Row {
+                                        Text(
+                                            label,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.outline,
+                                            modifier = Modifier.width(72.dp)
+                                        )
+                                        Text(value, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     item {
-                        Button(onClick = { fetchLink() }, enabled = !resolving, modifier = Modifier.fillMaxWidth()) {
-                            if (resolving) {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Button(
+                            onClick = { download() },
+                            enabled = !downloading,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (downloading) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
                                 Spacer(Modifier.width(8.dp))
-                                Text("正在获取下载链接…")
+                                val (done, total) = progress ?: (0L to -1L)
+                                Text(if (total > 0) "下载中 ${done * 100 / total}%" else "下载中 ${fmtSize(done.toString())}")
                             } else {
                                 Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(8.dp))
@@ -437,6 +473,7 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
                             }
                         }
                     }
+
                     if (!ZlibClient.isLoggedIn) {
                         item {
                             Text(
@@ -446,55 +483,17 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
                             )
                         }
                     }
+
                     b.description?.takeIf { it.isNotBlank() }?.let { desc ->
                         item {
                             Text("简介", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                        }
-                        item {
-                            Text(desc, style = MaterialTheme.typography.bodySmall)
+                            Spacer(Modifier.height(6.dp))
+                            Text(desc, style = MaterialTheme.typography.bodySmall, lineHeight = 20.sp)
                         }
                     }
                 }
             }
         }
-    }
-
-    link?.let { url ->
-        AlertDialog(
-            onDismissRequest = { link = null },
-            title = { Text("下载链接") },
-            text = {
-                Column {
-                    Text(url, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "链接有时效，建议直接下载或稍后重新获取。",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    openInBrowser(context, url)
-                    link = null
-                }) {
-                    Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("下载 / 浏览器打开")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    copyToClipboard(context, "下载链接", url)
-                    link = null
-                }) {
-                    Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("复制链接")
-                }
-            }
-        )
     }
 }
 
@@ -506,19 +505,5 @@ private fun fmtSize(raw: String): String {
         n >= 1024L * 1024 -> String.format("%.1f MB", n / 1024.0 / 1024)
         n >= 1024L -> String.format("%.0f KB", n / 1024.0)
         else -> "$n B"
-    }
-}
-
-private fun copyToClipboard(context: Context, label: String, text: String) {
-    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
-    cm.setPrimaryClip(ClipData.newPlainText(label, text))
-    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-}
-
-private fun openInBrowser(context: Context, url: String) {
-    runCatching {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }.onFailure {
-        Toast.makeText(context, "没有可用的浏览器", Toast.LENGTH_SHORT).show()
     }
 }

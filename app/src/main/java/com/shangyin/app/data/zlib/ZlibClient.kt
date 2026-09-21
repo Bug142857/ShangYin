@@ -23,7 +23,11 @@ data class Book(
     val filesize: String?,
     val publisher: String?,
     val description: String?,
-    val rating: String?
+    val rating: String?,
+    /** 站点给出的下载入口（实测形如 `/dl/w5X6O61Zmo`，10 位短 token，前端从不自己拼地址） */
+    val dl: String? = null,
+    /** 在线阅读地址（有则可跳站点阅读器） */
+    val readOnlineUrl: String? = null
 ) {
     val key: String get() = "$id/$hash"
 }
@@ -148,22 +152,6 @@ object ZlibClient {
     }
 
     /**
-     * 先 POST（表单体）再 GET 兜底，取第一个满足 [ok] 的响应。
-     * 因为 eapi 的 GET/POST 行为不同（见 [search] 的注释），无参数的接口不确定该用哪种，就两种都试。
-     */
-    private suspend fun getJsonPreferPost(
-        path: String,
-        form: String,
-        ok: (JSONObject) -> Boolean
-    ): JSONObject {
-        val post = runCatching { getJson(path, form) }.getOrNull()
-        if (post != null && ok(post)) return post
-        val get = runCatching { getJson(path, null) }.getOrNull()
-        if (get != null && ok(get)) return get
-        return post ?: get ?: throw Exception("Z-Library 请求失败，请稍后重试")
-    }
-
-    /**
      * 服务端校验登录态：在页面里问 `/eapi/user/profile`。
      *
      * ⚠️ **Cookie 里存在 `remix_userkey` ≠ 会话有效**（服务端可能早已让旧会话失效），
@@ -217,9 +205,30 @@ object ZlibClient {
             extension = optString("extension").trim().ifBlank { null },
             filesize = optString("filesize").trim().ifBlank { null },
             publisher = publisher,
-            description = optString("description").trim().ifBlank { null },
-            rating = optString("rating").trim().ifBlank { null }
+            description = cleanHtml(optString("description")).ifBlank { null },
+            rating = optString("rating").trim().ifBlank { null },
+            dl = optString("dl").trim().ifBlank { null },
+            readOnlineUrl = optString("readOnlineUrl").trim().ifBlank { null }
         )
+    }
+
+    /**
+     * 站点简介是带标签的 HTML（实测形如 `《搏击俱乐部》作者<br><p>当代最负盛名的…</p><p>…`），
+     * 直接显示会看到一堆 `<p>` `<br>`，这里清成可读纯文本。
+     */
+    fun cleanHtml(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        var s = raw
+        s = s.replace(Regex("(?i)<\\s*br\\s*/?\\s*>"), "\n")
+        s = s.replace(Regex("(?i)</\\s*(p|div|li|h[1-6])\\s*>"), "\n")
+        s = s.replace(Regex("(?i)<\\s*(p|div|li|h[1-6])[^>]*>"), "")
+        s = s.replace(Regex("<[^>]+>"), "")
+        s = s.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<")
+            .replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'")
+        s = s.replace(Regex("[ \\t\\u00a0]+"), " ")
+        s = s.replace(Regex(" *\n *"), "\n")
+        s = s.replace(Regex("\n{3,}"), "\n\n")
+        return s.trim()
     }
 
     /**
@@ -251,14 +260,13 @@ object ZlibClient {
 
     /**
      * 图书详情。eapi：`/eapi/book/{id}/{hash}`
+     * ⚠️ 实测（2026-09-20）**这个接口只有 GET 可用**：
+     * `POST /eapi/book/{id}/{hash}` 恒返回 `404 {"success":0,"error":"Requested page not found"}`
+     * （详情页那个 "Requested page not found" 提示就是这么来的），改用 GET。
      * 不同线路返回结构有差异，这里做兼容：直接是书对象 / 包在 book 里 / 包在 books 数组里。
      */
     suspend fun detail(id: String, hash: String): Book {
-        // eapi 的 GET/POST 行为不同（见 search 注释）：POST 优先，拿不到书信息再退回 GET
-        val root = getJsonPreferPost("/eapi/book/$id/$hash", "") { o ->
-            o.optJSONObject("book") != null || o.optJSONArray("books") != null ||
-                o.optString("id").isNotBlank()
-        }
+        val root = getJson("/eapi/book/$id/$hash", null)
         root.optJSONObject("book")?.toBook()?.let { return it }
         root.optJSONArray("books")?.optJSONObject(0)?.toBook()?.let { return it }
         root.toBook()?.let { return it }
@@ -267,19 +275,15 @@ object ZlibClient {
     }
 
     /**
-     * 取下载直链。eapi：`/eapi/book/{id}/{hash}/file` → `{"file":{"downloadLink":"..."}}`
-     * 未登录 / 额度用尽会返回明确错误信息。
+     * 拿到下载目标：走**站点自己的下载入口**（`dl` 字段 → `/dl/{token}` 页面 → WebView 交出的真实文件地址）。
+     *
+     * 为什么不用 `/eapi/book/{id}/{hash}/file`：实测该路径返回
+     * `400 {"success":0,"error":"登录到您的账户"}`，而前端真实按钮是服务端渲染的 `/dl/{token}`，
+     * 自己拼 `/dl/{id}/{hash}/{文件名}` 只会拿到主题化 404 页面。
      */
-    suspend fun downloadLink(id: String, hash: String): String {
-        val root = getJsonPreferPost("/eapi/book/$id/$hash/file", "") { o ->
-            o.optJSONObject("file") != null || o.optString("error").isNotBlank() ||
-                o.optString("message").isNotBlank()
-        }
-        val link = root.optJSONObject("file")?.optString("downloadLink")?.trim().orEmpty()
-        if (link.isNotBlank()) return link
-        val msg = root.optString("message").trim().ifBlank { root.optString("error").trim() }
-        throw Exception(
-            errorMessage(msg.ifBlank { "未获取到下载链接，请确认已登录且下载额度未用尽" })
-        )
+    suspend fun downloadTarget(id: String, hash: String, dl: String?): ZlibWeb.DownloadTarget {
+        val token = dl?.takeIf { it.isNotBlank() } ?: detail(id, hash).dl
+        if (token.isNullOrBlank()) throw Exception("站点未给出下载入口（该书可能仅支持在线阅读）")
+        return ZlibWeb.openDownloadPage(token)
     }
 }
