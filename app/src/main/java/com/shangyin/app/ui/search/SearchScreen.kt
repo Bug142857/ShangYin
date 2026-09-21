@@ -90,6 +90,8 @@ fun SearchScreen(
     var searched by rememberSaveable { mutableStateOf(SearchCache.searched) }
     // 搜索错误信息：失败时显示在结果区域，让用户看到具体原因（不只 Toast）
     var searchError by remember { mutableStateOf<String?>(null) }
+    // 豆瓣登录已过期（本地 cookie 在、但服务端会话失效）→ 搜索结果会变少，提示重新登录
+    var doubanStale by remember { mutableStateOf(false) }
     // 分类筛选：必须先选分类才能搜索（影视/图书/游戏/人物），防止结果互相干扰
     // 默认选中「影视」（最常用），用户可切换；从主页跳转时可带初始分类
     var selectedCat by rememberSaveable {
@@ -150,6 +152,12 @@ fun SearchScreen(
                         if (cat != null) DoubanClient.search(cat, q) else emptyList()
                     }
                     results = list.distinctBy { it.category.name + it.doubanId }
+                    // 豆瓣登录过期时搜索结果会明显变少（实测老片会整批消失），提示重新登录
+                    if (com.shangyin.app.ui.settings.SettingsStore.isDoubanLoggedIn &&
+                        !com.shangyin.app.data.douban.DoubanClient.sessionOk()
+                    ) {
+                        doubanStale = true
+                    }
                 }
             } catch (e: Exception) {
                 // 错误信息同时通过 Toast（短暂提示）和结果区域文字（持久显示）显示
@@ -300,6 +308,17 @@ fun SearchScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
+                    if (doubanStale) {
+                        item(key = "douban_stale") {
+                            Text(
+                                "豆瓣登录已过期：搜索结果会变少（老片可能整批搜不到）。" +
+                                    "到 设置 → 账号管理 → 豆瓣登录 重新登录即可恢复。",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
+                            )
+                        }
+                    }
                     // 人物搜索结果（无添加按钮，点击直接进影人详情）
                     if (celebrityResults.isNotEmpty()) {
                         item(key = "celeb_header") {

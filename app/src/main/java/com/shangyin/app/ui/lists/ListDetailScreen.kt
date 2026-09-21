@@ -934,20 +934,23 @@ private fun GridItemCard(
                 )
             }
         } else {
+            // 角标文案为 null 表示「连载中且已读到最新」→ 不显示
             comicStatus?.let { st ->
-                Text(
-                    st.label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .background(
-                            if (st.finished) Color(0xFF43A047).copy(alpha = 0.9f)
-                            else Color(0xFFE53935).copy(alpha = 0.9f),
-                            RoundedCornerShape(bottomStart = 8.dp, topEnd = 8.dp)
-                        )
-                        .padding(horizontal = 6.dp, vertical = 1.dp)
-                )
+                st.label?.let { label ->
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .background(
+                                if (st.finished) Color(0xFF43A047).copy(alpha = 0.9f)
+                                else Color(0xFFE53935).copy(alpha = 0.9f),
+                                RoundedCornerShape(bottomStart = 8.dp, topEnd = 8.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 1.dp)
+                    )
+                }
             }
         }
     }

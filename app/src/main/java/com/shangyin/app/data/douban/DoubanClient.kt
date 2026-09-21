@@ -106,8 +106,8 @@ object DoubanClient {
         repeat(11) { append(cs.random()) }
     }
 
-    /** 置位时本次请求不带用户 Cookie（rexxar 匿名重试用，见 [rexxarBody]） */
-    private val skipCookie = ThreadLocal<Boolean>()
+    /** 请求级「匿名」标记：带这个头的请求不附加用户 Cookie（见 [rexxarBody] 的第三层兜底） */
+    private const val ANON_HEADER = "X-Sy-Anon"
 
     /**
      * OkHttpClient 实例：用 @Volatile + 双重检查锁实现可重建。
@@ -145,10 +145,10 @@ object DoubanClient {
                 .header("Sec-Fetch-Site", "none")
                 .header("Sec-Fetch-User", "?1")
             // 动态添加 Cookie（含登录态 cookie 时可搜索游戏等）
-            // 匿名重试（skipCookie）时故意不带用户 Cookie：实测过期/失效的 ck 会让 rexxar 整条链路失败，
-            // 而带 m.douban.com 的 Referer 匿名请求反而是通的
-            val cookie = if (skipCookie.get() == true) "" else
-                runCatching { SettingsStore.doubanCookie }.getOrDefault("")
+            // ⚠️ 匿名标记走**请求头**而不是 ThreadLocal：ThreadLocal 在多协程复用线程时有泄漏风险，
+            // 一旦泄漏会让别的请求（尤其是需要登录态的影视搜索）掉 Cookie。
+            val anon = req.header(ANON_HEADER) != null
+            val cookie = if (anon) "" else runCatching { SettingsStore.doubanCookie }.getOrDefault("")
             if (cookie.isNotBlank()) {
                 builder.header("Cookie", "$cookie; bid=$fixedBid")
             } else {
@@ -563,12 +563,12 @@ object DoubanClient {
 
     /** 请求 Rexxar API：移动 UA（客户端自带）+ Referer，无需 apikey；
      * 完全禁用缓存（force-network），因为 OkHttp 缓存可能保存过期响应导致发行日期/短评为空 */
-    private fun httpGetRexxar(apiUrl: String, referer: String): String {
-        val req = Request.Builder().url(apiUrl).get()
+    private fun httpGetRexxar(apiUrl: String, referer: String, anonymous: Boolean = false): String {
+        val builder = Request.Builder().url(apiUrl).get()
             .header("Referer", referer)
             .cacheControl(CacheControl.Builder().noCache().noStore().build())
-            .build()
-        mobileClient.newCall(req).execute().use { resp ->
+        if (anonymous) builder.header(ANON_HEADER, "1")
+        mobileClient.newCall(builder.build()).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
             return resp.body?.string().orEmpty()
         }
@@ -590,12 +590,9 @@ object DoubanClient {
             }
         }
         try {
-            skipCookie.set(true)
-            return httpGetRexxar(apiUrl, "https://m.douban.com/")
+            return httpGetRexxar(apiUrl, "https://m.douban.com/", anonymous = true)
         } catch (e: Exception) {
             last = e
-        } finally {
-            skipCookie.remove()
         }
         throw last ?: IOException("rexxar 请求失败")
     }
@@ -1567,6 +1564,34 @@ object DoubanClient {
             re.find(url)?.let { return cat to it.groupValues[1] }
         }
         return null
+    }
+
+    // ---------------- 登录态检测 ----------------
+
+    @Volatile
+    private var doubanLoginOk = false
+
+    @Volatile
+    private var doubanLoginCheckedAt = 0L
+
+    /**
+     * 豆瓣登录态是否**真的有效**（服务端校验，10 分钟缓存）。
+     *
+     * ⚠️ 本地 cookie 含 `dbcl`（`SettingsStore.isDoubanLoggedIn`）只是启发式：Cookie 过期后
+     * 界面依旧显示「已登录」。而豆瓣搜索结果与登录态强相关 —— 实测同一关键词「养鬼吃人」：
+     * **未登录只回 11 条（缺 1987/1988/1992/1996 四部原版），登录后回 15 条（四部都在）**。
+     * 所以搜索前后要能判断登录是否过期，并提示用户重新登录。
+     */
+    suspend fun sessionOk(force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        if (!force && now - doubanLoginCheckedAt < 10 * 60_000L) return@withContext doubanLoginOk
+        val ok = runCatching {
+            val html = httpGetMobile("https://movie.douban.com/", "https://movie.douban.com/")
+            html.contains("passport/logout") || html.contains("退出")
+        }.getOrDefault(false)
+        doubanLoginOk = ok
+        doubanLoginCheckedAt = now
+        ok
     }
 
     // ---------------- 豆瓣登录（OkHttp 直调 API） ----------------

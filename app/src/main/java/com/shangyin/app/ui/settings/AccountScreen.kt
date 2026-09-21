@@ -38,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +73,11 @@ fun AccountScreen(nav: NavHostController) {
     // 豆瓣登录状态
     var doubanLoginKey by remember { mutableStateOf(0) }
     val isDoubanLoggedIn = remember(doubanLoginKey) { SettingsStore.isDoubanLoggedIn }
+    // 服务端校验的登录态：null = 检测中；false = Cookie 已过期（本地仍显示已登录）
+    var doubanSessionOk by remember(doubanLoginKey) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(doubanLoginKey) {
+        if (isDoubanLoggedIn) doubanSessionOk = com.shangyin.app.data.douban.DoubanClient.sessionOk(force = true)
+    }
     var showDoubanLogout by remember { mutableStateOf(false) }
     val doubanLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -150,14 +156,20 @@ fun AccountScreen(nav: NavHostController) {
                 icon = {
                     Icon(
                         Icons.Rounded.Person, contentDescription = null,
-                        tint = if (isDoubanLoggedIn) MaterialTheme.colorScheme.primary
+                        tint = if (isDoubanLoggedIn && doubanSessionOk != false) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline
                     )
                 },
                 title = "豆瓣登录",
-                subtitle = if (isDoubanLoggedIn) "已登录，搜索结果更全" else "未登录，登录后搜索结果更全",
+                subtitle = when {
+                    !isDoubanLoggedIn -> "未登录，登录后搜索结果更全（老片需要登录才搜得到）"
+                    doubanSessionOk == null -> "已登录，正在检测登录状态…"
+                    doubanSessionOk == false -> "登录已过期！搜索结果会变少（老片搜不到），点这里重新登录"
+                    else -> "已登录，搜索结果更全"
+                },
                 onClick = {
-                    if (isDoubanLoggedIn) showDoubanLogout = true
+                    // 过期时点击直接重新登录（而不是弹退出确认）
+                    if (isDoubanLoggedIn && doubanSessionOk != false) showDoubanLogout = true
                     else doubanLauncher.launch(Intent(context, DoubanLoginActivity::class.java))
                 }
             )
