@@ -31,6 +31,10 @@ class App : Application(), ImageLoaderFactory {
         runCatching { com.shangyin.app.data.ConfigBackup.restoreIfNeeded(this) }
         // 把已保存的 Cookie 回填 WebView（保证「登录态能一直保持」，见方法注释）
         runCatching { restoreCookiesToWebView() }
+        // 清掉 zlib 的风控/一次性 Cookie：历史版本曾把它们存下来并回填，残留的**无效
+        // `__diamwall` 会让整站死循环**（实测真浏览器复现 ERR_TOO_MANY_REDIRECTS），
+        // 启动时清一次让服务端重新下发（登录票据 remix_* 不受影响）
+        runCatching { com.shangyin.app.data.zlib.ZlibClient.clearTransientCookies() }
         // 首次使用播种内置默认采集源（在线观影）
         SettingsStore.ensureDefaultVodSourcesSeeded()
         // 配置变更（登录/云同步/片源等）时自动备份到公共目录
@@ -59,18 +63,24 @@ class App : Application(), ImageLoaderFactory {
      *
      * ⚠️⚠️ **不能把整串 Cookie 原样写回**（v2.23.18 就是这么干的，踩了坑）：
      * 保存下来的串里还包含**反爬风控 / 一次性会话** Cookie（zlib 实测有
-     * `__diamwall`、`c_token`、`bsrv`）。把**已经过期**的风控票据写回去，反爬会进入
+     * `__diamwall`、`c_token`、`bsrv`）。把**已经失效**的风控票据写回去，反爬会进入
      * 「带错票据 → 307 跳回自己 → 再带同一个错票据」的**死循环**，
-     * WebView 直接报 `net::ERR_TOO_MANY_REDIRECTS`（用户反馈："zlib 登录显示网页无法打开"）。
-     * 所以：风控/临时 Cookie 一律**不回填**，交给站点自己重新下发；
+     * WebView 直接报 `net:ERR_TOO_MANY_REDIRECTS`（真浏览器注入无效 `__diamwall` 可 100% 复现；
+     * 只删掉这一个 Cookie 立刻恢复）。所以：风控/临时 Cookie **既不回填**（见下），
+     * 也会被 `ZlibClient.clearTransientCookies()` 主动删掉、让站点重新下发；
      * zlib 更进一步——只回填登录票据 `remix_userid`/`remix_userkey`。
      */
     private fun restoreCookiesToWebView() {
         val cm = runCatching { android.webkit.CookieManager.getInstance() }.getOrNull() ?: return
         runCatching { cm.setAcceptCookie(true) }
 
-        /** 反爬风控 / 一次性会话票据：绝不回填（过期值会让风控死循环） */
-        val transientNames = setOf("__diamwall", "c_token", "bsrv")
+        /**
+         * 反爬风控 / 一次性会话票据：绝不回填。
+         * 名字集中定义在 [com.shangyin.app.data.zlib.ZlibClient.TRANSIENT_COOKIE_NAMES]，
+         * 并由 `ZlibClient.clearTransientCookies()` 在启动/开登录页/死循环自愈时**删除**
+         * （实测：残留一个无效的 `__diamwall` 就能让整站 `ERR_TOO_MANY_REDIRECTS`，删掉即恢复）。
+         */
+        val transientNames = com.shangyin.app.data.zlib.ZlibClient.TRANSIENT_COOKIE_NAMES
 
         /** [only] 非空时只回填这些名字 */
         fun put(url: String, cookie: String, only: Set<String>? = null) {

@@ -88,6 +88,48 @@ object ZlibClient {
     }
 
     /**
+     * 站点的**反爬风控 / 一次性会话 Cookie**：只对"当下这次会话"有效，绝不能保存或回填。
+     *
+     * ⚠️ 实测（真浏览器复现，2026-09-21）：把 `__diamwall` 置成无效值后，zlib **全站**
+     * （含 `/login`、`/`）稳定报 `net::ERR_TOO_MANY_REDIRECTS`，页面停在
+     * `chrome-error://chromewebdata/`；**只删掉这一个 Cookie 就立刻恢复**（服务端每次响应
+     * 都会重新下发有效值）。而 `remix_userid`/`remix_userkey` 这类登录票据即使过期也无害。
+     */
+    val TRANSIENT_COOKIE_NAMES = setOf("__diamwall", "c_token", "bsrv")
+
+    /**
+     * 清掉风控 / 一次性 Cookie，让服务端重新下发。
+     *
+     * 用途：① App 启动时（清掉历史版本误存/误回填的无效票据）；
+     * ② 打开登录页前；③ 页面出现重定向死循环时的自愈。
+     * 注意：必须把 host-only 与各种 `domain=` 作用域都试一遍才删得干净（实测只写 `path=/` 删不掉）。
+     */
+    fun clearTransientCookies(
+        cm: android.webkit.CookieManager = android.webkit.CookieManager.getInstance(),
+        urls: List<String> = cookieUrls()
+    ) {
+        val expired = "Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/"
+        for (u in urls) {
+            val host = u.substringAfter("://").trimEnd('/')
+            if (host.isBlank()) continue
+            val bare = host.removePrefix("zh.")
+            val scopes = listOf(
+                "",                            // host-only
+                "; domain=$host",
+                "; domain=.$host",
+                "; domain=$bare",
+                "; domain=.$bare"
+            )
+            for (name in TRANSIENT_COOKIE_NAMES) {
+                for (scope in scopes) {
+                    runCatching { cm.setCookie(u, "$name=; $expired$scope") }
+                }
+            }
+        }
+        runCatching { cm.flush() }
+    }
+
+    /**
      * 从 getzlib.com 取当日验证可用的域名，展开成「中文子域 + 主域」的**登录页**地址。
      * 站点每日换域名，内置地址容易过期，所以以在线解析结果为准；解析失败回退内置地址。
      */

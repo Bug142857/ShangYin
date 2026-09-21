@@ -490,7 +490,15 @@ class ZlibLoginActivity : ComponentActivity() {
     }
 }
 
-/** 按域名取 Cookie 合并去重（同名保留首次出现的值） */
+/**
+ * 按域名取 Cookie 合并去重（同名保留首次出现的值）。
+ *
+ * ⚠️ **反爬风控 / 一次性会话 Cookie（`__diamwall`/`c_token`/`bsrv`）一律不采集**：
+ * 它们只对"当下这次会话"有效，存下来再写回去会让风控判定为伪造票据 ——
+ * 实测（真浏览器复现）：把 `__diamwall` 置成无效值后，zlib 全站稳定报
+ * `net::ERR_TOO_MANY_REDIRECTS`；只删掉这一个 Cookie 就立刻恢复。
+ * 所以这类 Cookie 既不保存、也不参与"登录态是否变化"的比较（它们每次响应都会被重新下发）。
+ */
 private fun collectCookies(cm: CookieManager, urls: List<String>): String {
     val all = LinkedHashMap<String, String>()
     for (u in urls) {
@@ -500,11 +508,18 @@ private fun collectCookies(cm: CookieManager, urls: List<String>): String {
             if (idx > 0) {
                 val k = part.substring(0, idx).trim()
                 val v = part.substring(idx + 1).trim()
-                if (k.isNotEmpty() && !all.containsKey(k)) all[k] = v
+                if (k.isEmpty()) return@forEach
+                if (k.lowercase() in ZlibClient.TRANSIENT_COOKIE_NAMES) return@forEach
+                if (!all.containsKey(k)) all[k] = v
             }
         }
     }
     return all.entries.joinToString("; ") { "${it.key}=${it.value}" }
+}
+
+/** 清掉站点风控 / 一次性 Cookie（进登录页前调用，避免残留的无效票据把整站打成重定向死循环） */
+private fun clearTransientCookies(cm: CookieManager, urls: List<String>) {
+    ZlibClient.clearTransientCookies(cm, urls)
 }
 
 /**
@@ -968,20 +983,19 @@ private fun WebViewLoginScreen(
                                 if (request?.isForMainFrame != true) return
                                 loading = false
                                 // ★ ERR_TOO_MANY_REDIRECTS（= ERROR_REDIRECT_LOOP，-9）自愈：
-                                // 站点风控/半失效 Cookie 会让它反复 307 跳回自己（zlib 实测报
-                                // `net::ERR_TOO_MANY_REDIRECTS`，页面永远打不开）。
-                                // 清掉本站 Cookie 与本地登录态（显然已不可用），再重新加载一次。
+                                // 站点风控票据失效时它会反复 307 跳回自己（zlib 实测），页面永远打不开。
+                                // 清掉这类一次性 Cookie 并重载一次（见下方说明）。
                                 if (error?.errorCode == android.webkit.WebViewClient.ERROR_REDIRECT_LOOP &&
                                     !redirectLoopFixed
                                 ) {
                                     redirectLoopFixed = true
-                                    val cm = CookieManager.getInstance()
-                                    expireCookies(cm, spec.cookieUrls, collectCookies(cm, spec.cookieUrls))
-                                    spec.logout()
-                                    cm.flush()
+                                    // 实测真因：残留的**无效风控 Cookie**（`__diamwall`）会让整站死循环。
+                                    // 只清这类一次性 Cookie 再重载即可恢复 —— **不动登录票据**，
+                                    // 免得为了一次加载失败就把用户白登出。
+                                    clearTransientCookies(cookieManager, (spec.cookieUrls + urls).distinct())
                                     Toast.makeText(
                                         ctx,
-                                        "登录状态异常（站点风控），已自动清理，正在重试…",
+                                        "站点风控票据异常，已自动清理，正在重试…",
                                         Toast.LENGTH_SHORT
                                     ).show()
                                     urls.getOrNull(urlIndex)?.let { view?.loadUrl(it) }
@@ -1004,6 +1018,11 @@ private fun WebViewLoginScreen(
                             }
                         }
 
+                        // ★ 打开登录页前先清掉残留的风控 / 一次性 Cookie：
+                        // 实测（真浏览器复现）残留一个**无效的 `__diamwall`** 就会让 zlib 整站
+                        // （含 /login）稳定报 `net::ERR_TOO_MANY_REDIRECTS`，清掉即恢复；
+                        // 服务端会在下一次响应里重新下发有效票据，所以清理是安全且必要的。
+                        clearTransientCookies(cookieManager, (spec.cookieUrls + urls).distinct())
                         loadUrl(startUrl)
                     }
                 },
