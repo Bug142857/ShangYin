@@ -112,6 +112,26 @@ fun AccountScreen(nav: NavHostController) {
     var zlibLoginKey by remember { mutableStateOf(0) }
     val isZlibLoggedIn = remember(zlibLoginKey) { com.shangyin.app.data.zlib.ZlibClient.isLoggedIn }
     var showZlibLogout by remember { mutableStateOf(false) }
+
+    // 其余三个账号同样做「服务端登录态校验」：null = 检测中，false = 已失效（本地却显示已登录）
+    var bikaSessionOk by remember(bikaLoginKey) { mutableStateOf<Boolean?>(null) }
+    var wygamerSessionOk by remember(wygamerLoginKey) { mutableStateOf<Boolean?>(null) }
+    var zlibSessionOk by remember(zlibLoginKey) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(bikaLoginKey) {
+        if (SettingsStore.bikaToken.isNotBlank()) {
+            bikaSessionOk = com.shangyin.app.data.bika.BikaClient.sessionOk()
+        }
+    }
+    LaunchedEffect(wygamerLoginKey) {
+        if (SettingsStore.isWygamerLoggedIn) {
+            wygamerSessionOk = com.shangyin.app.data.wygamer.WygamerClient.sessionOk()
+        }
+    }
+    LaunchedEffect(zlibLoginKey) {
+        if (com.shangyin.app.data.zlib.ZlibClient.isLoggedIn) {
+            zlibSessionOk = com.shangyin.app.data.zlib.ZlibClient.sessionOk()
+        }
+    }
     val zlibLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -179,14 +199,19 @@ fun AccountScreen(nav: NavHostController) {
                 icon = {
                     Icon(
                         Icons.Rounded.Person, contentDescription = null,
-                        tint = if (isBikaLoggedIn) MaterialTheme.colorScheme.primary
+                        tint = if (isBikaLoggedIn && bikaSessionOk != false) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline
                     )
                 },
                 title = "哔咔登录",
-                subtitle = if (isBikaLoggedIn) "已登录，可浏览本子漫画" else "未登录，登录后可在里世界浏览本子",
+                subtitle = when {
+                    !isBikaLoggedIn -> "未登录，登录后可在里世界浏览本子"
+                    bikaSessionOk == null -> "已登录，正在检测登录状态…"
+                    bikaSessionOk == false -> "登录已失效！点这里重新登录（否则本子页会一直报错）"
+                    else -> "已登录，可浏览本子漫画"
+                },
                 onClick = {
-                    if (isBikaLoggedIn) showBikaLogout = true
+                    if (isBikaLoggedIn && bikaSessionOk != false) showBikaLogout = true
                     else showBikaLogin = true
                 }
             )
@@ -196,15 +221,19 @@ fun AccountScreen(nav: NavHostController) {
                 icon = {
                     Icon(
                         Icons.Rounded.SportsEsports, contentDescription = null,
-                        tint = if (isWygamerLoggedIn) MaterialTheme.colorScheme.primary
+                        tint = if (isWygamerLoggedIn && wygamerSessionOk != false) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline
                     )
                 },
                 title = "无忧游戏库登录",
-                subtitle = if (isWygamerLoggedIn) "已登录，可查看资源下载链接"
-                else "未登录，登录后可查看部分资源下载链接",
+                subtitle = when {
+                    !isWygamerLoggedIn -> "未登录，登录后可查看部分资源下载链接"
+                    wygamerSessionOk == null -> "已登录，正在检测登录状态…"
+                    wygamerSessionOk == false -> "登录已失效！部分资源看不到下载链接，点这里重新登录"
+                    else -> "已登录，可查看资源下载链接"
+                },
                 onClick = {
-                    if (isWygamerLoggedIn) showWygamerLogout = true
+                    if (isWygamerLoggedIn && wygamerSessionOk != false) showWygamerLogout = true
                     else wygamerLauncher.launch(Intent(context, WygamerLoginActivity::class.java))
                 }
             )
@@ -214,15 +243,19 @@ fun AccountScreen(nav: NavHostController) {
                 icon = {
                     Icon(
                         Icons.Rounded.Book, contentDescription = null,
-                        tint = if (isZlibLoggedIn) MaterialTheme.colorScheme.primary
+                        tint = if (isZlibLoggedIn && zlibSessionOk != false) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outline
                     )
                 },
                 title = "Z-Library 登录",
-                subtitle = if (isZlibLoggedIn) "已登录，可搜索并下载电子书"
-                else "未登录，登录后才能下载电子书",
+                subtitle = when {
+                    !isZlibLoggedIn -> "未登录，登录后才能下载电子书"
+                    zlibSessionOk == null -> "已登录，正在检测登录状态…"
+                    zlibSessionOk == false -> "登录已失效！搜索/下载会失败，点这里重新登录"
+                    else -> "已登录，可搜索并下载电子书"
+                },
                 onClick = {
-                    if (isZlibLoggedIn) showZlibLogout = true
+                    if (isZlibLoggedIn && zlibSessionOk != false) showZlibLogout = true
                     else zlibLauncher.launch(Intent(context, ZlibLoginActivity::class.java))
                 }
             )

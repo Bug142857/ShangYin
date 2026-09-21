@@ -82,6 +82,33 @@ object WygamerClient {
         .followRedirects(true)
         .build()
 
+    /**
+     * 服务端校验登录态：WordPress 标准接口 `GET /wp-json/wp/v2/users/me`
+     * （实测匿名访问返回 401 `{"code":"rest_not_logged_in"}`，带有效登录 Cookie 返回 200 + 用户信息）。
+     *
+     * @return true = 会话有效；false = 未登录/已失效；null = 网络/被墙等无法判断（不提示过期，避免误报）
+     */
+    suspend fun sessionOk(): Boolean? = withContext(Dispatchers.IO) {
+        val cookie = SettingsStore.wygamerCookie
+        if (cookie.isBlank()) return@withContext false
+        val req = Request.Builder().url("$BASE/wp-json/wp/v2/users/me")
+            .header("User-Agent", UA)
+            .header("Accept", "application/json")
+            .header("Cookie", cookie)
+            .build()
+        try {
+            client.newCall(req).execute().use { resp ->
+                when {
+                    resp.isSuccessful -> true
+                    resp.code == 401 || resp.code == 403 -> false
+                    else -> null
+                }
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun newRequest(url: String): Request {
         val cookie = SettingsStore.wygamerCookie
         val b = Request.Builder().url(url)

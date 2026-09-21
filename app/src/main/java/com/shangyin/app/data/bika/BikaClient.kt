@@ -221,6 +221,26 @@ object BikaClient {
         data["token"]?.jsonPrimitive?.content ?: throw Exception("登录响应缺少 token")
     }
 
+    /**
+     * 服务端校验登录态（用于账号管理里识别「看起来已登录、其实 token 已失效」）。
+     * 用最小请求 `GET categories`：失效时服务端返回 `code=401` → [BikaAuthException]，并清掉本地 token。
+     *
+     * @return true = 有效；false = 已失效；null = 网络/被墙等无法判断（此时不提示过期，避免误报）
+     */
+    suspend fun sessionOk(): Boolean? {
+        val token = SettingsStore.bikaToken
+        if (token.isBlank()) return false
+        return try {
+            fetchCategories(token)
+            true
+        } catch (e: BikaAuthException) {
+            SettingsStore.clearBikaToken()
+            false
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     /** 分类列表（过滤 isWeb 网页分类，与 haka 一致；含分类封面图） */
     suspend fun fetchCategories(token: String): List<BikaCategory> = withContext(Dispatchers.IO) {
         val data = request("GET", "categories", token)
