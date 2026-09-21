@@ -285,7 +285,9 @@ fun SearchScreen(
                     if (searched) {
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "豆瓣搜索接口可能未收录该条目，可尝试更精确的名字（如剧场版用全名）",
+                            "豆瓣搜索接口可能未收录该条目，可尝试更精确的名字（如剧场版用全名）；" +
+                                "老片建议改用原名或港译名再搜一次（如 Hellraiser / 猛鬼追魂），" +
+                                "也可从同系列条目的「演职员」进影人页，在「作品」里找到再点进去",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.outlineVariant,
                             textAlign = TextAlign.Center

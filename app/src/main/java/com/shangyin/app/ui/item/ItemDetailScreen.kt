@@ -646,9 +646,13 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
  */
 private fun looksGarbled(s: String?): Boolean {
     if (s.isNullOrBlank()) return false
-    return s.contains('<') || s.contains('>') ||
+    if (s.contains('<') || s.contains('>') ||
         s.contains("类型:") || s.contains("类型：") || s.contains("制片国家") ||
         s.contains("上映日期:") || s.contains("上映日期：") || s.contains("片长:")
+    ) return true
+    // 整页文本兜底的产物（游戏页曾被这样污染）：导航/页脚文字被当成「基本信息」
+    val junk = listOf("下载豆瓣客户端", "话题广场", "豆瓣社区", "浏览发现", "豆品", "登录 / 注册")
+    return junk.count { s.contains(it) } >= 2
 }
 
 /** 顶栏收藏状态：已在任意清单 → 对号（点按提示所在清单）；未收藏 → 加号打开添加对话框 */

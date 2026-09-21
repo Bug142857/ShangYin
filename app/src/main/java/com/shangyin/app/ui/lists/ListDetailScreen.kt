@@ -89,6 +89,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import com.shangyin.app.data.comic.ComicStatus
+import com.shangyin.app.data.comic.ComicStatusStore
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
@@ -887,6 +889,14 @@ private fun GridItemCard(
     isEditMode: Boolean = false,
     onRemove: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    // 漫画/本子：封面右上角显示「更新 N 话 / 已完结」（来自各自站点，带内存+磁盘缓存）
+    var comicStatus by remember(item.doubanId) { mutableStateOf<ComicStatus?>(null) }
+    if (item.category == "漫画" || item.category == "本子") {
+        LaunchedEffect(item.doubanId) {
+            comicStatus = ComicStatusStore.status(context, item.category, item.doubanId)
+        }
+    }
     Box(modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
             CoverImage(
@@ -904,7 +914,7 @@ private fun GridItemCard(
             )
             DoubanRating(item.doubanRating)
         }
-        // 编辑模式下右上角 × 删除按钮
+        // 编辑模式下右上角 × 删除按钮（优先于更新角标）
         if (isEditMode) {
             Box(
                 modifier = Modifier
@@ -923,6 +933,22 @@ private fun GridItemCard(
                     modifier = Modifier.size(16.dp)
                 )
             }
+        } else {
+            comicStatus?.let { st ->
+                Text(
+                    st.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .background(
+                            if (st.finished) Color(0xFF43A047).copy(alpha = 0.9f)
+                            else Color(0xFFE53935).copy(alpha = 0.9f),
+                            RoundedCornerShape(bottomStart = 8.dp, topEnd = 8.dp)
+                        )
+                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                )
+            }
         }
     }
 }
@@ -935,6 +961,14 @@ private fun ItemRowInList(
     isEditMode: Boolean = false,
     onRemove: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    // 漫画/本子：行内显示「更新 N 话 / 已完结」（封面只有 40dp，放角标看不清）
+    var comicStatus by remember(item.doubanId) { mutableStateOf<ComicStatus?>(null) }
+    if (item.category == "漫画" || item.category == "本子") {
+        LaunchedEffect(item.doubanId) {
+            comicStatus = ComicStatusStore.status(context, item.category, item.doubanId)
+        }
+    }
     Box(modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
@@ -956,12 +990,14 @@ private fun ItemRowInList(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         DoubanRating(item.doubanRating)
-                        if (item.status.isNotBlank()) {
+                        val statusLabel = item.status.ifBlank { comicStatus?.label.orEmpty() }
+                        if (statusLabel.isNotBlank()) {
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                item.status,
+                                statusLabel,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (comicStatus?.finished == true) Color(0xFF43A047)
+                                else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }

@@ -329,7 +329,7 @@ object DoubanClient {
         }
         val wantMovie = category == Category.MOVIE
         val wantTv = category == Category.TV
-        return items.mapNotNull { el ->
+        val parsed = items.mapNotNull { el ->
             val it = runCatching { el.jsonObject }.getOrNull() ?: return@mapNotNull null
             val id = (it["id"]?.jsonPrimitive?.intOrNull ?: it["id"]?.jsonPrimitive?.contentOrNull)?.toString()
                 ?: return@mapNotNull null
@@ -371,6 +371,53 @@ object DoubanClient {
                         else -> "https://movie.douban.com/subject/$id/"
                     }
                 },
+                rating = rating
+            )
+        }
+        // 影视：再合并「网页搜索页」的结果，提升召回。
+        // 实测两个入口结果集不同（subject_search 匿名只有 11 条，网页搜索对同一关键词有 20 条，
+        // 含更多老片/幕后条目），合并后按 id 去重；补充来源失败不影响主结果。
+        if (category == Category.MOVIE || category == Category.TV) {
+            val extra = runCatching { searchWebSupplement(category, query) }.getOrDefault(emptyList())
+            return (parsed + extra).distinctBy { it.doubanId }
+        }
+        return parsed
+    }
+
+    /**
+     * 影视补充来源：解析 `www.douban.com/search?cat=1002&q=` 的结果列表
+     * （与 [searchGameWeb] 同一套 link2 跳转结构，结果标题带 `[电影]`/`[电视剧]` 标记，
+     * 末尾是年份，评分形如 `5.5 (9480人评价)`）。
+     */
+    private fun searchWebSupplement(category: Category, query: String): List<DoubanResult> {
+        val cat = if (category == Category.BOOK) "1001" else "1002"
+        val url = "https://www.douban.com/search?cat=$cat&q=${URLEncoder.encode(query, "UTF-8")}"
+        val html = httpGetMobile(url, "https://www.douban.com/")
+        detectBlockPageAndThrow(html)
+        val doc = Jsoup.parse(html, url)
+        return doc.select("div.search-result div.result").mapNotNull { el ->
+            val link = el.selectFirst("h3 a") ?: el.selectFirst("a[title]") ?: return@mapNotNull null
+            val href = link.attr("abs:href").replace("&amp;", "&")
+            val decoded = runCatching { java.net.URLDecoder.decode(href, "UTF-8") }.getOrDefault(href)
+            val id = Regex("""subject/(\d+)""").find(decoded)?.groupValues?.get(1)
+                ?: Regex("""sid:\s*(\d+)""").find(el.html())?.groupValues?.get(1)
+                ?: return@mapNotNull null
+            val titleText = el.selectFirst("h3")?.text()?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+            val isTv = titleText.contains("[电视剧]")
+            if (category == Category.MOVIE && isTv) return@mapNotNull null
+            if (category == Category.TV && !isTv) return@mapNotNull null
+            val titleRaw = link.text().trim().ifBlank { titleText.substringAfter(']').trim() }
+            val year = Regex("""\b(19\d{2}|20\d{2})\b""").findAll(titleText).lastOrNull()?.value.orEmpty()
+            val rating = Regex("""(\d\.\d)\s*\(\d+人评价\)""").find(titleText)?.groupValues?.get(1)?.toFloatOrNull()
+                ?: el.selectFirst("span.rating_nums")?.text()?.trim()?.toFloatOrNull()
+            DoubanResult(
+                category = if (isTv) Category.TV else Category.MOVIE,
+                doubanId = id,
+                title = titleRaw.replace("($year)", "").trim(),
+                subTitle = titleText,
+                year = year,
+                coverUrl = el.selectFirst(".pic img")?.attr("src")?.trim()?.takeIf { it.isNotBlank() },
+                url = "https://movie.douban.com/subject/$id/",
                 rating = rating
             )
         }
@@ -1287,6 +1334,11 @@ object DoubanClient {
             runCatching { fetchDesktopSubject(doubanId) }
                 .getOrNull()?.takeIf { !it.isEmpty }?.let { return it }
         }
+        // 游戏走桌面游戏页（`dl.thing-attr` 结构），拿到结构化的 类型/平台/发行日期/开发商
+        if (category == Category.GAME) {
+            runCatching { fetchDesktopGame(doubanId) }
+                .getOrNull()?.takeIf { !it.isEmpty }?.let { return it }
+        }
         val url = mobileUrl(category, doubanId) ?: throw IOException("no mobile url")
         val html = httpGetMobile(url, referer = url)
         val doc = Jsoup.parse(html, url)
@@ -1299,9 +1351,11 @@ object DoubanClient {
         val desc = doc.selectFirst("meta[itemprop=description]")?.attr("content")?.trim()
             ?.takeIf { it.isNotBlank() }
         val summary = cleanText(desc?.substringAfter("简介：")?.trim() ?: desc)
+        // ⚠️ 这里**不能**再用 `doc.body().text()` 兜底：游戏页（www.douban.com/game/{id}/）没有
+        // sub-meta / link-report，一兜底就把导航、页脚整段文字当成「基本信息」显示出来
+        // （用户看到的「登录 / 注册 下载豆瓣客户端 …」就是这么来的）。取不到就不显示。
         val baseInfo = doc.selectFirst("div.sub-meta")?.text()?.trim()?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("#link-report")?.selectFirst("span[property=summary]")?.text()?.trim()
-            ?: doc.body()?.text()?.substring(0, 500)?.trim()
 
         // 从网页提取发行/出版日期：优先 datePublished meta，其次正则
         val metaDate = doc.selectFirst("meta[itemprop=datePublished]")?.attr("content")
@@ -1352,6 +1406,62 @@ object DoubanClient {
             info = buildInfoLine { pairs[it] },
             directors = list("导演", 3),
             casts = list("主演", 8),
+            genres = pairs["类型"]?.replace(" / ", "/")
+        )
+    }
+
+    /**
+     * 桌面游戏条目页解析（实测 2026-09-21）：
+     * 页面**没有** `#info`，属性区是 `dl.thing-attr`（`dt` 标签 + `dd` 取值）：
+     * `类型: 游戏 / 益智`、`平台: PC / Mac / …`、`开发商: …`、`预计上市时间: …`、`发行日期: …`；
+     * 标题在 `#content h1`、评分 `.rating_self strong.rating_num`、封面 `.item-subject-info .pic img`、
+     * 简介在 `#link-report p`。旧实现没做这一层，兜底成整页文本 → 详情页「基本信息」全是导航/页脚垃圾。
+     */
+    private fun fetchDesktopGame(doubanId: String): DoubanDetail {
+        val url = "https://www.douban.com/game/$doubanId/"
+        val html = httpGetMobile(url, referer = "https://www.douban.com/")
+        detectBlockPageAndThrow(html)
+        val doc = Jsoup.parse(html, url)
+        val title = doc.selectFirst("#content h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+        val cover = doc.selectFirst(".item-subject-info .pic img")?.attr("src")?.trim()
+            ?.takeIf { it.isNotBlank() }
+        val rating = doc.selectFirst(".rating_wrap .rating_self strong.rating_num")?.text()?.trim()
+            ?.toFloatOrNull()
+            ?: doc.selectFirst("meta[itemprop=ratingValue]")?.attr("content")?.trim()?.toFloatOrNull()
+        val summary = cleanText(
+            doc.select("#link-report p").joinToString("\n") { it.text() }.ifBlank { null }
+                ?: doc.selectFirst("meta[itemprop=description]")?.attr("content")
+        )
+
+        val pairs = LinkedHashMap<String, String>()
+        doc.selectFirst("dl.thing-attr")?.let { dl ->
+            var key: String? = null
+            dl.children().forEach { el ->
+                when (el.tagName()) {
+                    "dt" -> key = el.text().trim().trimEnd(':', '：').trim()
+                    "dd" -> {
+                        val k = key
+                        val v = el.text().replace(Regex("\\s+"), " ").trim()
+                        if (!k.isNullOrBlank() && v.isNotBlank() && k !in pairs) pairs[k] = v
+                        key = null
+                    }
+                }
+            }
+        }
+        val platforms = pairs["平台"]
+            ?.split("/")?.map { it.trim() }?.filter { it.isNotBlank() }?.take(8)?.joinToString("/")
+        val info = listOfNotNull(
+            pairs["发行日期"]?.takeIf { it.isNotBlank() } ?: pairs["预计上市时间"],
+            pairs["类型"],
+            platforms,
+            pairs["开发商"]
+        ).joinToString(" / ").ifBlank { null }
+        return DoubanDetail(
+            title = title,
+            rating = rating,
+            coverUrl = cover,
+            summary = summary,
+            info = info,
             genres = pairs["类型"]?.replace(" / ", "/")
         )
     }
