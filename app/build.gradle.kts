@@ -14,8 +14,12 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 141
-        versionName = "2.23.22"
+        // 版本号规则（2026-09-21 用户指定）：versionName = "0.00NN"，NN = 累计推送发布次数
+        // （历史 tag/Release 共 51 个 → 本次是第 52 次）。
+        // ⚠️ versionCode 必须单调递增，不能用 52（比旧值 141 小会导致覆盖安装失败），
+        // 所以固定取 1000 + NN，既与推送次数一一对应又保持递增。
+        versionCode = 1052
+        versionName = "0.0052"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
