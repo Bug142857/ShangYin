@@ -107,8 +107,8 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
             if (resp != null) {
                 if (categories.isEmpty()) categories = resp.categories
                 // 换分类后的第一页直接替换，否则追加（去重）
-                items = if (target == 1) resp.list
-                else (items + resp.list).distinctBy { it.vod_id }
+                // 列表 key = vod_id：翻页可能回带同一部 → 两种分支都去重，否则重复 key 崩列表
+                items = (if (target == 1) resp.list else items + resp.list).distinctBy { it.vod_id }
                 total = resp.total
                 page = target
                 failed = false
@@ -145,10 +145,10 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
         categories.map { cat ->
             launch {
                 sem.withPermit {
-                    val t = runCatching {
-                        VodClient.fetchList(src, "", 1, cat.type_id)?.total ?: 0
-                    }.getOrDefault(0)
-                    catCounts = catCounts + (cat.type_id to t)
+                    // 探测失败（网络/被墙）返回 null：**不能**当成 0，否则分类会被静默从下拉里抹掉
+                    val t = runCatching { VodClient.fetchList(src, "", 1, cat.type_id)?.total }
+                        .getOrNull()
+                    if (t != null) catCounts = catCounts + (cat.type_id to t)
                 }
             }
         }.joinAll()

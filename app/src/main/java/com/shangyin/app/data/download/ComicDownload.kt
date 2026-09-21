@@ -187,7 +187,8 @@ object ComicDownloadManager {
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val jobs = mutableMapOf<String, Job>()
+    // ⚠️ 并发 Map：enqueue 在 UI 线程写、协程结束在 IO 线程删，普通 HashMap 会有竞态
+    private val jobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
     private val _library = MutableStateFlow<List<DownloadedComic>>(emptyList())
     val library: StateFlow<List<DownloadedComic>> = _library.asStateFlow()

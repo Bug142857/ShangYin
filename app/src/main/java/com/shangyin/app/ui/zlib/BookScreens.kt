@@ -124,7 +124,8 @@ fun BookHomeScreen(nav: NavHostController) {
         loadJob = scope.launch {
             runCatching { ZlibClient.search(keyword, startPage) }
                 .onSuccess { r ->
-                    items = if (reset) r.books else items + r.books
+                    // 分页边界可能重复返回同一本书（界面用 book.key 当列表 key，重复会崩）
+                    items = (if (reset) r.books else items + r.books).distinctBy { it.key }
                     totalPages = r.totalPages
                     page = startPage + 1
                     cacheJson = bookJson.encodeToString(BookSearchCache(keyword, page, totalPages, items))

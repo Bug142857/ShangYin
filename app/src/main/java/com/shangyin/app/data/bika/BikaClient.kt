@@ -258,7 +258,7 @@ object BikaClient {
                 )
             }.orEmpty()
             BikaCategory(id = o["_id"]?.jsonPrimitive?.contentOrNull, title = title, thumbUrl = thumbUrl)
-        }.filter { it.title.isNotBlank() }
+        }.filter { it.title.isNotBlank() }.distinctBy { it.id ?: it.title }   // 界面用 id/title 当列表 key，需唯一
     }
 
     /** 分类/全部漫画列表：GET comics?page&c&sort（c=分类标题，空=全部） */
@@ -364,7 +364,8 @@ object BikaClient {
             tags = o["tags"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
             epsCount = o["epsCount"]?.jsonPrimitive?.intOrNull ?: 0,
             pagesCount = o["pagesCount"]?.jsonPrimitive?.intOrNull ?: 0,
-            description = o["description"]?.jsonPrimitive?.contentOrNull ?: "",
+            description = o["description"]?.jsonPrimitive?.contentOrNull
+                        ?.let { d -> if (d.isBlank()) d else org.jsoup.Jsoup.parse(d).text() } ?: "",
             chineseTeam = o["chineseTeam"]?.jsonPrimitive?.contentOrNull ?: "",
             updatedAt = o["updated_at"]?.jsonPrimitive?.contentOrNull ?: ""
         )

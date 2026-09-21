@@ -36,8 +36,11 @@ object ReadProgressStore {
     fun record(context: Context, source: String, id: String, chapterKey: String) {
         ensure(context)
         val key = "$source/$id"
-        if (_map.value[key] == chapterKey) return
-        _map.value = _map.value + (key to chapterKey)
+        // 「读 → 改 → 写」必须串行：多章节/多页面同时上报时，并发写 StateFlow 会互相覆盖（丢进度）
+        synchronized(this) {
+            if (_map.value[key] == chapterKey) return
+            _map.value = _map.value + (key to chapterKey)
+        }
         context.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
             .edit().putString(key, chapterKey).apply()
     }

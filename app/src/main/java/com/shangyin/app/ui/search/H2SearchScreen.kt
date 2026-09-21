@@ -320,7 +320,8 @@ private fun ComicListPage(
                 }
             }.onSuccess { resp: BikaComicsPage ->
                 if (my == reqId.intValue) {
-                    val merged = if (pg == 1) resp.docs else (items + resp.docs).distinctBy { it.id }
+                    // 列表 key = 漫画 id：翻页可能回带同一部 → 两种分支都去重，否则重复 key 崩列表
+                    val merged = (if (pg == 1) resp.docs else items + resp.docs).distinctBy { it.id }
                     items = merged
                     page = resp.page
                     pages = resp.pages

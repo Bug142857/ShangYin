@@ -144,6 +144,7 @@ private fun statusLabel(s: String?) = when (s) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ComicHomeScreen(nav: NavHostController) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -203,7 +204,9 @@ fun ComicHomeScreen(nav: NavHostController) {
                     out
                 }
             }.onSuccess { list ->
-                items = if (reset) list else items + list
+                // 列表 key = 漫画 id：站点按更新时间排序不稳定，翻页可能回带同一部 → 必须去重，
+                // 否则 LazyGrid 出现重复 key 直接崩（Key ... was already used）
+                items = (if (reset) list else items + list).distinctBy { it.id }
                 offset = next
                 cacheJson = komiicJson.encodeToString(
                     ComicHomeCache(tab, catId, status, keyword, offset, items)
@@ -219,7 +222,12 @@ fun ComicHomeScreen(nav: NavHostController) {
     // 分类表 + 会话缓存恢复（仅一次）
     LaunchedEffect(Unit) {
         if (categories.isEmpty()) {
-            runCatching { KomiicClient.allCategory() }.onSuccess { categories = it }
+            // 失败要说出来：以前静默吞掉，界面只剩「全部」一个 chip，用户会以为站点没有分类
+            runCatching { KomiicClient.allCategory() }
+                .onSuccess { categories = it }
+                .onFailure {
+                    Toast.makeText(context, "分类加载失败（网络或被墙），稍后重进本页可重试", Toast.LENGTH_SHORT).show()
+                }
         }
         if (cacheJson != null) {
             runCatching { komiicJson.decodeFromString<ComicHomeCache>(cacheJson!!) }.onSuccess { c ->
@@ -227,7 +235,7 @@ fun ComicHomeScreen(nav: NavHostController) {
                 loadJob?.cancel()
                 loading = false
                 tab = c.tab; catId = c.catId; status = c.status; keyword = c.keyword
-                input = c.keyword; offset = c.nextOffset; items = c.items
+                input = c.keyword; offset = c.nextOffset; items = c.items.distinctBy { it.id }
                 loadedKey = "$tab|$catId|$status|$keyword"
             }
         }

@@ -117,7 +117,11 @@ class App : Application(), ImageLoaderFactory {
         lateinit var instance: App
             private set
 
-        /** WebView 真实默认 UA（启动时捕获）；站点登录页与接口请求共用，保证 Cookie 与 UA 一致 */
+        /**
+         * WebView 真实默认 UA（启动时捕获）；站点登录页与接口请求共用，保证 Cookie 与 UA 一致。
+         * @Volatile：主线程写、OkHttp/WebView 的 IO 线程读，不加会读到旧值（表现为随机「未捕获」）
+         */
+        @Volatile
         var webViewUa: String = ""
 
         /** 清理 Coil 图片缓存 + OkHttp HTTP 缓存 */

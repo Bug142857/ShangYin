@@ -406,6 +406,9 @@ class WygamerLoginActivity : ComponentActivity() {
                         hint = "登录后可查看部分需要登录才能显示的资源下载链接。\n登录信息仅保存在本机。",
                         loginDetect = { c -> c.contains("wordpress_logged_in", true) },
                         isLoggedIn = { SettingsStore.isWygamerLoggedIn },
+                        // 服务端说了算：Cookie 里有 wordpress_logged_in ≠ 会话有效（过期 Cookie 会让
+                        // 界面显示已登录、下载链接却拿不到），必须问 /wp-json/wp/v2/users/me 才自动关页
+                        verifyLogin = { WygamerClient.sessionOk() == true },
                         save = { SettingsStore.wygamerCookie = it },
                         logout = { SettingsStore.clearWygamerLogin() },
                         preCookies = listOf("showed_system_notice" to "showed"),
@@ -529,8 +532,16 @@ private fun hostOf(url: String): String =
 
 @Composable
 private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess: () -> Unit) {
-    // 0 = 显示"已登录"页；1 = 显示 WebView（登录 / 切换账号）
-    var mode by remember { mutableIntStateOf(if (spec.isLoggedIn()) 0 else 1) }
+    // 0 = 显示"已登录"页；1 = 显示 WebView（登录 / 切换账号）；2 = 正在向服务端校验登录态
+    var mode by remember {
+        mutableIntStateOf(
+            when {
+                !spec.isLoggedIn() -> 1        // 本地没凭据 → 直接进登录页
+                spec.verifyLogin == null -> 0  // 没有服务端校验手段，只能信本地
+                else -> 2                      // 本地有凭据，但本地凭据只是启发式
+            }
+        )
+    }
     var confirmSwitch by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
 
@@ -543,7 +554,31 @@ private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess:
         cm.flush()
     }
 
-    if (mode == 0) {
+    // ⚠️ 本地 Cookie 存在 ≠ 会话有效：站点让旧会话失效后，本页会一直停在"已登录"，
+    // 用户只能「退出登录」、没有重新登录的机会，而搜索/下载却全按匿名走。
+    // 因此有 verifyLogin 的站点一律以服务端结论为准：无效就直接进登录页让用户重登。
+    // 注意：这里**不**主动清本地 Cookie —— 网络抖动同样会验失败，直接清会误删有效登录。
+    LaunchedEffect(Unit) {
+        if (mode != 2) return@LaunchedEffect
+        val ok = runCatching { spec.verifyLogin?.invoke() ?: false }.getOrDefault(false)
+        mode = if (ok) 0 else 1
+    }
+
+    if (mode == 2) {
+        // 校验中：先转圈，避免"已登录"页闪一下再跳登录页
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator()
+            Text(
+                "正在校验登录状态…",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 12.dp)
+            )
+        }
+    } else if (mode == 0) {
         AlreadyLoggedInScreen(
             title = spec.title,
             onBack = onBack,

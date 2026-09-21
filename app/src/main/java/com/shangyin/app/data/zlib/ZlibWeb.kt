@@ -33,13 +33,25 @@ import kotlin.coroutines.resume
  */
 object ZlibWeb {
 
+    // 这些字段由 UI 线程（attach/reset）与 IO 协程（evalFetch/openDownloadPage）共同读写，
+    // 必须 @Volatile：否则协程可能读到旧 WebView/旧 host，表现为「明明附着却报未附着」
+    @Volatile
     private var webView: WebView? = null
+
+    @Volatile
     private var loadedHost: String? = null
+
+    @Volatile
     private var pageReady = CompletableDeferred<Unit>()
 
     /** 站点把文件地址交给 WebView（DownloadListener）时用它把结果送回 openDownloadPage */
+    @Volatile
     private var pendingFile = CompletableDeferred<String>()
+
+    @Volatile
     private var lastFileName: String? = null
+
+    @Volatile
     private var lastFileMime: String? = null
 
     val attached: Boolean get() = webView != null

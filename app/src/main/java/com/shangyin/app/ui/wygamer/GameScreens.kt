@@ -147,7 +147,8 @@ fun GameHomeScreen(nav: NavHostController) {
                     else -> WygamerClient.home(startPage)
                 }
             }.onSuccess { list ->
-                items = if (reset) list else items + list
+                // 列表 key = 游戏 id：翻页可能回带同一篇 → 去重，否则重复 key 崩 LazyGrid
+                items = (if (reset) list else items + list).distinctBy { it.id }
                 page = startPage + 1
                 cacheJson = gameJson.encodeToString(GameHomeCache(catUrl, keyword, page, items))
             }.onFailure { e ->
@@ -168,7 +169,7 @@ fun GameHomeScreen(nav: NavHostController) {
                 loadJob?.cancel()
                 loading = false
                 catUrl = c.catUrl; keyword = c.keyword; input = c.keyword
-                page = c.nextPage; items = c.items
+                page = c.nextPage; items = c.items.distinctBy { it.id }
                 loadedKey = "${c.catUrl}|${c.keyword}"
             }
         }

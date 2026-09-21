@@ -105,7 +105,11 @@ fun VodSearchSheet(
                             .map { it to VodClient.matchScore(it.vod_name, kw, it.vod_year, year) }
                             .filter { it.second >= 2 }
                             .sortedByDescending { it.second }
-                        results.addAll(scored.map { ResRow(src, it.first, it.second) })
+                        // 行 key = 源id_影片id：同一源内站点可能重复返回同一部 → 去重防重复 key 崩列表
+                        results.addAll(
+                            scored.distinctBy { it.first.vod_id }
+                                .map { ResRow(src, it.first, it.second) }
+                        )
                         pendingCount--
                     }
                 }
@@ -251,7 +255,7 @@ fun VodSearchSheet(
             } else if (results.isEmpty() && !searching && !noSources) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(
-                        "没有找到片源\n换个关键词试试，或去片源管理添加更多源",
+                        "没有找到片源\n可能是这个关键词真的没匹配，也可能是线路/网络问题（被墙、源已失效）；\n试试换关键词，或到片源管理里测试/更换线路后再搜",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

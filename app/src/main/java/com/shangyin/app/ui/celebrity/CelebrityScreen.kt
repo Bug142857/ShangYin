@@ -129,7 +129,8 @@ fun CelebrityScreen(
 
     // 相关照片
     LaunchedEffect(celebrityId) {
-        photos = DoubanClient.fetchCelebrityPhotos(celebrityId)
+        // 界面用 "cp{id}" 当列表 key，站点重复给同一张照片会崩，先去重
+        photos = DoubanClient.fetchCelebrityPhotos(celebrityId).distinctBy { it.id }
     }
 
     // 作品列表（数据源按来源类别分支）：

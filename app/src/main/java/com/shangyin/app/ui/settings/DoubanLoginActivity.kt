@@ -25,11 +25,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -41,6 +44,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.shangyin.app.data.douban.DoubanClient
 import com.shangyin.app.ui.settings.SettingsStore.isDoubanLoggedIn
 import com.shangyin.app.ui.theme.ShangYinTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 豆瓣登录 Activity：内嵌 WebView 加载豆瓣官方登录页
@@ -94,12 +99,38 @@ private fun DoubanLoginContent(
     onBack: () -> Unit,
     onLoginSuccess: () -> Unit
 ) {
-    // 已登录 → 显示已登录界面；未登录 → WebView
-    var alreadyLoggedIn by remember { mutableStateOf(isDoubanLoggedIn) }
+    // 0 = 正在校验登录态；1 = 显示"已登录"页；2 = 显示 WebView（登录 / 换账号）
+    // ⚠️ 本地 cookie 只是启发式（含 dbcl 不等于会话有效）：过期后本页会一直显示"已登录"，
+    // 用户没有输入账号的机会，同时搜索按匿名走（老片整批搜不到）。所以入口必须问服务端。
+    var state by remember { mutableIntStateOf(if (isDoubanLoggedIn) 0 else 2) }
 
-    if (alreadyLoggedIn) {
-        AlreadyLoggedInScreen(
+    LaunchedEffect(Unit) {
+        if (state != 0) return@LaunchedEffect
+        val ok = withContext(Dispatchers.IO) {
+            runCatching { DoubanClient.sessionOkBlocking() }.getOrDefault(false)
+        }
+        // 不主动清本地 cookie：网络抖动同样会验失败，直接清会误删有效登录
+        state = if (ok) 1 else 2
+    }
+
+    when (state) {
+        0 -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+
+        1 -> AlreadyLoggedInScreen(
             onBack = onBack,
+            onRelogin = {
+                // 换账号必须先清掉登录态与 WebView cookie：否则登录页带着旧 Cookie，
+                // 站点直接判定已登录，用户根本没有输入新账号的机会
+                SettingsStore.clearDoubanLogin()
+                DoubanClient.onCookieChanged()
+                CookieManager.getInstance().apply {
+                    removeAllCookies(null)
+                    flush()
+                }
+                state = 2
+            },
             onLogout = {
                 SettingsStore.clearDoubanLogin()
                 DoubanClient.onCookieChanged()
@@ -108,11 +139,11 @@ private fun DoubanLoginContent(
                     removeAllCookies(null)
                     flush()
                 }
-                alreadyLoggedIn = false
+                state = 2
             }
         )
-    } else {
-        WebViewLoginScreen(
+
+        else -> WebViewLoginScreen(
             onBack = onBack,
             onLoginSuccess = onLoginSuccess
         )
@@ -123,6 +154,7 @@ private fun DoubanLoginContent(
 @Composable
 private fun AlreadyLoggedInScreen(
     onBack: () -> Unit,
+    onRelogin: () -> Unit,
     onLogout: () -> Unit
 ) {
     Scaffold(
@@ -141,13 +173,17 @@ private fun AlreadyLoggedInScreen(
             modifier = Modifier.fillMaxSize().padding(pad).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("豆瓣已登录", style = MaterialTheme.typography.titleLarge)
+            Text("豆瓣已登录（已通过服务端校验）", style = MaterialTheme.typography.titleLarge)
             Text(
-                "搜索将使用登录态，结果更全",
+                "搜索将使用登录态，结果更全。\n" +
+                    "若发现搜索结果变少（老片整批消失），点「切换账号 / 重新登录」重新登录即可。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.outline
             )
-            Button(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onRelogin, modifier = Modifier.fillMaxWidth()) {
+                Text("切换账号 / 重新登录")
+            }
+            OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
                 Text("退出登录")
             }
         }
@@ -258,7 +294,13 @@ private fun WebViewLoginScreen(
                                         val ok = DoubanClient.saveCookieString(merged)
                                         if (ok) {
                                             cookieManager.flush()
-                                            onLoginSuccess()
+                                            // 服务端说了算：Cookie 里含 dbcl/ck ≠ 会话有效
+                                            // （过期 Cookie 会让界面显示已登录、搜索却变匿名 → 老片整批搜不到），
+                                            // 校验通过才自动关页，否则留在登录页让用户真正登录
+                                            Thread {
+                                                val valid = runCatching { DoubanClient.sessionOkBlocking() }.getOrDefault(false)
+                                                if (valid) view?.post { onLoginSuccess() }
+                                            }.start()
                                         }
                                     }
                                 }

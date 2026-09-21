@@ -148,7 +148,8 @@ fun VodSourceScreen(nav: NavHostController) {
                 launch(Dispatchers.IO) {
                     sem.withPermit {
                         applyResult(VodClient.testSource(src))
-                        testDone++
+                        // 与 applyResult 同一把锁：多协程并发时 testDone++ 是读改写，不加锁会丢计数
+                        synchronized(testLock) { testDone++ }
                     }
                 }
             }.joinAll()
