@@ -393,8 +393,12 @@ private const val LIVE_PROBE_JS = """
 /** 页面加载超时（毫秒）：超时后停止转圈并给出提示，避免一直白屏转圈干等 */
 private const val LOAD_TIMEOUT_MS = 25_000L
 
-/** 登录态校验超时（毫秒）：通道卡住时按"测不出来"处理，落到登录页而不是一直转圈 */
-private const val VERIFY_TIMEOUT_MS = 8_000L
+/**
+ * 登录态校验超时（毫秒）：通道卡住时按"测不出来"处理，落到登录页而不是一直转圈。
+ * 给得比较宽是因为 zlib 要先跑完反爬挑战（首次约 7 秒）+ 疑似失败还要再确认一次；
+ * 时间给不够会误判成"进登录页"，用户会以为登录态丢了。
+ */
+private const val VERIFY_TIMEOUT_MS = 25_000L
 
 /** 无忧游戏库登录（直达站点独立登录页，避免首页弹窗遮罩） */
 class WygamerLoginActivity : ComponentActivity() {
@@ -600,7 +604,7 @@ private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess:
         ) {
             CircularProgressIndicator()
             Text(
-                "正在校验登录状态…",
+                "正在校验登录状态…（首次需等站点反爬验证，可能几秒）",
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 12.dp)
             )

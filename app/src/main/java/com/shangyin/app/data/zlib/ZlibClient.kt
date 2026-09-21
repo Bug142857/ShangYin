@@ -2,6 +2,7 @@ package com.shangyin.app.data.zlib
 
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -202,26 +203,44 @@ object ZlibClient {
      * 所以登录页的「自动判定成功」与搜索的报错文案都以这个结果为准，
      * 否则会出现「App 一直显示已登录、接口却当成匿名请求」的死结。
      *
-     * @return true = 有效；false = 服务端明确说未登录/已失效；
-     *         **null = 通道不可用或拿到的是挑战页/HTML，无法判断**
-     *         （⚠️ 不能把"取不到"当成"已过期"，否则反爬挑战一抖动就骗用户重新登录）
+     * ⚠️⚠️ 但**反过来把"没问出结果"当成"已失效"同样是错的**：
+     * App 刚启动时隐藏 WebView 的 DiamWall 反爬挑战还没跑完，此时问接口必然拿不到有效会话
+     * —— 实测用户现象：「登录成功后退出 App 再进来，账号页又让我重新登录；进登录页直接返回，
+     * 状态又正常了」（第二次问时页面已就绪）。所以这里：
+     *  1. **先预热**（把站点首页/挑战跑完再问）；
+     *  2. 疑似"未登录"时**再确认一次**，两次都明确未登录才算失效（false）；
+     *  3. 通道不可用 / 拿到 HTML 挑战页 → **null（无法判断）**，绝不误报失效。
+     *
+     * @return true = 有效；false = 服务端两次都明确说未登录；null = 测不出来（不当作过期）
      */
     suspend fun sessionOk(): Boolean? {
-        val text = try {
-            ZlibWeb.fetchText("/eapi/user/profile")
-        } catch (e: Exception) {
-            return null
+        // 预热：首次约 7 秒（站点首页），但只有这样判据才准；已加载过则是空操作
+        runCatching { ZlibWeb.warmup() }
+
+        var explicitFail = false
+        repeat(3) { attempt ->
+            val text = try {
+                ZlibWeb.fetchText("/eapi/user/profile")
+            } catch (e: Exception) {
+                null // 通道不可用/反爬未过：无法判断
+            }
+            when {
+                text.isNullOrBlank() -> Unit                       // 再试
+                isNotLoggedInText(text) -> explicitFail = true     // 疑似失效：留着，等下一次确认
+                text.trimStart().startsWith("{") -> return true     // 真正的接口 JSON → 有效
+                else -> Unit                                       // HTML 挑战页等 → 再试
+            }
+            if (attempt < 2) delay(1_500L)
         }
-        if (text.isBlank()) return null
-        if (text.contains("\"success\":0") ||
-            text.contains("登录到您的账户") ||
-            text.contains("log in to your account", true)
-        ) {
-            return false
-        }
-        // 只有真正的接口 JSON 才算"确认有效"；HTML（反爬挑战页等）一律算无法判断
-        return if (text.trimStart().startsWith("{")) true else null
+        // 只有"明确未登录"被复现过才判失效；否则一律无法判断（避免刚启动就误报要重新登录）
+        return if (explicitFail) false else null
     }
+
+    /** 「未登录」文案判据（与 [ZlibWeb] 内保持一致的实测口径） */
+    private fun isNotLoggedInText(text: String): Boolean =
+        text.contains("登录到您的账户") ||
+            text.contains("log in to your account", true) ||
+            (text.contains("\"success\":0") && text.contains("未找到请求的书"))
 
     /** 预热：进图书页时把站点首页先加载好（实测约 7.4 秒），省得用户搜完还要等页面加载 */
     suspend fun warmup() = ZlibWeb.warmup()

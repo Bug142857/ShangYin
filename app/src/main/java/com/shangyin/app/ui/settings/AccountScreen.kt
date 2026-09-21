@@ -66,7 +66,7 @@ import java.util.Locale
  * 不能一直停在"正在检测登录状态…"，更不能因此误报"登录已失效"。
  */
 private suspend fun checkSession(block: suspend () -> Boolean?): Boolean? =
-    runCatching { withTimeoutOrNull(8_000L) { block() } }.getOrNull()
+    runCatching { withTimeoutOrNull(25_000L) { block() } }.getOrNull()
 
 /**
  * 账号管理：云端同步（坚果云 WebDAV）、豆瓣登录、哔咔登录、

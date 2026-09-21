@@ -46,6 +46,7 @@ import com.shangyin.app.ui.settings.SettingsStore.isDoubanLoggedIn
 import com.shangyin.app.ui.theme.ShangYinTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 豆瓣登录 Activity：内嵌 WebView 加载豆瓣官方登录页
@@ -106,8 +107,11 @@ private fun DoubanLoginContent(
 
     LaunchedEffect(Unit) {
         if (state != 0) return@LaunchedEffect
-        val ok = withContext(Dispatchers.IO) {
-            runCatching { DoubanClient.sessionOkBlocking() }.getOrNull()
+        // 加超时：校验通道卡住时按"无法判断"处理（落到登录页），不能一直停在转圈
+        val ok = withTimeoutOrNull(15_000L) {
+            withContext(Dispatchers.IO) {
+                runCatching { DoubanClient.sessionOkBlocking() }.getOrNull()
+            }
         }
         // 不主动清本地 cookie：网络抖动同样会验失败，直接清会误删有效登录。
         // 只有服务端**确认有效（true）**才显示"已登录"页；false/null 都进登录页 ——
