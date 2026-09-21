@@ -29,6 +29,8 @@ class App : Application(), ImageLoaderFactory {
         webViewUa = runCatching { android.webkit.WebSettings.getDefaultUserAgent(this) }.getOrDefault("")
         // 关键配置恢复（豆瓣Cookie/坚果云/片源）——从公共目录备份文件补缺，防卸载重装丢配置
         runCatching { com.shangyin.app.data.ConfigBackup.restoreIfNeeded(this) }
+        // 把已保存的 Cookie 回填 WebView（保证「登录态能一直保持」，见方法注释）
+        runCatching { restoreCookiesToWebView() }
         // 首次使用播种内置默认采集源（在线观影）
         SettingsStore.ensureDefaultVodSourcesSeeded()
         // 配置变更（登录/云同步/片源等）时自动备份到公共目录
@@ -43,6 +45,51 @@ class App : Application(), ImageLoaderFactory {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching { Repo.pruneOrphans() }
         }
+    }
+
+    /**
+     * 把已保存的 Cookie 回填到 WebView 的 CookieManager。
+     *
+     * 为什么必须做：豆瓣 / 无忧游戏库 / Z-Library 的登录态**存在两处** ——
+     * SP（接口请求手动带 Cookie）和 CookieManager（WebView 里发请求时自动带）。
+     * 两者互不相关：卸载重装（SP 由 ConfigBackup 恢复）、清理 WebView 数据、换手机之后，
+     * SP 里还写着「已登录」，WebView 却以匿名身份加载站点 →
+     * 表现就是用户说的「明明登录着、却又要我登录一次」。
+     * 启动回填一次，登录态才能真正跟着 SP 保持住。
+     */
+    private fun restoreCookiesToWebView() {
+        val cm = runCatching { android.webkit.CookieManager.getInstance() }.getOrNull() ?: return
+        runCatching { cm.setAcceptCookie(true) }
+
+        fun put(url: String, cookie: String) {
+            if (cookie.isBlank()) return
+            cookie.split(";").forEach { part ->
+                val kv = part.trim()
+                if (kv.indexOf('=') > 0) runCatching { cm.setCookie(url, "$kv; path=/") }
+            }
+        }
+
+        // 豆瓣：搜索/详情/登录会互相跳子域，每个子域都要能带上
+        val douban = SettingsStore.doubanCookie
+        listOf(
+            "https://www.douban.com/",
+            "https://movie.douban.com/",
+            "https://m.douban.com/",
+            "https://book.douban.com/",
+            "https://accounts.douban.com/"
+        ).forEach { put(it, douban) }
+
+        // 无忧游戏库
+        put("https://www.wygamer.com/", SettingsStore.wygamerCookie)
+
+        // Z-Library：站点每日换域名，且登录票据是 host-only（换 host 就不发送），
+        // 所以当前线路 + zh. 变体都写一份
+        val host = SettingsStore.zlibHost
+        setOf(host, "zh.$host", host.removePrefix("zh."))
+            .filter { it.isNotBlank() }
+            .forEach { put("https://$it/", SettingsStore.zlibCookie) }
+
+        runCatching { cm.flush() }
     }
 
     /** 构建带磁盘缓存的共享 OkHttpClient，DoubanClient 和 Coil 共用 */

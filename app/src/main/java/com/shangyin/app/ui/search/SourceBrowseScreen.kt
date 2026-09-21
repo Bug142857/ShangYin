@@ -32,6 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowDropUp
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -55,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.vod.VodCategory
 import com.shangyin.app.data.vod.VodClient
@@ -71,8 +73,27 @@ import kotlinx.coroutines.sync.withPermit
 /**
  * 外网源资源库页（H1 浏览页点"查看全部"进入）：
  * 顶部分类 chips（接口 class 字段，按分类 ?t= 过滤）+ 3 列海报网格分页浏览，
- * 分类分开展示，点击影片直接播放。
+ * 分类分开展示，点击影片直接播放，右上角收藏番号到里世界清单。
  */
+/**
+ * 浏览页会话缓存：进播放页会让本组合被销毁重建（Compose 只保留 rememberSaveable），
+ * 用普通 remember 的话**返回后分类选择、已加载列表全丢**（表现："返回到选分类之前"）。
+ * 这里按 srcId 记一份，返回时原样恢复（与 H1SearchScreen 的 H1Cache 同一套思路）。
+ */
+private object BrowseCache {
+    var srcId: String? = null
+    var categories: List<VodCategory> = emptyList()
+    var catCounts: Map<Int, Int> = emptyMap()
+    var catExpanded = false
+    var selectedType: Int? = null
+
+    /** 已加载列表对应的分类（null 表示"全部"）——用它判断返回时要不要重新拉第一页 */
+    var loadedType: Int? = null
+    var items: List<VodItem> = emptyList()
+    var total = 0
+    var page = 0
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
@@ -80,15 +101,41 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     val scope = rememberCoroutineScope()
     val src = remember { SettingsStore.getVodSources().firstOrNull { it.id == srcId } }
 
-    var categories by remember { mutableStateOf<List<VodCategory>>(emptyList()) }
-    var selectedType by remember { mutableStateOf<Int?>(null) } // null=全部
-    var items by remember { mutableStateOf<List<VodItem>>(emptyList()) }
-    var total by remember { mutableIntStateOf(0) }
-    var page by remember { mutableIntStateOf(0) } // 已加载页码
+    // 同一次浏览会话（srcId 相同）→ 用缓存恢复；换了源则重新开始
+    val restored = remember(srcId) { BrowseCache.srcId == srcId }
+    var categories by remember { mutableStateOf(if (restored) BrowseCache.categories else emptyList()) }
+    var selectedType by remember { mutableStateOf(if (restored) BrowseCache.selectedType else null) }
+    var items by remember { mutableStateOf(if (restored) BrowseCache.items else emptyList()) }
+    var total by remember { mutableIntStateOf(if (restored) BrowseCache.total else 0) }
+    var page by remember { mutableIntStateOf(if (restored) BrowseCache.page else 0) } // 已加载页码
     var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var openingId by remember { mutableStateOf<Long?>(null) }
     val gridState = rememberLazyGridState()
+
+    // 分类下拉框状态 + 各分类资源数探测（total=0 的分类不显示）
+    var catExpanded by remember { mutableStateOf(if (restored) BrowseCache.catExpanded else false) }
+    var catCounts by remember { mutableStateOf(if (restored) BrowseCache.catCounts else emptyMap<Int, Int>()) }
+
+    // 收藏番号到里世界清单（category="番号"，doubanId="srcId|vodId"，与 H1 浏览页同一口径）
+    var collectTarget by remember { mutableStateOf<VodItem?>(null) }
+    val allItems by com.shangyin.app.data.Repo.observeItems(null)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val savedIds = remember(allItems) {
+        allItems.filter { it.category == "番号" }.mapNotNull { it.doubanId }.toSet()
+    }
+
+    // 状态变化实时写回缓存（进播放页返回后完整恢复：分类选择、已加载列表、展开状态）
+    LaunchedEffect(srcId, categories, selectedType, items, total, page, catExpanded, catCounts) {
+        BrowseCache.srcId = srcId
+        BrowseCache.categories = categories
+        BrowseCache.selectedType = selectedType
+        BrowseCache.items = items
+        BrowseCache.total = total
+        BrowseCache.page = page
+        BrowseCache.catExpanded = catExpanded
+        BrowseCache.catCounts = catCounts
+    }
 
     if (src == null) {
         // 源不存在（被删除）：直接返回
@@ -111,6 +158,8 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                 items = (if (target == 1) resp.list else items + resp.list).distinctBy { it.vod_id }
                 total = resp.total
                 page = target
+                // 记录"这份列表属于哪个分类"，返回本页时据此判断是否需要重新拉第一页
+                BrowseCache.loadedType = selectedType
                 failed = false
             } else {
                 failed = true
@@ -126,21 +175,27 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
         }
     }
 
-    // 首次进入 / 切换分类 → 重置加载第一页
+    // 首次进入 / 切换分类 → 重置加载第一页。
+    // ⚠️ 进播放页再返回时本组合会重建（remember 丢失），所以先看会话缓存：
+    //    缓存里的列表就是这个分类的数据 → 原样保留，不要重置（否则"返回后回到选分类之前"）
     LaunchedEffect(selectedType) {
+        if (BrowseCache.srcId == srcId &&
+            BrowseCache.loadedType == selectedType &&
+            items.isNotEmpty()
+        ) {
+            return@LaunchedEffect
+        }
         items = emptyList()
         total = 0
         page = 0
         loadPage(1)
     }
 
-    // 分类下拉框状态 + 各分类资源数探测（total=0 的分类不显示）
-    var catExpanded by remember { mutableStateOf(false) }
-    var catCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
-
     // 并发探测每个分类的资源总数（限并发 8），空分类自动从下拉中剔除
     LaunchedEffect(categories) {
         if (categories.isEmpty()) return@LaunchedEffect
+        // 已全部探测过（返回本页的场景）→ 不重复探测
+        if (categories.all { catCounts.containsKey(it.type_id) }) return@LaunchedEffect
         val sem = Semaphore(8)
         categories.map { cat ->
             launch {
@@ -304,6 +359,7 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                         GridCard(
                             item = item,
                             opening = openingId == item.vod_id,
+                            collected = "${src.id}|${item.vod_id}" in savedIds,
                             onClick = {
                                 if (openingId == null) {
                                     openingId = item.vod_id
@@ -312,7 +368,8 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                                         if (!ok) openingId = null
                                     }
                                 }
-                            }
+                            },
+                            onCollect = { collectTarget = item }
                         )
                     }
                     // 底部加载更多（占满整行）
@@ -337,14 +394,37 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
             }
         }
     }
+
+    // 收藏番号对话框：存为 category="番号" 条目（doubanId="srcId|vodId"）挂入里世界清单
+    // ——「查看全部」页也要能收藏，否则用户从 H1 进来就找不到收藏入口
+    collectTarget?.let { item ->
+        com.shangyin.app.ui.common.CollectDialog(
+            onDismiss = { collectTarget = null },
+            collect = { listId ->
+                val itemId = com.shangyin.app.data.Repo.saveCustomItem(
+                    category = "番号",
+                    doubanId = "${src.id}|${item.vod_id}",
+                    title = item.vod_name,
+                    coverUrl = item.vod_pic,
+                    subTitle = src.name
+                )
+                if (itemId > 0) {
+                    com.shangyin.app.data.Repo.addItemToList(listId, itemId)
+                    true
+                } else false
+            }
+        )
+    }
 }
 
-/** 网格海报卡：海报 3:4 + 片名 + 备注，点击播放 */
+/** 网格海报卡：海报 3:4 + 片名 + 备注，点击播放，右上角收藏番号 */
 @Composable
 private fun GridCard(
     item: VodItem,
     opening: Boolean,
-    onClick: () -> Unit
+    collected: Boolean,
+    onClick: () -> Unit,
+    onCollect: () -> Unit
 ) {
     Column(
         Modifier
@@ -359,6 +439,28 @@ private fun GridCard(
                     .aspectRatio(3f / 4f),
                 corner = 8.dp
             )
+            // 收藏角标（右上角小爱心，带半透明底，不挡海报点击）
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(3.dp)
+                    .size(24.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
+                        RoundedCornerShape(50)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Favorite,
+                    contentDescription = "收藏番号",
+                    tint = if (collected) androidx.compose.ui.graphics.Color(0xFFEF5350)
+                    else androidx.compose.ui.graphics.Color.White,
+                    modifier = Modifier
+                        .size(15.dp)
+                        .clickable { onCollect() }
+                )
+            }
             if (opening) {
                 Box(
                     Modifier

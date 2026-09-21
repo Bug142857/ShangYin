@@ -1569,7 +1569,7 @@ object DoubanClient {
     // ---------------- 登录态检测 ----------------
 
     @Volatile
-    private var doubanLoginOk = false
+    private var doubanLoginOk: Boolean? = null
 
     @Volatile
     private var doubanLoginCheckedAt = 0L
@@ -1581,20 +1581,23 @@ object DoubanClient {
      * 界面依旧显示「已登录」。而豆瓣搜索结果与登录态强相关 —— 实测同一关键词「养鬼吃人」：
      * **未登录只回 11 条（缺 1987/1988/1992/1996 四部原版），登录后回 15 条（四部都在）**。
      * 所以搜索前后要能判断登录是否过期，并提示用户重新登录。
+     *
+     * @return true = 会话有效；false = 确认已失效；**null = 网络失败等无法判断**
+     *         （⚠️ 不能把"请求失败"当成"已过期"——否则一断网就骗用户重新登录）
      */
     /**
      * 同步版登录态校验：供 WebView 回调等**非协程**场景使用（逻辑与 [sessionOk] 相同，并写入同一份缓存）。
      */
-    fun sessionOkBlocking(): Boolean = runCatching {
+    fun sessionOkBlocking(): Boolean? = runCatching {
         val html = httpGetMobile("https://movie.douban.com/", "https://movie.douban.com/")
         html.contains("passport/logout") || html.contains("退出")
-    }.getOrDefault(false).also {
+    }.getOrNull().also {
         doubanLoginOk = it
         doubanLoginCheckedAt = System.currentTimeMillis()
     }
 
     /** 协程版登录态校验（10 分钟缓存），见类内说明：[sessionOkBlocking] */
-    suspend fun sessionOk(force: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+    suspend fun sessionOk(force: Boolean = false): Boolean? = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
         if (!force && now - doubanLoginCheckedAt < 10 * 60_000L) return@withContext doubanLoginOk
         sessionOkBlocking()

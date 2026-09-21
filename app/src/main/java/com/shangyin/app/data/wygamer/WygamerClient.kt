@@ -83,24 +83,36 @@ object WygamerClient {
         .build()
 
     /**
-     * 服务端校验登录态：WordPress 标准接口 `GET /wp-json/wp/v2/users/me`
-     * （实测匿名访问返回 401 `{"code":"rest_not_logged_in"}`，带有效登录 Cookie 返回 200 + 用户信息）。
+     * 服务端校验登录态：请求 `GET /wp-admin/profile.php`，看是否被弹回登录页。
      *
-     * @return true = 会话有效；false = 未登录/已失效；null = 网络/被墙等无法判断（不提示过期，避免误报）
+     * ⚠️ **不要用 WP REST `/wp-json/wp/v2/users/me` 判登录**（v2.23.16/17 就是这么写的，是错的）：
+     * WordPress 的 Cookie 认证**必须带 `wp_rest` nonce**；没有 nonce 时 WP 会当成未登录，
+     * 直接回 `401 {"code":"rest_not_logged_in"}` —— 本站首页也没有输出 `wpApiSettings`，
+     * 拿不到 nonce。结果就是**已登录也回 401** → 账号页永远显示「登录已失效」，
+     * 登录成功后 `verifyLogin` 永远 false、永远不自动关页（表现为"登录了但说没登录"）。
+     *
+     * 实测（匿名，2026-09-21）：
+     *  - `GET /wp-admin/profile.php` → **302 跳 `wp-login.php`**（浏览器 UA 下 Zibll 还会再跳
+     *    `/user-sign-2?tab=signin`）→ 明确未登录
+     *  - 有效登录 Cookie → 200 停在 profile.php
+     *
+     * @return true = 会话有效；false = 确认未登录/已失效；null = 网络异常等无法判断（不提示过期，避免误报）
      */
     suspend fun sessionOk(): Boolean? = withContext(Dispatchers.IO) {
         val cookie = SettingsStore.wygamerCookie
         if (cookie.isBlank()) return@withContext false
-        val req = Request.Builder().url("$BASE/wp-json/wp/v2/users/me")
+        val req = Request.Builder().url("$BASE/wp-admin/profile.php")
             .header("User-Agent", UA)
-            .header("Accept", "application/json")
+            .header("Accept", "text/html,application/xhtml+xml")
             .header("Cookie", cookie)
             .build()
         try {
             client.newCall(req).execute().use { resp ->
+                val finalUrl = resp.request.url.toString()
                 when {
+                    // 被弹回登录页 → 没有有效会话
+                    finalUrl.contains("wp-login.php") || finalUrl.contains("user-sign") -> false
                     resp.isSuccessful -> true
-                    resp.code == 401 || resp.code == 403 -> false
                     else -> null
                 }
             }

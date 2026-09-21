@@ -107,10 +107,11 @@ private fun DoubanLoginContent(
     LaunchedEffect(Unit) {
         if (state != 0) return@LaunchedEffect
         val ok = withContext(Dispatchers.IO) {
-            runCatching { DoubanClient.sessionOkBlocking() }.getOrDefault(false)
+            runCatching { DoubanClient.sessionOkBlocking() }.getOrNull()
         }
-        // 不主动清本地 cookie：网络抖动同样会验失败，直接清会误删有效登录
-        state = if (ok) 1 else 2
+        // 不主动清本地 cookie：网络抖动同样会验失败，直接清会误删有效登录。
+        // null = 无法判断 → 按"已登录"展示（别骗用户重新登录）；只有明确失效才进登录页
+        state = if (ok == false) 2 else 1
     }
 
     when (state) {
@@ -296,10 +297,10 @@ private fun WebViewLoginScreen(
                                             cookieManager.flush()
                                             // 服务端说了算：Cookie 里含 dbcl/ck ≠ 会话有效
                                             // （过期 Cookie 会让界面显示已登录、搜索却变匿名 → 老片整批搜不到），
-                                            // 校验通过才自动关页，否则留在登录页让用户真正登录
+                                            // 校验通过才自动关页；明确失效/无法判断都留在登录页（用户可点「已登录」）
                                             Thread {
-                                                val valid = runCatching { DoubanClient.sessionOkBlocking() }.getOrDefault(false)
-                                                if (valid) view?.post { onLoginSuccess() }
+                                                val valid = runCatching { DoubanClient.sessionOkBlocking() }.getOrNull()
+                                                if (valid == true) view?.post { onLoginSuccess() }
                                             }.start()
                                         }
                                     }

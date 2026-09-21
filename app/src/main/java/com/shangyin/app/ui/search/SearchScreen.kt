@@ -152,9 +152,10 @@ fun SearchScreen(
                         if (cat != null) DoubanClient.search(cat, q) else emptyList()
                     }
                     results = list.distinctBy { it.category.name + it.doubanId }
-                    // 豆瓣登录过期时搜索结果会明显变少（实测老片会整批消失），提示重新登录
+                    // 豆瓣登录过期时搜索结果会明显变少（实测老片会整批消失），提示重新登录。
+                    // ⚠️ 只有服务端明确说失效（== false）才提示；null（网络失败）不误报
                     if (com.shangyin.app.ui.settings.SettingsStore.isDoubanLoggedIn &&
-                        !com.shangyin.app.data.douban.DoubanClient.sessionOk()
+                        com.shangyin.app.data.douban.DoubanClient.sessionOk() == false
                     ) {
                         doubanStale = true
                     }

@@ -159,13 +159,27 @@ object ZlibClient {
      * ⚠️ **Cookie 里存在 `remix_userkey` ≠ 会话有效**（服务端可能早已让旧会话失效），
      * 所以登录页的「自动判定成功」与搜索的报错文案都以这个结果为准，
      * 否则会出现「App 一直显示已登录、接口却当成匿名请求」的死结。
+     *
+     * @return true = 有效；false = 服务端明确说未登录/已失效；
+     *         **null = 通道不可用或拿到的是挑战页/HTML，无法判断**
+     *         （⚠️ 不能把"取不到"当成"已过期"，否则反爬挑战一抖动就骗用户重新登录）
      */
-    suspend fun sessionOk(): Boolean = runCatching {
-        val text = ZlibWeb.fetchText("/eapi/user/profile")
-        !text.contains("\"success\":0") &&
-            !text.contains("登录到您的账户") &&
-            !text.contains("log in to your account", true)
-    }.getOrDefault(false)
+    suspend fun sessionOk(): Boolean? {
+        val text = try {
+            ZlibWeb.fetchText("/eapi/user/profile")
+        } catch (e: Exception) {
+            return null
+        }
+        if (text.isBlank()) return null
+        if (text.contains("\"success\":0") ||
+            text.contains("登录到您的账户") ||
+            text.contains("log in to your account", true)
+        ) {
+            return false
+        }
+        // 只有真正的接口 JSON 才算"确认有效"；HTML（反爬挑战页等）一律算无法判断
+        return if (text.trimStart().startsWith("{")) true else null
+    }
 
     /** 预热：进图书页时把站点首页先加载好（实测约 7.4 秒），省得用户搜完还要等页面加载 */
     suspend fun warmup() = ZlibWeb.warmup()
@@ -281,12 +295,13 @@ object ZlibClient {
 
     /**
      * 出错时的可展示文案：命中「未登录」类关键字时再用 [sessionOk] 向服务端确认，
-     * 确认失效才提示重新登录，否则原样显示站点给的原因。
+     * **只有服务端明确说未登录（== false）才提示重新登录**；
+     * 无法判断（null，如反爬挑战抖动）一律按站点原话展示，不当成登录失效。
      */
     private suspend fun errorMessage(msg: String): String {
-        if (msg.isBlank()) return if (sessionOk()) "站点未返回数据" else notLoggedInHint()
+        if (msg.isBlank()) return if (sessionOk() == false) notLoggedInHint() else "站点未返回数据"
         if (NOT_LOGGED_IN_WORDS.none { msg.contains(it, true) }) return msg
-        return if (sessionOk()) msg else notLoggedInHint()
+        return if (sessionOk() == false) notLoggedInHint() else msg
     }
 
     private fun JSONObject.toBook(): Book? {

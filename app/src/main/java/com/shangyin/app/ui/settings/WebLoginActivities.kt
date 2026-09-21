@@ -106,11 +106,14 @@ private class LoginSpec(
     /** 用户手动输入地址解析出的域名 */
     val onCustomHost: ((String) -> Unit)? = null,
     /**
-     * 服务端校验登录态（如 Z-Library 的 `/eapi/user/profile`）。
+     * 服务端校验登录态（登录页与账号管理共用）。
      * ⚠️ 「Cookie 里有关键字」不等于会话有效：服务端可能早已让旧会话失效，
      * 此时拿 Cookie 判定会一直误报「已登录」，用户也就永远重登不了。
+     *
+     * @return true = 有效；false = 确认失效；**null = 网络/被墙等无法判断**
+     *         （⚠️ 调用方必须区分 null：不能把"测不出来"当成"已过期"，否则会骗用户重新登录）
      */
-    val verifyLogin: (suspend () -> Boolean)? = null,
+    val verifyLogin: (suspend () -> Boolean?)? = null,
     /** 加载失败时附带的排查提示 */
     val failHint: String = ""
 )
@@ -407,8 +410,9 @@ class WygamerLoginActivity : ComponentActivity() {
                         loginDetect = { c -> c.contains("wordpress_logged_in", true) },
                         isLoggedIn = { SettingsStore.isWygamerLoggedIn },
                         // 服务端说了算：Cookie 里有 wordpress_logged_in ≠ 会话有效（过期 Cookie 会让
-                        // 界面显示已登录、下载链接却拿不到），必须问 /wp-json/wp/v2/users/me 才自动关页
-                        verifyLogin = { WygamerClient.sessionOk() == true },
+                        // 界面显示已登录、下载链接却拿不到）。判据见 WygamerClient.sessionOk 注释：
+                        // ⚠️ 不能用 WP REST（无 nonce 时已登录也回 401），改用 /wp-admin/profile.php 是否被弹回登录页
+                        verifyLogin = { WygamerClient.sessionOk() },
                         save = { SettingsStore.wygamerCookie = it },
                         logout = { SettingsStore.clearWygamerLogin() },
                         preCookies = listOf("showed_system_notice" to "showed"),
@@ -556,12 +560,13 @@ private fun WebLoginContent(spec: LoginSpec, onBack: () -> Unit, onLoginSuccess:
 
     // ⚠️ 本地 Cookie 存在 ≠ 会话有效：站点让旧会话失效后，本页会一直停在"已登录"，
     // 用户只能「退出登录」、没有重新登录的机会，而搜索/下载却全按匿名走。
-    // 因此有 verifyLogin 的站点一律以服务端结论为准：无效就直接进登录页让用户重登。
-    // 注意：这里**不**主动清本地 Cookie —— 网络抖动同样会验失败，直接清会误删有效登录。
+    // 因此有 verifyLogin 的站点一律以服务端结论为准：**只有明确失效（== false）才进登录页**。
+    // 注意两点：① 这里**不**主动清本地 Cookie —— 网络抖动同样会验失败，清掉会误删有效登录；
+    // ② null（网络/被墙，测不出来）按"已登录"展示，不能骗用户重新登录。
     LaunchedEffect(Unit) {
         if (mode != 2) return@LaunchedEffect
-        val ok = runCatching { spec.verifyLogin?.invoke() ?: false }.getOrDefault(false)
-        mode = if (ok) 0 else 1
+        val ok = runCatching { spec.verifyLogin?.invoke() }.getOrNull()
+        mode = if (ok == false) 1 else 0
     }
 
     if (mode == 2) {
@@ -805,8 +810,34 @@ private fun WebViewLoginScreen(
                     }
                     TextButton(
                         onClick = {
-                            if (tryExtractCookies()) onLoginSuccess()
-                            else Toast.makeText(ctx, "未检测到登录态，请先完成登录", Toast.LENGTH_SHORT).show()
+                            // 手动确认：Cookie 关键字命中就直接关页；否则退一步问服务端
+                            // （站点改了 Cookie 名时也要能登录成功，别让用户卡在登录页反复登）
+                            if (tryExtractCookies()) {
+                                onLoginSuccess()
+                            } else {
+                                val nav = webViewRef?.url.orEmpty()
+                                scope.launch {
+                                    val ok = runCatching { spec.verifyLogin?.invoke() }.getOrNull() == true
+                                    if (ok) {
+                                        val merged = collectCookies(
+                                            cookieManager,
+                                            (spec.cookieUrls + currentUrl + nav)
+                                                .filter { it.isNotBlank() }
+                                        )
+                                        if (merged.isNotBlank()) {
+                                            spec.save(merged)
+                                            cookieManager.flush()
+                                        }
+                                        onLoginSuccess()
+                                    } else {
+                                        Toast.makeText(
+                                            ctx,
+                                            "未检测到登录态，请先完成登录",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            }
                         }
                     ) { Text("已登录") }
                 }
@@ -909,7 +940,13 @@ private fun WebViewLoginScreen(
                                     onLoginSuccess()
                                 } else {
                                     scope.launch {
-                                        if (runCatching { verify() }.getOrDefault(false)) onLoginSuccess()
+                                        // 只有服务端**明确确认有效**（== true）才自动关页；
+                                        // false/null 都留在登录页（用户还能点右上角「已登录」兜底）
+                                        if (runCatching { verify() }.getOrNull() == true) {
+                                            spec.save(current)
+                                            cookieManager.flush()
+                                            onLoginSuccess()
+                                        }
                                     }
                                 }
                             }
