@@ -14,12 +14,11 @@ android {
         applicationId = "com.shangyin.app"
         minSdk = 26
         targetSdk = 35
-        // 版本号规则（2026-09-21 用户指定）：versionName = "0.00NN"，NN = 累计推送发布次数
-        // （历史 tag/Release 共 51 个 → 本次是第 52 次）。
-        // ⚠️ versionCode 必须单调递增，不能用 52（比旧值 141 小会导致覆盖安装失败），
-        // 所以固定取 1000 + NN，既与推送次数一一对应又保持递增。
-        versionCode = 1052
-        versionName = "0.0052"
+        // 版本号规则（2026-09-21 用户指定）：versionName = "0.<当前提交次数>"，不补零
+        // （发版打包时读 `git rev-list --count HEAD`；本次读到 183 → 0.183）
+        // ⚠️ versionCode 固定取 1000 + N：Android 要求单调递增，直接用 N 有被系统拒绝覆盖安装的风险
+        versionCode = 1183
+        versionName = "0.183"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
