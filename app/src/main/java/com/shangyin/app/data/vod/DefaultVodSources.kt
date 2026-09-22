@@ -3,7 +3,7 @@ package com.shangyin.app.data.vod
 /**
  * 内置默认采集源（来自用户 KVideo 订阅：
  * https://raw.githubusercontent.com/rapier15sapper/ew/refs/heads/main/test.json）
- * 仅在"片源管理"从未配置过时播种一次（SettingsStore.ensureDefaultVodSourcesSeeded）。
+ * 仅在"影视源配置"从未配置过时播种一次（SettingsStore.ensureDefaultVodSourcesSeeded）。
  */
 val DEFAULT_VOD_SOURCES: List<VodSource> = listOf(
     // ---------- 综合资源 ----------
@@ -86,4 +86,20 @@ val DEFAULT_VOD_SOURCES: List<VodSource> = listOf(
     VodSource(id = "shayu", name = "鲨鱼资源", baseUrl = "https://shayuapi.com/api.php/provide/vod"),
     VodSource(id = "xiaoji", name = "小鸡资源", baseUrl = "https://api.xiaojizy.live/provide/vod"),
     VodSource(id = "xibao", name = "细胞采集", baseUrl = "https://www.xxibaozyw.com/api.php/provide/vod")
+)
+
+/**
+ * 内置默认**动漫**采集源（独立于影视源，见"设置 → 片源管理 → 动漫源配置"）。
+ * 取自上面同一份已验证订阅里**明确带动漫分类**的站点：动漫专站（魔都动漫/樱花资源）+
+ * 综合库里动漫分类较全的几个。仅在动漫源从未配置过时播种一次。
+ */
+val DEFAULT_ANIME_SOURCES: List<VodSource> = listOf(
+    VodSource(id = "modudongman", name = "魔都动漫", baseUrl = "https://caiji.moduapi.cc/api.php/provide/vod"),
+    VodSource(id = "yinghua", name = "樱花资源", baseUrl = "https://m3u8.apiyhzy.com/api.php/provide/vod"),
+    VodSource(id = "feifan", name = "非凡资源", baseUrl = "http://ffzy5.tv/api.php/provide/vod"),
+    VodSource(id = "baofeng", name = "暴风资源", baseUrl = "https://bfzyapi.com/api.php/provide/vod"),
+    VodSource(id = "wujin", name = "无尽资源", baseUrl = "https://api.wujinapi.com/api.php/provide/vod"),
+    VodSource(id = "jisu", name = "极速资源", baseUrl = "https://jszyapi.com/api.php/provide/vod"),
+    VodSource(id = "dbzy", name = "豆瓣资源", baseUrl = "https://dbzy.tv/api.php/provide/vod"),
+    VodSource(id = "tianya", name = "天涯资源", baseUrl = "https://tyyszy.com/api.php/provide/vod")
 )

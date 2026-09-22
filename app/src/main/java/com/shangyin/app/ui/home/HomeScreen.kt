@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.Tv
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -80,7 +81,7 @@ import com.shangyin.app.ui.safeNavigate
 /**
  * 主页：底部双标签「表世界 / 里世界」。
  * - 表世界：分类 chips + 搜索栏（跳搜索页）+ 豆瓣收藏清单
- * - 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 入口 + 里世界收藏清单
+ * - 里世界：番号 / 本子 / 动漫 / 漫画 / 游戏 / 图书 入口 + 里世界收藏清单
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -211,7 +212,7 @@ private fun SurfaceWorld(
 
 // ---------------- 里世界 ----------------
 
-/** 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 入口 + 里世界清单 */
+/** 里世界：番号 / 本子 / 动漫 / 漫画 / 游戏 / 图书 入口 + 里世界清单 */
 @Composable
 private fun InnerWorld(
     nav: NavHostController,
@@ -239,10 +240,10 @@ private fun InnerWorld(
                 onClick = { nav.safeNavigate("h2search") }
             )
             InnerWorldEntry(
-                icon = Icons.Rounded.AutoStories,
-                title = "漫画",
+                icon = Icons.Rounded.Tv,
+                title = "动漫",
                 modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("comicHome") }
+                onClick = { nav.safeNavigate("animeHome") }
             )
         }
         Row(
@@ -251,6 +252,12 @@ private fun InnerWorld(
                 .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            InnerWorldEntry(
+                icon = Icons.Rounded.AutoStories,
+                title = "漫画",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("comicHome") }
+            )
             InnerWorldEntry(
                 icon = Icons.Rounded.SportsEsports,
                 title = "游戏",
@@ -323,7 +330,7 @@ private fun WorldListSection(
         ) {
             EmptyView(
                 if (world == 0) "还没有清单\n去搜索收藏喜欢的，或到设置里创建清单"
-                else "还没有里世界清单\n到 设置 → 清单管理 创建，用来收藏番号视频和本子"
+                else "还没有里世界清单\n到 设置 → 清单管理 创建，用来收藏番号 / 本子 / 动漫 / 漫画"
             )
         }
     } else {

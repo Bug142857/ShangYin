@@ -1,6 +1,5 @@
-package com.shangyin.app.ui.search
+package com.shangyin.app.ui.anime
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -45,11 +44,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavHostController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
@@ -61,83 +61,81 @@ import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * H1 外网片源浏览页：直接进入（无需先搜索），
- * 每个外网源一个分组，横向卡片展示该源资源（默认第一页，可加载更多）；
- * 页内搜索框可按关键词搜全部外网源；点击影片直接进播放页（可切线路/集数）。
+ * 动漫首页（里世界 → 动漫）：动漫专源浏览 + 页内搜索。
+ * - 每个启用的动漫源一个分组，横向海报展示该源「动漫」分类的最新一页；点海报进动漫详情页
+ * - 搜索时会跨全部动漫源搜（不限分类，提高召回），命中结果同样横向展示
+ * - 「查看全部」进该源的资源库页（[com.shangyin.app.ui.search.SourceBrowseScreen] 的动漫模式：分类筛选 + 分页网格）
  */
 private data class SrcState(
     val status: Int,          // 0=加载中 1=完成 2=失败
-    val total: Int,           // 源报告的总量（浏览=库总量，搜索=命中数）
+    val total: Int,           // 该源动漫分类的总量（搜索时为命中数）
     val items: List<VodItem>,
-    val page: Int             // 已加载到的页码
+    val page: Int
 )
 
 /**
- * 番号页会话缓存：跨页面导航（进播放页/详情页再返回）保留搜索词与已加载结果，
- * 返回时不再重新加载（stateKeyword 记录 stateMap 对应的关键词）。
+ * 动漫页会话缓存：进详情页/播放页再返回时保留搜索词与已加载结果（与 H1Cache 同一套思路）。
+ * 与番号页缓存分开，互不影响。
  */
-private object H1Cache {
+private object AnimeCache {
     var stateKeyword: String? = null
     var keyword: String = ""
     var input: String = ""
     var stateMap: Map<String, SrcState> = emptyMap()
 }
 
+/** 各源「动漫」分类 type_id 记忆（避免每次进页都重新拉分类表）；只记成功结果，失败下次重试 */
+private val animeTypeIdCache = ConcurrentHashMap<String, Int>()
+
+private suspend fun animeTypeIdOf(src: VodSource): Int? {
+    animeTypeIdCache[src.id]?.let { return it }
+    val cats = runCatching { VodClient.fetchCategories(src) }.getOrDefault(emptyList())
+    val hit = cats.firstOrNull { it.type_name.contains("动漫") }?.type_id
+    if (hit != null && hit > 0) animeTypeIdCache[src.id] = hit
+    return hit
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
+fun AnimeHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
-    val initialKw = remember {
-        runCatching { java.net.URLDecoder.decode(kwEncoded, "UTF-8") }.getOrDefault(kwEncoded)
-    }
+    val keyboard = LocalSoftwareKeyboardController.current
 
-    // 只展示「需要外网」目录且启用的源
-    val sources = remember {
-        SettingsStore.getVodSources().filter { it.enabled && it.region == "proxy" }
-    }
+    val sources = remember { SettingsStore.getAnimeSources().filter { it.enabled } }
 
-    // 从会话缓存恢复（首次进入用路由关键词初始化）
-    if (H1Cache.stateKeyword == null) {
-        H1Cache.keyword = initialKw.trim()
-        H1Cache.input = initialKw.trim()
-    }
-    var keyword by remember { mutableStateOf(H1Cache.keyword) }
-    var input by remember { mutableStateOf(H1Cache.input) }
-    // srcId -> 每源加载状态
-    var stateMap by remember { mutableStateOf(H1Cache.stateMap) }
+    // 从会话缓存恢复（返回时不再重新加载）
+    var keyword by remember { mutableStateOf(AnimeCache.keyword) }
+    var input by remember { mutableStateOf(AnimeCache.input) }
+    var stateMap by remember { mutableStateOf(AnimeCache.stateMap) }
     val loadingKeys = remember { mutableSetOf<String>() } // "srcId:page" 防重复加载
-    // 点击后正在取详情播放的影片 id（防重复点击）
-    var openingId by remember { mutableStateOf<Long?>(null) }
 
-    // 状态变化实时写回缓存（进播放页后返回可完整恢复）
     LaunchedEffect(keyword, input, stateMap) {
-        H1Cache.keyword = keyword
-        H1Cache.input = input
-        H1Cache.stateMap = stateMap
+        AnimeCache.keyword = keyword
+        AnimeCache.input = input
+        AnimeCache.stateMap = stateMap
     }
 
-    /** 加载某源某页（kw 变化后返回的旧响应会被丢弃） */
+    /** 加载某源某页（浏览时限定「动漫」分类；搜索时不限分类） */
     fun load(src: VodSource, page: Int, kw: String) {
         val key = "${src.id}:$page"
         if (!loadingKeys.add(key)) return
-        // 首次进入时先显示加载中
         if (page == 1) {
             stateMap = stateMap + (src.id to SrcState(0, 0, emptyList(), 0))
         }
         scope.launch {
-            val resp = VodClient.fetchList(src, kw, page)
+            val typeId = if (kw.isBlank()) animeTypeIdOf(src) else null
+            val resp = VodClient.fetchList(src, kw, page, typeId)
             if (kw != keyword) { loadingKeys.remove(key); return@launch } // 关键词已变，丢弃
             stateMap = stateMap.toMutableMap().apply {
                 val old = get(src.id)
                 if (resp == null) {
                     put(src.id, SrcState(2, old?.total ?: 0, old?.items ?: emptyList(), old?.page ?: 0))
                 } else {
-                    val merged = ((old?.items ?: emptyList()) + resp.list)
-                        .distinctBy { it.vod_id }
+                    val merged = ((old?.items ?: emptyList()) + resp.list).distinctBy { it.vod_id }
                     put(src.id, SrcState(1, resp.total, merged, page))
                 }
             }
@@ -148,10 +146,10 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
     // 关键词变化：新关键词全部源并行重载；恢复场景只补加载缺失的源
     LaunchedEffect(keyword) {
         if (sources.isEmpty()) return@LaunchedEffect
-        if (H1Cache.stateKeyword == keyword) {
+        if (AnimeCache.stateKeyword == keyword) {
             sources.filter { it.id !in stateMap }.forEach { src -> load(src, 1, keyword) }
         } else {
-            H1Cache.stateKeyword = keyword
+            AnimeCache.stateKeyword = keyword
             loadingKeys.clear()
             stateMap = emptyMap()
             coroutineScope {
@@ -160,21 +158,11 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         }
     }
 
-    /** 点击影片：公共播放流程（补详情→解析线路→断点续播→跳播放页） */
-    fun playItem(src: VodSource, item: VodItem) {
-        if (openingId != null) return
-        openingId = item.vod_id
-        scope.launch {
-            val ok = openVodAndPlay(nav, context, src, item)
-            if (!ok) openingId = null
-        }
-    }
-
-    // 收藏番号视频到里世界清单（category="番号"，doubanId="srcId|vodId"）
+    // 收藏动漫到里世界清单（category="动漫"，doubanId="srcId|vodId"）
     var collectTarget by remember { mutableStateOf<Pair<VodSource, VodItem>?>(null) }
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
     val savedIds = remember(allItems) {
-        allItems.filter { it.category == "番号" }.mapNotNull { it.doubanId }.toSet()
+        allItems.filter { it.category == "动漫" }.mapNotNull { it.doubanId }.toSet()
     }
 
     Scaffold(
@@ -182,9 +170,10 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("番号", fontWeight = FontWeight.Bold)
+                        Text("动漫", fontWeight = FontWeight.Bold)
                         Text(
-                            if (keyword.isBlank()) "共 ${sources.size} 个源 · 页内可搜索" else "搜索「$keyword」",
+                            if (keyword.isBlank()) "共 ${sources.size} 个源 · 页内可搜索"
+                            else "搜索「$keyword」",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -209,23 +198,18 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("外网目录还没有片源", style = MaterialTheme.typography.titleMedium)
+                Text("还没有可用的动漫源", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "先到 设置 → 片源管理 → 影视源配置 里测试链接，测试为「需外网/返回异常」的源会自动归入外网目录；也可以在编辑片源时手动选择「需要外网」目录。",
+                    "到 设置 → 片源管理 → 动漫源配置 里添加/启用采集源（带「动漫」分类的站点即可）。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = { nav.safeNavigate("vodSources") }) { Text("去影视源配置") }
+                Button(onClick = { nav.safeNavigate("animeSources") }) { Text("去动漫源配置") }
             }
         } else {
-            Column(
-                Modifier
-                    .padding(pad)
-                    .fillMaxSize()
-            ) {
-                // 页内搜索框：输入法确认键（搜索）直接触发，无需再点右侧放大镜
+            Column(Modifier.padding(pad).fillMaxSize()) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -235,7 +219,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                     OutlinedTextField(
                         value = input,
                         onValueChange = { input = it },
-                        placeholder = { Text("搜索外网片源，留空浏览全部") },
+                        placeholder = { Text("搜索动漫，留空浏览最新") },
                         singleLine = true,
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                             imeAction = androidx.compose.ui.text.input.ImeAction.Search
@@ -267,7 +251,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                     sources.forEach { src ->
                         val state = stateMap[src.id] ?: SrcState(0, 0, emptyList(), 0)
-                        item(key = "h_${src.id}") {
+                        item(key = "a_${src.id}") {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 6.dp)
@@ -290,27 +274,27 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                                 )
                                 Spacer(Modifier.weight(1f))
                                 if (state.status == 1) {
-                                    TextButton(onClick = { nav.safeNavigate("h1source/" + src.id) }) {
-                                        Text(
-                                            "查看全部",
-                                            style = MaterialTheme.typography.labelMedium
-                                        )
+                                    TextButton(onClick = { nav.safeNavigate("animeBrowse/" + android.net.Uri.encode(src.id)) }) {
+                                        Text("查看全部", style = MaterialTheme.typography.labelMedium)
                                     }
                                 }
                             }
                         }
                         if (state.items.isNotEmpty()) {
-                            item(key = "r_${src.id}") {
+                            item(key = "ar_${src.id}") {
                                 LazyRow(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
                                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
                                     items(state.items, key = { "${src.id}_${it.vod_id}" }) { item ->
-                                        VodCard(
+                                        AnimeCard(
                                             item = item,
-                                            opening = openingId == item.vod_id,
                                             collected = "${src.id}|${item.vod_id}" in savedIds,
-                                            onClick = { playItem(src, item) },
+                                            onClick = {
+                                                nav.safeNavigate(
+                                                    "animeDetail/${android.net.Uri.encode(src.id)}/${item.vod_id}"
+                                                )
+                                            },
                                             onCollect = { collectTarget = src to item }
                                         )
                                     }
@@ -323,13 +307,13 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         }
     }
 
-    // 收藏番号对话框：存为 category="番号" 条目（doubanId="srcId|vodId"）挂入里世界清单
+    // 收藏对话框：category="动漫"（doubanId="srcId|vodId"）挂入里世界清单
     collectTarget?.let { (src, item) ->
         CollectDialog(
             onDismiss = { collectTarget = null },
             collect = { listId ->
                 val itemId = Repo.saveCustomItem(
-                    category = "番号",
+                    category = "动漫",
                     doubanId = "${src.id}|${item.vod_id}",
                     title = item.vod_name,
                     coverUrl = item.vod_pic,
@@ -341,11 +325,10 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
     }
 }
 
-/** 外网片源卡片：海报 + 片名 + 备注，点击播放；右上角收藏番号 */
+/** 动漫海报卡：海报 + 片名 + 更新进度（vod_remarks，如「更新至第12集」）；右上角收藏 */
 @Composable
-private fun VodCard(
+private fun AnimeCard(
     item: VodItem,
-    opening: Boolean,
     collected: Boolean,
     onClick: () -> Unit,
     onCollect: () -> Unit
@@ -353,7 +336,7 @@ private fun VodCard(
     Column(
         Modifier
             .width(96.dp)
-            .clickable(enabled = !opening, onClick = onClick)
+            .clickable(onClick = onClick)
     ) {
         Box {
             CoverImage(
@@ -363,7 +346,6 @@ private fun VodCard(
                     .height(128.dp),
                 corner = 8.dp
             )
-            // 收藏角标（右上角小爱心，不挡海报点击）
             Box(
                 Modifier
                     .align(Alignment.TopEnd)
@@ -374,27 +356,12 @@ private fun VodCard(
             ) {
                 Icon(
                     Icons.Rounded.Favorite,
-                    contentDescription = "收藏",
+                    contentDescription = "收藏动漫",
                     tint = if (collected) Color(0xFFEF5350) else Color.White,
                     modifier = Modifier
                         .size(14.dp)
                         .clickable { onCollect() }
                 )
-            }
-            if (opening) {
-                Box(
-                    Modifier
-                        .width(96.dp)
-                        .height(128.dp)
-                        .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "打开中",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White
-                    )
-                }
             }
         }
         Spacer(Modifier.height(4.dp))

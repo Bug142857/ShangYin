@@ -62,6 +62,7 @@ import com.shangyin.app.data.vod.VodCategory
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.async
@@ -79,9 +80,12 @@ import kotlinx.coroutines.sync.withPermit
  * 浏览页会话缓存：进播放页会让本组合被销毁重建（Compose 只保留 rememberSaveable），
  * 用普通 remember 的话**返回后分类选择、已加载列表全丢**（表现："返回到选分类之前"）。
  * 这里按 srcId 记一份，返回时原样恢复（与 H1SearchScreen 的 H1Cache 同一套思路）。
+ * ⚠️ 必须连 [anime] 一起比对：同一个采集源可能同时存在于影视源和动漫源两份配置里，
+ * 只看 srcId 会把"番号浏览"的缓存错给"动漫浏览"用。
  */
 private object BrowseCache {
     var srcId: String? = null
+    var anime: Boolean = false
     var categories: List<VodCategory> = emptyList()
     var catCounts: Map<Int, Int> = emptyMap()
     var catExpanded = false
@@ -94,15 +98,24 @@ private object BrowseCache {
     var page = 0
 }
 
+/**
+ * @param anime true = 动漫模式的资源库页（里世界「动漫」→「查看全部」）。
+ *   与番号浏览的差异只有三点：源取自动漫源配置、点海报进动漫详情页（而不是直接播）、
+ *   收藏归到 category="动漫"，另外首次进入自动选中源里的「动漫」分类（避免落到"全部"里混着影视剧）。
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
+fun SourceBrowseScreen(nav: NavHostController, srcId: String, anime: Boolean = false) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    val src = remember { SettingsStore.getVodSources().firstOrNull { it.id == srcId } }
+    val src = remember {
+        val list = if (anime) SettingsStore.getAnimeSources() else SettingsStore.getVodSources()
+        list.firstOrNull { it.id == srcId }
+    }
+    val collectCategory = if (anime) "动漫" else "番号"
 
-    // 同一次浏览会话（srcId 相同）→ 用缓存恢复；换了源则重新开始
-    val restored = remember(srcId) { BrowseCache.srcId == srcId }
+    // 同一次浏览会话（srcId + 模式都相同）→ 用缓存恢复；换了源/换了模式则重新开始
+    val restored = remember(srcId) { BrowseCache.srcId == srcId && BrowseCache.anime == anime }
     var categories by remember { mutableStateOf(if (restored) BrowseCache.categories else emptyList()) }
     var selectedType by remember { mutableStateOf(if (restored) BrowseCache.selectedType else null) }
     var items by remember { mutableStateOf(if (restored) BrowseCache.items else emptyList()) }
@@ -117,17 +130,18 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     var catExpanded by remember { mutableStateOf(if (restored) BrowseCache.catExpanded else false) }
     var catCounts by remember { mutableStateOf(if (restored) BrowseCache.catCounts else emptyMap<Int, Int>()) }
 
-    // 收藏番号到里世界清单（category="番号"，doubanId="srcId|vodId"，与 H1 浏览页同一口径）
+    // 收藏到里世界清单（category=番号/动漫，doubanId="srcId|vodId"，与 H1 浏览页同一口径）
     var collectTarget by remember { mutableStateOf<VodItem?>(null) }
     val allItems by com.shangyin.app.data.Repo.observeItems(null)
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val savedIds = remember(allItems) {
-        allItems.filter { it.category == "番号" }.mapNotNull { it.doubanId }.toSet()
+    val savedIds = remember(allItems, collectCategory) {
+        allItems.filter { it.category == collectCategory }.mapNotNull { it.doubanId }.toSet()
     }
 
     // 状态变化实时写回缓存（进播放页返回后完整恢复：分类选择、已加载列表、展开状态）
-    LaunchedEffect(srcId, categories, selectedType, items, total, page, catExpanded, catCounts) {
+    LaunchedEffect(srcId, anime, categories, selectedType, items, total, page, catExpanded, catCounts) {
         BrowseCache.srcId = srcId
+        BrowseCache.anime = anime
         BrowseCache.categories = categories
         BrowseCache.selectedType = selectedType
         BrowseCache.items = items
@@ -135,6 +149,14 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
         BrowseCache.page = page
         BrowseCache.catExpanded = catExpanded
         BrowseCache.catCounts = catCounts
+    }
+
+    // 动漫模式首次进入：自动选中源里的「动漫」分类（否则"全部"里混着电影/剧集/综艺）
+    var autoPicked by remember { mutableStateOf(false) }
+    LaunchedEffect(categories) {
+        if (!anime || restored || autoPicked || selectedType != null || categories.isEmpty()) return@LaunchedEffect
+        autoPicked = true
+        categories.firstOrNull { it.type_name.contains("动漫") }?.let { selectedType = it.type_id }
     }
 
     if (src == null) {
@@ -180,6 +202,7 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     //    缓存里的列表就是这个分类的数据 → 原样保留，不要重置（否则"返回后回到选分类之前"）
     LaunchedEffect(selectedType) {
         if (BrowseCache.srcId == srcId &&
+            BrowseCache.anime == anime &&
             BrowseCache.loadedType == selectedType &&
             items.isNotEmpty()
         ) {
@@ -360,8 +383,15 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                             item = item,
                             opening = openingId == item.vod_id,
                             collected = "${src.id}|${item.vod_id}" in savedIds,
+                            collectDesc = if (anime) "收藏动漫" else "收藏番号",
                             onClick = {
-                                if (openingId == null) {
+                                if (openingId != null) return@GridCard
+                                if (anime) {
+                                    // 动漫：进详情页选集/换线路后再播
+                                    nav.safeNavigate(
+                                        "animeDetail/${android.net.Uri.encode(src.id)}/${item.vod_id}"
+                                    )
+                                } else {
                                     openingId = item.vod_id
                                     scope.launch {
                                         val ok = openVodAndPlay(nav, context, src, item)
@@ -395,14 +425,14 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
         }
     }
 
-    // 收藏番号对话框：存为 category="番号" 条目（doubanId="srcId|vodId"）挂入里世界清单
+    // 收藏对话框：存为 category="番号"/"动漫" 条目（doubanId="srcId|vodId"）挂入里世界清单
     // ——「查看全部」页也要能收藏，否则用户从 H1 进来就找不到收藏入口
     collectTarget?.let { item ->
         com.shangyin.app.ui.common.CollectDialog(
             onDismiss = { collectTarget = null },
             collect = { listId ->
                 val itemId = com.shangyin.app.data.Repo.saveCustomItem(
-                    category = "番号",
+                    category = collectCategory,
                     doubanId = "${src.id}|${item.vod_id}",
                     title = item.vod_name,
                     coverUrl = item.vod_pic,
@@ -417,12 +447,13 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     }
 }
 
-/** 网格海报卡：海报 3:4 + 片名 + 备注，点击播放，右上角收藏番号 */
+/** 网格海报卡：海报 3:4 + 片名 + 备注，点击播放（动漫模式进详情页），右上角收藏 */
 @Composable
 private fun GridCard(
     item: VodItem,
     opening: Boolean,
     collected: Boolean,
+    collectDesc: String,
     onClick: () -> Unit,
     onCollect: () -> Unit
 ) {
@@ -453,7 +484,7 @@ private fun GridCard(
             ) {
                 Icon(
                     Icons.Rounded.Favorite,
-                    contentDescription = "收藏番号",
+                    contentDescription = collectDesc,
                     tint = if (collected) androidx.compose.ui.graphics.Color(0xFFEF5350)
                     else androidx.compose.ui.graphics.Color.White,
                     modifier = Modifier

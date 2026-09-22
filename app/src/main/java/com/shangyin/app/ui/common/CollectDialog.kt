@@ -135,7 +135,7 @@ fun CollectDialog(
                         singleLine = true
                     )
                     Text(
-                        "用于收藏番号视频 / 本子",
+                        "用于收藏番号 / 动漫 / 本子 / 漫画",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(top = 6.dp)

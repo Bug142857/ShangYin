@@ -24,6 +24,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.shangyin.app.ui.anime.AnimeDetailScreen
+import com.shangyin.app.ui.anime.AnimeHomeScreen
 import com.shangyin.app.ui.celebrity.CelebrityScreen
 import com.shangyin.app.ui.home.HomeScreen
 import com.shangyin.app.ui.item.ItemDetailScreen
@@ -153,6 +155,10 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("cloudsync") { CloudSyncScreen(nav) }
             composable("dataManage") { DataManageScreen(nav) }
             composable("vodSources") { VodSourceScreen(nav) }
+            // 动漫源配置（与影视源独立的另一份采集源列表）
+            composable("animeSources") { com.shangyin.app.ui.settings.AnimeSourceScreen(nav) }
+            // 片源管理（设置入口，内含影视源配置 / 动漫源配置）
+            composable("sourceManage") { com.shangyin.app.ui.settings.SourceManageScreen(nav) }
             composable("player") { PlayerScreen(nav) }
             composable(
                 route = "h1search?kw={kw}",
@@ -171,6 +177,27 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             }
             // H2 = 哔咔漫画（数据源来自 haka_comic 项目内置的哔咔 API）
             composable("h2search") { H2SearchScreen(nav) }
+            // 动漫 = 动漫源配置里的采集源（里世界第六入口）：首页浏览/搜索 → 详情页选集播放
+            composable("animeHome") { AnimeHomeScreen(nav) }
+            composable(
+                route = "animeBrowse/{srcId}",
+                arguments = listOf(navArgument("srcId") { type = NavType.StringType })
+            ) { entry ->
+                SourceBrowseScreen(nav, entry.arguments?.getString("srcId").orEmpty(), anime = true)
+            }
+            composable(
+                route = "animeDetail/{srcId}/{vodId}",
+                arguments = listOf(
+                    navArgument("srcId") { type = NavType.StringType },
+                    navArgument("vodId") { type = NavType.LongType; defaultValue = 0L }
+                )
+            ) { entry ->
+                AnimeDetailScreen(
+                    nav,
+                    entry.arguments?.getString("srcId").orEmpty(),
+                    entry.arguments?.getLong("vodId") ?: 0L
+                )
+            }
             // 哔咔漫画详情 + 阅读
             composable(
                 route = "bikaComic/{id}",

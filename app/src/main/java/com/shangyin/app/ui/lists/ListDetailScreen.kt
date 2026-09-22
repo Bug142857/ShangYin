@@ -576,13 +576,16 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     }
 }
 
-/** 里世界清单添加条目：列出所有已收藏的番号视频 / 本子漫画，点选加入清单 */
+/** 里世界清单添加条目：列出所有已收藏的番号 / 动漫 / 本子 / 漫画，点选加入清单 */
 @Composable
 private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
     val scope = rememberCoroutineScope()
     val all by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
     val innerItems = remember(all) {
-        all.filter { it.category == "番号" || it.category == "本子" || it.category == "漫画" }
+        all.filter {
+            it.category == "番号" || it.category == "动漫" ||
+                it.category == "本子" || it.category == "漫画"
+        }
             .sortedByDescending { it.updatedAt }
     }
     androidx.compose.material3.AlertDialog(
@@ -591,7 +594,7 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
         text = {
             if (innerItems.isEmpty()) {
                 Text(
-                    "还没有收藏过番号或本子\n去里世界的番号/本子页面点红心收藏",
+                    "还没有收藏过番号/动漫/本子\n去里世界对应页面点红心收藏",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
@@ -629,6 +632,7 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
                                 Text(
                                     when (e.category) {
                                         "番号" -> "番号 · ${e.subTitle}"
+                                        "动漫" -> "动漫 · ${e.subTitle}"
                                         "本子" -> "本子 · ${e.subTitle}"
                                         else -> "漫画 · ${e.subTitle}"
                                     },

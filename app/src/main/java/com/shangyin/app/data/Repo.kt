@@ -381,12 +381,13 @@ object Repo {
 
     // ---------- 导入导出 ----------
 
-    /** 导出全部数据（含片源配置） */
+    /** 导出全部数据（含影视源 + 动漫源配置） */
     suspend fun exportAll(): ExportData = ExportData(
         items = itemDao.getAllSync(),
         lists = listDao.getAllListsSync(),
         listItems = listDao.getAllListItemsSync(),
-        vodSources = SettingsStore.getVodSources()
+        vodSources = SettingsStore.getVodSources(),
+        animeSources = SettingsStore.getAnimeSources()
     )
 
     /**
@@ -419,6 +420,9 @@ object Repo {
         if (data.vodSources.isNotEmpty()) {
             SettingsStore.setVodSources(data.vodSources)
         }
+        if (data.animeSources.isNotEmpty()) {
+            SettingsStore.setAnimeSources(data.animeSources)
+        }
     }
 }
 
@@ -427,5 +431,6 @@ data class ExportData(
     val items: List<com.shangyin.app.data.db.CollectionItemEntity>,
     val lists: List<com.shangyin.app.data.db.ItemListEntity>,
     val listItems: List<com.shangyin.app.data.db.ListItemEntity>,
-    val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList()
+    val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList(),
+    val animeSources: List<com.shangyin.app.data.vod.VodSource> = emptyList()
 )

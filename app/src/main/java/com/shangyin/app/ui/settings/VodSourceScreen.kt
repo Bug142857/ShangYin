@@ -66,15 +66,58 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 /**
- * 片源管理页：维护苹果CMS V10 采集源（名称 + API 地址）。
+ * 采集源配置页参数：一套配置 = 一个独立的源列表（影视源 / 动漫源各一份）。
+ * 两个页面共用下面同一份实现，避免出现"两份代码、改一处漏一处"的分叉。
+ */
+data class SourceConfig(
+    val title: String,
+    val description: String,
+    /** 导出文件名前缀，如 vod_sources / anime_sources */
+    val exportPrefix: String,
+    val getSources: () -> List<VodSource>,
+    val setSources: (List<VodSource>) -> Unit
+)
+
+/** 影视源配置页（设置 → 片源管理 → 影视源配置） */
+@Composable
+fun VodSourceScreen(nav: NavHostController) {
+    SourceConfigPage(
+        nav = nav,
+        config = SourceConfig(
+            title = "影视源配置",
+            description = "配置影视采集源（苹果CMS V10）。测试后自动归目录：需外网的源进「需要外网」目录（搜索页 H1 分类专用），详情页在线观看只用「国内可访问」源。",
+            exportPrefix = "vod_sources",
+            getSources = { SettingsStore.getVodSources() },
+            setSources = { SettingsStore.setVodSources(it) }
+        )
+    )
+}
+
+/** 动漫源配置页（设置 → 片源管理 → 动漫源配置）：与影视源完全独立的另一份源列表 */
+@Composable
+fun AnimeSourceScreen(nav: NavHostController) {
+    SourceConfigPage(
+        nav = nav,
+        config = SourceConfig(
+            title = "动漫源配置",
+            description = "配置动漫采集源（苹果CMS V10），仅供「里世界 → 动漫」使用，与影视源互不影响。带「动漫」分类的采集站都能用（动漫专站或综合站均可）。",
+            exportPrefix = "anime_sources",
+            getSources = { SettingsStore.getAnimeSources() },
+            setSources = { SettingsStore.setAnimeSources(it) }
+        )
+    )
+}
+
+/**
+ * 采集源配置页实现：维护苹果CMS V10 采集源（名称 + API 地址）。
  * 支持：单条添加/编辑/启停/删除 + 批量导入（JSON 数组、一行一个 URL、订阅链接下载）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VodSourceScreen(nav: NavHostController) {
+private fun SourceConfigPage(nav: NavHostController, config: SourceConfig) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var sources by remember { mutableStateOf(SettingsStore.getVodSources()) }
+    var sources by remember { mutableStateOf(config.getSources()) }
 
     // 对话框状态
     var showAdd by remember { mutableStateOf(false) }
@@ -106,7 +149,7 @@ fun VodSourceScreen(nav: NavHostController) {
             val json = pendingExportJson ?: return@let
             val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault())
                 .format(java.util.Date())
-            val fileName = "vod_sources_$ts.json"
+            val fileName = "${config.exportPrefix}_$ts.json"
             runCatching {
                 val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, tree)
                 val newFile = docFile?.createFile("application/json", fileName)
@@ -124,7 +167,7 @@ fun VodSourceScreen(nav: NavHostController) {
 
     fun persist(list: List<VodSource>) {
         sources = list
-        SettingsStore.setVodSources(list)
+        config.setSources(list)
     }
 
     /** 应用单源测试结果（线程安全：批量测试时多协程并发回写） */
@@ -239,7 +282,7 @@ fun VodSourceScreen(nav: NavHostController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("片源管理") },
+                title = { Text(config.title) },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -273,7 +316,7 @@ fun VodSourceScreen(nav: NavHostController) {
         ) {
             Spacer(Modifier.height(8.dp))
             Text(
-                "配置影视采集源（苹果CMS V10）。测试后自动归目录：需外网的源进「需要外网」目录（搜索页 H1 分类专用），详情页在线观看只用「国内可访问」源。",
+                config.description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

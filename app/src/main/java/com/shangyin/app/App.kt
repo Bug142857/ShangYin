@@ -35,8 +35,9 @@ class App : Application(), ImageLoaderFactory {
         // `__diamwall` 会让整站死循环**（实测真浏览器复现 ERR_TOO_MANY_REDIRECTS），
         // 启动时清一次让服务端重新下发（登录票据 remix_* 不受影响）
         runCatching { com.shangyin.app.data.zlib.ZlibClient.clearTransientCookies() }
-        // 首次使用播种内置默认采集源（在线观影）
+        // 首次使用播种内置默认采集源（在线观影：影视源 + 动漫源）
         SettingsStore.ensureDefaultVodSourcesSeeded()
+        SettingsStore.ensureDefaultAnimeSourcesSeeded()
         // 配置变更（登录/云同步/片源等）时自动备份到公共目录
         SettingsStore.registerListener { _, key ->
             if (key in com.shangyin.app.data.ConfigBackup.KEYS) {

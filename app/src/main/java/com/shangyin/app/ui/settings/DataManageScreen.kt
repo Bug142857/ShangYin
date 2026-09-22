@@ -53,7 +53,7 @@ import java.util.Locale
 
 /**
  * 数据管理页：导出（选目录保存 JSON）/ 导入（选文件恢复）。
- * 备份包含：收藏条目、清单及层级、清单归属排序、片源配置（含目录归属与测试结果）。
+ * 备份包含：收藏条目、清单及层级、清单归属排序、影视源/动漫源配置（含目录归属与测试结果）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,7 +119,7 @@ fun DataManageScreen(nav: NavHostController) {
                 .padding(16.dp)
         ) {
             Text(
-                "备份包含：收藏条目（含评分/笔记）、清单及子清单层级、清单归属排序、片源配置（含目录归属与测试结果）。",
+                "备份包含：收藏条目（含评分/笔记）、清单及子清单层级、清单归属排序、影视源/动漫源配置（含目录归属与测试结果）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

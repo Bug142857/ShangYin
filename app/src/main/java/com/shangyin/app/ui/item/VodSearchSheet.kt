@@ -188,7 +188,7 @@ fun VodSearchSheet(
                 noSources -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "国内可访问目录还没有片源，先去设置里添加或测试归组",
+                            "国内可访问目录还没有片源，先去「影视源配置」里添加或测试归组",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f)
@@ -255,7 +255,7 @@ fun VodSearchSheet(
             } else if (results.isEmpty() && !searching && !noSources) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(
-                        "没有找到片源\n可能是这个关键词真的没匹配，也可能是线路/网络问题（被墙、源已失效）；\n试试换关键词，或到片源管理里测试/更换线路后再搜",
+                        "没有找到片源\n可能是这个关键词真的没匹配，也可能是线路/网络问题（被墙、源已失效）；\n试试换关键词，或到 设置 → 片源管理 → 影视源配置 里测试/更换线路后再搜",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

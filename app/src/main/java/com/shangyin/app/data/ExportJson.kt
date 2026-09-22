@@ -80,6 +80,22 @@ fun buildExportJson(data: ExportData): String {
     }
     root.put("vodSources", vodArr)
 
+    // 动漫源配置（与影视源独立；旧客户端导入时自动忽略此字段）
+    val animeArr = JSONArray()
+    data.animeSources.forEach { v ->
+        animeArr.put(JSONObject().apply {
+            put("id", v.id)
+            put("name", v.name)
+            put("baseUrl", v.baseUrl)
+            put("enabled", v.enabled)
+            put("region", v.region)
+            v.testStatus?.let { put("testStatus", it) }
+            v.testMsg?.let { put("testMsg", it) }
+            put("testAt", v.testAt)
+        })
+    }
+    root.put("animeSources", animeArr)
+
     return root.toString(2)
 }
 
@@ -158,5 +174,21 @@ fun parseExportJson(json: String): ExportData {
         }
     } ?: emptyList()
 
-    return ExportData(items, lists, rels, vodSources)
+    val animeSources = root.optJSONArray("animeSources")?.let { arr ->
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            com.shangyin.app.data.vod.VodSource(
+                id = o.optString("id"),
+                name = o.optString("name"),
+                baseUrl = o.optString("baseUrl"),
+                enabled = o.optBoolean("enabled", true),
+                region = o.optString("region", "cn").ifBlank { "cn" },
+                testStatus = o.optString("testStatus", "").ifBlank { null },
+                testMsg = o.optString("testMsg", "").ifBlank { null },
+                testAt = o.optLong("testAt", 0L)
+            )
+        }
+    } ?: emptyList()
+
+    return ExportData(items, lists, rels, vodSources, animeSources)
 }
