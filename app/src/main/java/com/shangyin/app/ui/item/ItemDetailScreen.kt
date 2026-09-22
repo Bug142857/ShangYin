@@ -141,9 +141,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 actions = {
                     // 表世界条目：右上角显示收藏状态（已在清单=对号）/加号添加
                     val cur = it_
-                    if (cur != null && cur.category != "番号" && cur.category != "动漫" &&
-                        cur.category != "本子" && cur.category != "漫画"
-                    ) {
+                    if (cur != null && cur.category != "番号" && cur.category != "本子" && cur.category != "漫画") {
                         CollectStatusAction(
                             itemId = cur.id,
                             onAdd = { showAddToList = true }
@@ -224,31 +222,6 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 val curId = nav.currentBackStackEntry?.destination?.id
                 runCatching {
                     nav.navigate("comicDetail/${android.net.Uri.encode(entity.doubanId)}") {
-                        curId?.let { popUpTo(it) { inclusive = true } }
-                        launchSingleTop = true
-                    }
-                }
-            }
-            Column(Modifier.padding(pad).fillMaxSize()) {}
-            return@Scaffold
-        }
-
-        // 动漫条目：跳动漫详情页（doubanId = "srcId|vodId"，与动漫页/详情页收藏同一口径）
-        if (entity.category == "动漫") {
-            val context = LocalContext.current
-            LaunchedEffect(entity.id) {
-                if (forwarded) return@LaunchedEffect
-                forwarded = true
-                val parts = entity.doubanId.split("|")
-                val vid = parts.getOrNull(1)?.toLongOrNull()
-                if (parts.size != 2 || vid == null || vid <= 0L) {
-                    Toast.makeText(context, "条目数据异常，无法打开", Toast.LENGTH_SHORT).show()
-                    nav.safePopBackStack()
-                    return@LaunchedEffect
-                }
-                val curId = nav.currentBackStackEntry?.destination?.id
-                runCatching {
-                    nav.navigate("animeDetail/${android.net.Uri.encode(parts[0])}/$vid") {
                         curId?.let { popUpTo(it) { inclusive = true } }
                         launchSingleTop = true
                     }

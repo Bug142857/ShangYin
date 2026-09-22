@@ -182,11 +182,11 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
-            // 片源管理（在线观影：影视源 + 动漫源）
+            // 片源管理（在线观影）
             Card {
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable {
-                        nav.safeNavigate("sourceManage")
+                        nav.safeNavigate("vodSources")
                     }.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -198,7 +198,10 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     Column(Modifier.weight(1f)) {
                         Text("片源管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "影视源配置 · 动漫源配置",
+                            if (SettingsStore.getVodSources().any { it.enabled }) {
+                                val n = SettingsStore.getVodSources().count { it.enabled }
+                                "已配置 $n 个片源 · 影视详情页可在线观看"
+                            } else "配置影视采集源，收藏的影视可在线观看",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

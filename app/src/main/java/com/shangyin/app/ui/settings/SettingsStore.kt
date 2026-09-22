@@ -203,15 +203,14 @@ object SettingsStore {
         sp.edit().remove(KEY_ZLIB_COOKIE).apply()
     }
 
-    // ---------- 在线观影（影视源 / 动漫源 + 播放进度） ----------
+    // ---------- 在线观影（片源管理 + 播放进度） ----------
 
     private const val KEY_VOD_SOURCES = "vod_sources_json"
-    private const val KEY_ANIME_SOURCES = "anime_sources_json"
     private const val KEY_VOD_PROGRESS_PREFIX = "vod_progress_"
 
     private val vodJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
-    /** 影视采集源列表（JSON 持久化） */
+    /** 采集源列表（JSON 持久化） */
     var vodSourcesJson: String
         get() = sp.getString(KEY_VOD_SOURCES, "").orEmpty()
         set(v) = sp.edit().putString(KEY_VOD_SOURCES, v).apply()
@@ -235,30 +234,6 @@ object SettingsStore {
     fun ensureDefaultVodSourcesSeeded() {
         if (!sp.contains(KEY_VOD_SOURCES)) {
             setVodSources(com.shangyin.app.data.vod.DEFAULT_VOD_SOURCES)
-        }
-    }
-
-    /** 动漫采集源列表（JSON 持久化，与影视源完全独立） */
-    var animeSourcesJson: String
-        get() = sp.getString(KEY_ANIME_SOURCES, "").orEmpty()
-        set(v) = sp.edit().putString(KEY_ANIME_SOURCES, v).apply()
-
-    fun getAnimeSources(): List<com.shangyin.app.data.vod.VodSource> = runCatching {
-        if (animeSourcesJson.isBlank()) emptyList()
-        else vodJson.decodeFromString<List<com.shangyin.app.data.vod.VodSource>>(animeSourcesJson)
-    }.getOrDefault(emptyList())
-
-    fun setAnimeSources(list: List<com.shangyin.app.data.vod.VodSource>) {
-        animeSourcesJson = vodJson.encodeToString(
-            kotlinx.serialization.builtins.ListSerializer(com.shangyin.app.data.vod.VodSource.serializer()),
-            list
-        )
-    }
-
-    /** 首次使用时播种内置默认动漫源（同样只播种一次，删光不重播） */
-    fun ensureDefaultAnimeSourcesSeeded() {
-        if (!sp.contains(KEY_ANIME_SOURCES)) {
-            setAnimeSources(com.shangyin.app.data.vod.DEFAULT_ANIME_SOURCES)
         }
     }
 

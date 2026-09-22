@@ -31,7 +31,6 @@ object ConfigBackup {
         "webdav_user",
         "webdav_pass",
         "vod_sources_json",
-        "anime_sources_json",
         "bika_token",
         "wygamer_cookie",
         "zlib_cookie",

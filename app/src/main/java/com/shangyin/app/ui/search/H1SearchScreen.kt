@@ -212,12 +212,12 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                 Text("外网目录还没有片源", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "先到 设置 → 片源管理 → 影视源配置 里测试链接，测试为「需外网/返回异常」的源会自动归入外网目录；也可以在编辑片源时手动选择「需要外网」目录。",
+                    "先到 片源管理 里测试链接，测试为「需外网/返回异常」的源会自动归入外网目录；也可以在编辑片源时手动选择「需要外网」目录。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = { nav.safeNavigate("vodSources") }) { Text("去影视源配置") }
+                Button(onClick = { nav.safeNavigate("vodSources") }) { Text("去片源管理") }
             }
         } else {
             Column(

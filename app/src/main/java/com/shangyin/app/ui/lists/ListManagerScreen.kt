@@ -183,7 +183,7 @@ fun ListManagerScreen(nav: NavHostController) {
                     if (createWorld == 1) {
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "里世界清单用于收藏番号、动漫、本子与漫画",
+                            "里世界清单用于收藏番号、本子与漫画",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )

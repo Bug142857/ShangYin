@@ -58,11 +58,6 @@ data class VodItem(
     val vod_area: String = "",
     val vod_remarks: String = "",
     val vod_douban_id: Long = 0,
-    /** 简介（可能含 HTML 标签，展示前需清洗）；动漫详情页用 */
-    val vod_content: String = "",
-    val vod_director: String = "",
-    val vod_actor: String = "",
-    val vod_score: String = "",
     /** 播放组名，如 "jsyun$$$jsm3u8" */
     val vod_play_from: String = "",
     /** 剧集数据：组$$$组#集$下标分隔，如 "第01集$url1#第02集$url2$$$第01集$url3" */
