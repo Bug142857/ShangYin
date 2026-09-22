@@ -615,12 +615,12 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
                                 }
                                 .padding(vertical = 6.dp)
                         ) {
-                            if (!e.coverUrl.isNullOrBlank()) {
-                                CoverImage(
-                                    url = e.coverUrl,
-                                    modifier = Modifier.size(40.dp, 56.dp)
-                                )
-                            }
+                            // 没有封面的收藏（电视）：用频道名当封面，不留空
+                            CoverImage(
+                                url = e.coverUrl,
+                                placeholderText = e.title,
+                                modifier = Modifier.size(40.dp, 56.dp)
+                            )
                             Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(
@@ -906,6 +906,7 @@ private fun GridItemCard(
         Column(Modifier.fillMaxWidth()) {
             CoverImage(
                 url = item.coverUrl,
+                placeholderText = item.title,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(2f / 3f)
@@ -984,6 +985,7 @@ private fun ItemRowInList(
         ) {
                 CoverImage(
                     url = item.coverUrl,
+                    placeholderText = item.title,
                     modifier = Modifier.width(40.dp).height(56.dp)
                 )
                 Column(

@@ -71,6 +71,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -151,7 +152,9 @@ fun CoverImage(
     /** 是否允许长按下载（默认 false，避免与外层 Box.clickable 手势冲突） */
     downloadable: Boolean = false,
     /** 点击回调（导航/查看大图）；null 则不处理点击，事件穿透给外层 */
-    onClick: (() -> Unit)? = null
+    onClick: (() -> Unit)? = null,
+    /** 无封面（url 为空）时显示的占位文字（电视频道这类没有图源的内容用标题当封面）；null 则显示通用图标 */
+    placeholderText: String? = null
 ) {
     val saveRequester = rememberImageSaveRequester()
 
@@ -179,11 +182,24 @@ fun CoverImage(
             modifier = finalModifier,
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                Icons.Rounded.List,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.outline
-            )
+            if (!placeholderText.isNullOrBlank()) {
+                // 没图的条目（电视收藏）用标题文字当封面，比一个通用图标有信息量
+                Text(
+                    placeholderText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(4.dp)
+                )
+            } else {
+                Icon(
+                    Icons.Rounded.List,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.outline
+                )
+            }
         }
     } else {
         AsyncImage(

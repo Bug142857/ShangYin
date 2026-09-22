@@ -457,6 +457,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                 Box {
                     CoverImage(
                         url = entity.coverUrl,
+                        placeholderText = entity.title,
                         onClick = {
                             com.shangyin.app.data.douban.DoubanClient.largeImageUrl(entity.coverUrl)
                                 ?.let { big -> openViewer(listOf(big), 0) }

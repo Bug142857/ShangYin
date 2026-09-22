@@ -1,11 +1,13 @@
 package com.shangyin.app.ui.live
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,30 +17,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items as lazyItems
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -47,11 +48,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -93,7 +94,7 @@ object LiveCache {
  * 因平台侧接口/流地址问题太多（手机 UA 差异、签名、短时效地址、"发一段就断"…），
  * 用户决定**只保留电视这一块**，模块与收藏分类统一改名「电视」。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun LiveHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
@@ -111,7 +112,7 @@ fun LiveHomeScreen(nav: NavHostController) {
     var loading by remember { mutableStateOf(false) }
     var refreshing by remember { mutableStateOf(false) }
     var selGroup by remember { mutableStateOf(LiveCache.customGroup) }
-    var pickerOpen by remember { mutableStateOf(false) }
+    var groupExpanded by rememberSaveable { mutableStateOf(false) }
     var openingUrl by remember { mutableStateOf<String?>(null) }
     var collectTarget by remember { mutableStateOf<LiveRoom?>(null) }
     var query by remember { mutableStateOf(LiveCache.searchInput) }
@@ -203,40 +204,80 @@ fun LiveHomeScreen(nav: NavHostController) {
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             )
 
-            // 分组选择窗：电视能精确统计每组频道数，所以带数量（搜索态隐藏，避免与关键词混淆）
+            // 分组筛选：与漫画 / 游戏 / 源资源库同一套形态 —— 收起=横滑一行 chips + 下拉箭头，
+            // 展开=换行 chips（限高可滚）；电视能精确统计每组频道数，所以 chip 带数量（搜索态隐藏，避免与关键词混淆）
             if (!searchActive && groups.isNotEmpty()) {
-                val names = listOf("全部频道（${allChannels.size}）") +
-                    groups.map { "$it（${counts[it] ?: 0}）" }
-                val selIdx = if (selGroup == null) 0 else groups.indexOf(selGroup) + 1
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { pickerOpen = true }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        names.getOrElse(selIdx) { names.first() },
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "选择分组")
+                val pick: (String?) -> Unit = { g ->
+                    selGroup = g
+                    LiveCache.customGroup = g
+                    scope.launch { listState.scrollToItem(0) }
                 }
-                if (pickerOpen) {
-                    LivePickerDialog(
-                        title = "选择分组",
-                        items = names,
-                        selectedIndex = selIdx,
-                        onPick = { idx ->
-                            pickerOpen = false
-                            selGroup = if (idx == 0) null else groups.getOrNull(idx - 1)
-                            LiveCache.customGroup = selGroup
-                            scope.launch { listState.scrollToItem(0) }
-                        },
-                        onDismiss = { pickerOpen = false }
-                    )
+                if (!groupExpanded) {
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            FilterChip(
+                                selected = selGroup == null,
+                                onClick = { pick(null) },
+                                label = { Text("全部（${allChannels.size}）") },
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            groups.forEach { g ->
+                                FilterChip(
+                                    selected = selGroup == g,
+                                    onClick = { pick(g) },
+                                    label = { Text("$g（${counts[g] ?: 0}）") },
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = { groupExpanded = true }) {
+                            Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开分组")
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .padding(horizontal = 12.dp, vertical = 2.dp)
+                            .heightIn(max = 260.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("全部分组", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { groupExpanded = false }) {
+                                Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起分组")
+                            }
+                        }
+                        FlowRow(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            FilterChip(
+                                selected = selGroup == null,
+                                onClick = { pick(null); groupExpanded = false },
+                                label = { Text("全部（${allChannels.size}）") }
+                            )
+                            groups.forEach { g ->
+                                FilterChip(
+                                    selected = selGroup == g,
+                                    onClick = { pick(g); groupExpanded = false },
+                                    label = { Text("$g（${counts[g] ?: 0}）") }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -417,79 +458,3 @@ fun LiveHomeScreen(nav: NavHostController) {
 /** 同名频道是否有多条地址（有多条就提示"多线路"，与播放页的线路菜单对应） */
 private fun linesHint(all: List<Pair<String, com.shangyin.app.data.live.LiveChannel>>, name: String): Boolean =
     all.count { it.second.name == name } > 1
-
-/**
- * 分组选择窗：弹窗里列全部分组（带频道数），限高可滚、可搜索。
- *
- * ⚠️ 为什么用 AlertDialog 而不是 DropdownMenu：DropdownMenu 里塞 LazyColumn 会踩
- * 「滚动组件被无限高度约束测量」的崩溃（v0.193 用户实测"点下拉闪退"），弹窗自带确定高度约束。
- */
-@Composable
-internal fun LivePickerDialog(
-    title: String,
-    items: List<String>,
-    selectedIndex: Int,
-    onPick: (Int) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var query by remember { mutableStateOf("") }
-    val shown = remember(query, items) {
-        items.mapIndexed { i, n -> i to n }
-            .filter { query.isBlank() || it.second.contains(query, ignoreCase = true) }
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                if (items.size > 12) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        placeholder = { Text("搜索分组") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (shown.isEmpty()) {
-                    Text(
-                        "没有匹配的分组",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline
-                    )
-                } else {
-                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
-                        lazyItems(shown, key = { it.first }) { (idx, name) ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onPick(idx) }
-                                    .padding(vertical = 11.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = if (idx == selectedIndex) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (idx == selectedIndex) {
-                                    Icon(
-                                        Icons.Rounded.Check,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
-}

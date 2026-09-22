@@ -17,8 +17,8 @@ android {
         // 版本号规则（2026-09-22 用户指定）：versionName = 上一版 + 1（不补零），从 0.190 起
         // （不再读 git 提交次数——那条规则会因"每轮 2 个提交"而每次 +2）
         // ⚠️ versionCode 固定取 1000 + N（0.190 → 1190）：必须单调递增，否则系统拒绝覆盖安装
-        versionCode = 1196
-        versionName = "0.196"
+        versionCode = 1197
+        versionName = "0.197"
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
