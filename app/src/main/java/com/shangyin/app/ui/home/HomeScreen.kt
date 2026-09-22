@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.OndemandVideo
@@ -80,7 +81,7 @@ import com.shangyin.app.ui.safeNavigate
 /**
  * 主页：底部双标签「表世界 / 里世界」。
  * - 表世界：分类 chips + 搜索栏（跳搜索页）+ 豆瓣收藏清单
- * - 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 入口 + 里世界收藏清单
+ * - 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 / 直播 入口 + 里世界收藏清单
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -211,7 +212,7 @@ private fun SurfaceWorld(
 
 // ---------------- 里世界 ----------------
 
-/** 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 入口 + 里世界清单 */
+/** 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 / 直播 入口 + 里世界清单 */
 @Composable
 private fun InnerWorld(
     nav: NavHostController,
@@ -262,6 +263,12 @@ private fun InnerWorld(
                 title = "图书",
                 modifier = Modifier.weight(1f),
                 onClick = { nav.safeNavigate("bookHome") }
+            )
+            InnerWorldEntry(
+                icon = Icons.Rounded.LiveTv,
+                title = "直播",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("liveHome") }
             )
         }
         WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))

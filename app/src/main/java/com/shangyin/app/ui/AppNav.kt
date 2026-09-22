@@ -215,6 +215,9 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getString("hash").orEmpty()
                 )
             }
+            // 直播 = 虎牙 / 斗鱼 / B站 / 自定义 M3U 源（里世界第六入口）
+            composable("liveHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
+            composable("liveSources") { com.shangyin.app.ui.live.LiveSourcesScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

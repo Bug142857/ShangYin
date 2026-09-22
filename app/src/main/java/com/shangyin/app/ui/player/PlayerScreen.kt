@@ -146,6 +146,8 @@ fun PlayerScreen(nav: NavHostController) {
     val view = LocalView.current
 
     val groups = PlayerSession.groups
+    // 直播模式：不记忆进度、不显示选集/线路/倍速（由里世界「直播」模块进入）
+    val isLive = PlayerSession.isLive
     var groupIndex by remember {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
     }
@@ -165,6 +167,8 @@ fun PlayerScreen(nav: NavHostController) {
             .setConnectTimeoutMs(8000)
             .setReadTimeoutMs(15000)
             .setAllowCrossProtocolRedirects(true)
+            // 直播防盗链：虎牙/斗鱼/B站 的流地址都要带 Referer（进播放页前由 PlayerSession 传好）
+            .setDefaultRequestProperties(PlayerSession.streamHeaders)
         val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
         // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms
@@ -268,6 +272,7 @@ fun PlayerScreen(nav: NavHostController) {
 
     fun saveProgress() {
         if (released) return
+        if (isLive) return // 直播没有"看到哪儿"的概念，不落盘进度
         val eps = groups.getOrNull(groupIndex)?.episodes ?: return
         val ep = eps.getOrNull(player.currentMediaItemIndex) ?: return
         val pos = player.currentPosition
@@ -535,23 +540,26 @@ fun PlayerScreen(nav: NavHostController) {
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isLandscape && groups.isNotEmpty()) {
+                            if (isLandscape && groups.isNotEmpty() && !isLive) {
                                 TextButton(onClick = { panelOpen = !panelOpen }) {
                                     Text("选集", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
                             }
-                            IconButton(
-                                onClick = { speedMenuOpen = true },
-                                modifier = Modifier
-                                    .size(34.dp)
-                                    .background(Color.Black.copy(alpha = 0.35f), CircleShape)
-                            ) {
-                                Icon(
-                                    painterResource(R.drawable.ic_speed),
-                                    contentDescription = "倍速",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                            // 直播不提供倍速（直播流倍速没有意义）
+                            if (!isLive) {
+                                IconButton(
+                                    onClick = { speedMenuOpen = true },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .background(Color.Black.copy(alpha = 0.35f), CircleShape)
+                                ) {
+                                    Icon(
+                                        painterResource(R.drawable.ic_speed),
+                                        contentDescription = "倍速",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -581,7 +589,7 @@ fun PlayerScreen(nav: NavHostController) {
 
                     // 横屏右侧面板：标题 + 线路 + 选集网格（控制条右下角"选集"按钮触发；
                     // 面板底部抬高，不遮挡控制条；控制器隐藏时面板一起收起）
-                    if (isLandscape && groups.isNotEmpty()) {
+                    if (isLandscape && groups.isNotEmpty() && !isLive) {
                         androidx.compose.animation.AnimatedVisibility(
                             visible = panelOpen && controlsVisible,
                             enter = fadeIn() + slideInHorizontally { it },
@@ -737,8 +745,40 @@ fun PlayerScreen(nav: NavHostController) {
                     }
                 }
 
+                // 竖屏直播信息（直播没有选集/线路，只显示房间信息）
+                if (!isLandscape && isLive) {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.background)
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            PlayerSession.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            listOf(PlayerSession.subTitle, "直播中").filter { it.isNotBlank() }
+                                .joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "直播不支持拖动进度；若一直缓冲，返回列表换一个房间即可",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+
                 // 竖屏下方：标题 + 线路 + 集数网格（横屏隐藏）
-                if (!isLandscape) {
+                if (!isLandscape && !isLive) {
                     val eps = groups.getOrNull(groupIndex)?.episodes.orEmpty()
                     Column(
                         Modifier

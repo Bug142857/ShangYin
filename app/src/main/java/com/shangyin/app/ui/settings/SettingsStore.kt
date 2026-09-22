@@ -203,6 +203,42 @@ object SettingsStore {
         sp.edit().remove(KEY_ZLIB_COOKIE).apply()
     }
 
+    // ---------- 直播（自定义 M3U 源 + B站登录） ----------
+
+    private const val KEY_LIVE_SOURCES = "live_sources_json"
+    private const val KEY_BILI_COOKIE = "bili_cookie"
+
+    /** 自定义直播源列表（JSON 持久化；网络地址或本地导入的 m3u 内容） */
+    var liveSourcesJson: String
+        get() = sp.getString(KEY_LIVE_SOURCES, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_LIVE_SOURCES, v).apply()
+
+    fun getLiveSources(): List<com.shangyin.app.data.live.LiveSource> = runCatching {
+        if (liveSourcesJson.isBlank()) emptyList()
+        else vodJson.decodeFromString<List<com.shangyin.app.data.live.LiveSource>>(liveSourcesJson)
+    }.getOrDefault(emptyList())
+
+    fun setLiveSources(list: List<com.shangyin.app.data.live.LiveSource>) {
+        liveSourcesJson = vodJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(
+                com.shangyin.app.data.live.LiveSource.serializer()
+            ),
+            list
+        )
+    }
+
+    /** B站登录 Cookie（WebView 登录后抓取；含 SESSDATA 才算登录，登录后直播可看原画） */
+    var biliCookie: String
+        get() = sp.getString(KEY_BILI_COOKIE, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_BILI_COOKIE, v).apply()
+
+    val isBiliLoggedIn: Boolean
+        get() = biliCookie.contains("SESSDATA", ignoreCase = true)
+
+    fun clearBiliLogin() {
+        sp.edit().remove(KEY_BILI_COOKIE).apply()
+    }
+
     // ---------- 在线观影（片源管理 + 播放进度） ----------
 
     private const val KEY_VOD_SOURCES = "vod_sources_json"

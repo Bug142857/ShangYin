@@ -231,6 +231,35 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             return@Scaffold
         }
 
+        // 直播条目：doubanId = "{platform}|{roomId}"，解析当前流地址后直接进直播播放
+        if (entity.category == com.shangyin.app.data.live.LivePlatforms.CATEGORY) {
+            val context = LocalContext.current
+            LaunchedEffect(entity.id) {
+                if (forwarded) return@LaunchedEffect
+                forwarded = true
+                val room = com.shangyin.app.ui.live.liveRoomFromCollect(
+                    doubanId = entity.doubanId,
+                    title = entity.title,
+                    subTitle = entity.subTitle,
+                    cover = entity.coverUrl
+                )
+                if (room == null) {
+                    Toast.makeText(context, "条目数据异常，无法打开直播", Toast.LENGTH_SHORT).show()
+                    nav.safePopBackStack()
+                    return@LaunchedEffect
+                }
+                val ok = com.shangyin.app.ui.live.openLiveAndPlay(nav, context, room, popCurrent = true)
+                if (!ok) nav.safePopBackStack()
+            }
+            Column(Modifier.padding(pad).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(60.dp))
+                androidx.compose.material3.CircularProgressIndicator()
+                Spacer(Modifier.height(12.dp))
+                Text("正在打开直播…", style = MaterialTheme.typography.bodySmall)
+            }
+            return@Scaffold
+        }
+
         val cacheKey = "${entity.category}/${entity.doubanId}"
 
         var celebrities by remember(cacheKey) { mutableStateOf(DetailCache.celebrities[cacheKey].orEmpty()) }

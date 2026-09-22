@@ -23,6 +23,15 @@ object PlayerSession {
     /** 起始集内的续播位置（毫秒） */
     var startPosMs: Long = 0L
 
+    /** 直播模式：不记忆进度、不显示选集/倍速，播放器用 streamHeaders 里的防盗链请求头 */
+    var isLive: Boolean = false
+
+    /** 二级信息（直播：平台 · 主播 / 在线观影为空） */
+    var subTitle: String = ""
+
+    /** 播放请求头（直播平台防盗链：Referer 等） */
+    var streamHeaders: Map<String, String> = emptyMap()
+
     fun clear() {
         itemId = 0L
         title = ""
@@ -31,5 +40,8 @@ object PlayerSession {
         groupIndex = 0
         startIndex = 0
         startPosMs = 0L
+        isLive = false
+        subTitle = ""
+        streamHeaders = emptyMap()
     }
 }

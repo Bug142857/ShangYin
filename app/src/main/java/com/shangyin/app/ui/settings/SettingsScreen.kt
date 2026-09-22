@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.List
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SaveAlt
@@ -202,6 +203,40 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                                 val n = SettingsStore.getVodSources().count { it.enabled }
                                 "已配置 $n 个片源 · 影视详情页可在线观看"
                             } else "配置影视采集源，收藏的影视可在线观看",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
+            // 直播源管理（里世界 → 直播：自定义 M3U / M3U8）
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        nav.safeNavigate("liveSources")
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.LiveTv, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("直播源管理", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            SettingsStore.getLiveSources().let { list ->
+                                val n = list.count { it.enabled }
+                                if (n > 0) "已启用 $n 个直播源 · 里世界「直播 → 我的源」看频道"
+                                else "导入 M3U / M3U8 直播源（网络地址或本地文件）"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
