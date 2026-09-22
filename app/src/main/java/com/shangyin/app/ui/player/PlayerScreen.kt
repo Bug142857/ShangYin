@@ -159,12 +159,16 @@ fun PlayerScreen(nav: NavHostController) {
 
     val player = remember {
         // 采集站多数校验 UA 且常见 http↔https 302 跳转：
-        // 带浏览器 UA + 允许跨协议重定向，修复部分线路（如 ukyun）直链 403 打不开的问题
+        // 带浏览器 UA + 允许跨协议重定向，修复部分线路（如 ukyun）直链 403 打不开的问题。
+        // animeko 网页源解析出的地址多为防盗链：再把该源要求的 Referer/UA/Cookie 一起带上。
         val httpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
             .setUserAgent(VodClient.UA)
             .setConnectTimeoutMs(8000)
             .setReadTimeoutMs(15000)
             .setAllowCrossProtocolRedirects(true)
+        if (PlayerSession.videoHeaders.isNotEmpty()) {
+            runCatching { httpFactory.setDefaultRequestProperties(PlayerSession.videoHeaders) }
+        }
         val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
         // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms

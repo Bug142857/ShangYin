@@ -5,7 +5,10 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -49,11 +52,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.animeko.AnimekoClient
+import com.shangyin.app.data.animeko.KIND_ANIMEKO
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.ui.safePopBackStack
@@ -75,7 +81,9 @@ data class SourceConfig(
     /** 导出文件名前缀，如 vod_sources / anime_sources */
     val exportPrefix: String,
     val getSources: () -> List<VodSource>,
-    val setSources: (List<VodSource>) -> Unit
+    val setSources: (List<VodSource>) -> Unit,
+    /** 一键导入用的内置订阅（名称 → URL），空表示该页不支持订阅导入 */
+    val presetSubscriptions: List<Pair<String, String>> = emptyList()
 )
 
 /** 影视源配置页（设置 → 片源管理 → 影视源配置） */
@@ -100,10 +108,12 @@ fun AnimeSourceScreen(nav: NavHostController) {
         nav = nav,
         config = SourceConfig(
             title = "动漫源配置",
-            description = "配置动漫采集源（苹果CMS V10），仅供「里世界 → 动漫」使用，与影视源互不影响。带「动漫」分类的采集站都能用（动漫专站或综合站均可）。",
+            description = "配置动漫源，仅供「里世界 → 动漫」使用，与影视源互不影响。两类都支持：" +
+                "① 苹果CMS 采集源（带「动漫」分类的站点）；② animeko 网页源（导入 animeko 订阅即可，网页源只支持搜索）。",
             exportPrefix = "anime_sources",
             getSources = { SettingsStore.getAnimeSources() },
-            setSources = { SettingsStore.setAnimeSources(it) }
+            setSources = { SettingsStore.setAnimeSources(it) },
+            presetSubscriptions = AnimekoClient.BUILTIN_SUBSCRIPTIONS
         )
     )
 }
@@ -170,6 +180,26 @@ private fun SourceConfigPage(nav: NavHostController, config: SourceConfig) {
         config.setSources(list)
     }
 
+    /** 按源类型分发测试：苹果CMS 采集源探测接口，animeko 网页源用关键词探测站点搜索页 */
+    suspend fun testSourceOf(s: VodSource): VodSource =
+        if (s.kind == KIND_ANIMEKO) AnimekoClient.testSource(s) else VodClient.testSource(s)
+
+    /**
+     * 合并导入的源：苹果CMS 源按 host 去重，animeko 网页源按名称去重（网页源没有唯一 host）。
+     * 返回 (新增数, 跳过数)。
+     */
+    fun mergeImported(list: List<VodSource>): Pair<Int, Int> {
+        val existHosts = sources.filter { it.kind != KIND_ANIMEKO }
+            .map { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) }.toSet()
+        val existNames = sources.filter { it.kind == KIND_ANIMEKO }.map { it.name }.toSet()
+        val added = list.filter { s ->
+            if (s.kind == KIND_ANIMEKO) s.name !in existNames
+            else hostOf(VodClient.normalizeBaseUrl(s.baseUrl)) !in existHosts
+        }
+        if (added.isNotEmpty()) persist(sources + added)
+        return added.size to (list.size - added.size)
+    }
+
     /** 应用单源测试结果（线程安全：批量测试时多协程并发回写） */
     fun applyResult(tested: VodSource) {
         synchronized(testLock) {
@@ -190,7 +220,7 @@ private fun SourceConfigPage(nav: NavHostController, config: SourceConfig) {
             targets.map { src ->
                 launch(Dispatchers.IO) {
                     sem.withPermit {
-                        applyResult(VodClient.testSource(src))
+                        applyResult(testSourceOf(src))
                         // 与 applyResult 同一把锁：多协程并发时 testDone++ 是读改写，不加锁会丢计数
                         synchronized(testLock) { testDone++ }
                     }
@@ -214,7 +244,7 @@ private fun SourceConfigPage(nav: NavHostController, config: SourceConfig) {
         if (testingIds.contains(src.id)) return
         testingIds.add(src.id)
         scope.launch(Dispatchers.IO) {
-            val tested = VodClient.testSource(src)
+            val tested = testSourceOf(src)
             applyResult(tested)
             persist(sources)
             testingIds.remove(src.id)
@@ -232,32 +262,39 @@ private fun SourceConfigPage(nav: NavHostController, config: SourceConfig) {
         exportDirPicker.launch(null)
     }
 
-    /** 从文本导入片源（导出文件 JSON / 订阅 JSON / 一行一个地址），host 去重合并 */
-    fun importSourcesFromText(text: String) {
-        scope.launch {
-            val (list, err) = withContext(Dispatchers.IO) { VodClient.parseImport(text) }
-            if (err != null || list.isEmpty()) {
-                Toast.makeText(context, "导入失败：${err ?: "未识别到有效源"}", Toast.LENGTH_LONG).show()
-                return@launch
-            }
-            val existHosts = sources.map { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) }.toSet()
-            val added = list.filter { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) !in existHosts }
-            when {
-                added.isEmpty() -> Toast.makeText(context, "导入的源均已存在，未新增", Toast.LENGTH_SHORT).show()
-                added.size < list.size -> {
-                    persist(sources + added)
-                    Toast.makeText(
-                        context,
-                        "已导入 ${added.size} 个源（${list.size - added.size} 个已存在被跳过）",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                else -> {
-                    persist(sources + added)
-                    Toast.makeText(context, "已导入 ${added.size} 个源", Toast.LENGTH_SHORT).show()
-                }
+    /**
+     * 从文本导入源，自动识别三种格式：
+     * ① **animeko 订阅**（含 `exportedMediaSourceDataList` / `factoryId`）→ 转成本项目源（BT 源跳过）；
+     * ② 本项目导出的源 JSON（含 kind/akConfig）；③ KVideo 订阅 JSON / 一行一个地址。
+     */
+    suspend fun importFromText(text: String) {
+        val parsed = withContext(Dispatchers.IO) {
+            if (text.contains("exportedMediaSourceDataList") || text.contains("\"factoryId\"")) {
+                val r = AnimekoClient.parseImport(text)
+                Triple(r.sources, r.error, r.skippedBt)
+            } else {
+                val (list, err) = VodClient.parseImport(text)
+                Triple(list, err, 0)
             }
         }
+        val (list, err, skippedBt) = parsed
+        if (err != null || list.isEmpty()) {
+            Toast.makeText(context, "导入失败：${err ?: "未识别到有效源"}", Toast.LENGTH_LONG).show()
+            return
+        }
+        val (addedN, dupN) = mergeImported(list)
+        val btNote = if (skippedBt > 0) "（跳过 $skippedBt 个 BT/磁力源：需 BT 下载引擎，本项目不支持）" else ""
+        val msg = when {
+            addedN == 0 -> "导入的源均已存在，未新增$btNote"
+            dupN > 0 -> "已导入 $addedN 个源（$dupN 个已存在被跳过）$btNote"
+            else -> "已导入 $addedN 个源$btNote"
+        }
+        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+    }
+
+    /** 从文本导入（文件/粘贴走这里） */
+    fun importSourcesFromText(text: String) {
+        scope.launch { importFromText(text) }
     }
 
     // 导入文件选择器（用导出的 vod_sources_*.json 文件导入）
@@ -475,29 +512,20 @@ private fun SourceConfigPage(nav: NavHostController, config: SourceConfig) {
     if (showImport) {
         ImportDialog(
             importing = importing,
+            presets = config.presetSubscriptions,
             onDismiss = { if (!importing) showImport = false },
             onImport = { text, asUrl ->
                 scope.launch {
                     importing = true
-                    val result = withContext(Dispatchers.IO) {
-                        if (asUrl) VodClient.fetchSubscription(text.trim())
-                        else VodClient.parseImport(text)
+                    val body = withContext(Dispatchers.IO) {
+                        if (asUrl) VodClient.fetchText(text.trim()) else text
                     }
                     importing = false
-                    val (list, err) = result
-                    if (err != null || list.isEmpty()) {
-                        Toast.makeText(context, "导入失败：${err ?: "未识别到有效源"}", Toast.LENGTH_LONG).show()
+                    if (body.isNullOrBlank()) {
+                        Toast.makeText(context, "订阅下载失败（链接/网络问题）", Toast.LENGTH_LONG).show()
                     } else {
-                        // host 去重合并
-                        val existHosts = sources.map { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) }.toSet()
-                        val added = list.filter { hostOf(VodClient.normalizeBaseUrl(it.baseUrl)) !in existHosts }
-                        if (added.isEmpty()) {
-                            Toast.makeText(context, "导入的源均已存在", Toast.LENGTH_SHORT).show()
-                        } else {
-                            persist(sources + added)
-                            Toast.makeText(context, "已导入 ${added.size} 个源", Toast.LENGTH_SHORT).show()
-                            showImport = false
-                        }
+                        showImport = false
+                        importFromText(body)
                     }
                 }
             }
@@ -537,7 +565,9 @@ private fun SourceCard(
         ) {
             Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
                 Text(
-                    src.name + if (src.enabled) "" else "（已停用）",
+                    src.name +
+                        (if (src.kind == KIND_ANIMEKO) "（animeko 网页源）" else "") +
+                        (if (src.enabled) "" else "（已停用）"),
                     style = MaterialTheme.typography.titleSmall,
                     color = if (src.enabled) MaterialTheme.colorScheme.onSurface
                     else MaterialTheme.colorScheme.onSurfaceVariant
@@ -600,6 +630,8 @@ private fun SourceEditDialog(
     var url by remember {
         mutableStateOf(initial?.let { VodClient.normalizeBaseUrl(it.baseUrl) }.orEmpty())
     }
+    // animeko 网页源的地址来自订阅配置（akConfig），手改会导致配置对不上 → 地址锁定只读
+    val urlLocked = initial?.kind == KIND_ANIMEKO
     var region by remember {
         mutableStateOf(if (initial?.region == "proxy") "proxy" else "cn")
     }
@@ -621,11 +653,20 @@ private fun SourceEditDialog(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("接口地址") },
+                    label = { Text(if (urlLocked) "来源地址（订阅配置，不可改）" else "接口地址") },
                     placeholder = { Text("https://xx.com/api.php/provide/vod") },
                     singleLine = true,
+                    enabled = !urlLocked,
                     modifier = Modifier.fillMaxWidth()
                 )
+                if (urlLocked) {
+                    Text(
+                        "animeko 网页源的页面地址与选择器都来自订阅配置，重新导入订阅即可更新。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "所属目录" + if (regionTouched) "（已手动选择，测试不再自动归组）" else "",
@@ -659,31 +700,60 @@ private fun SourceEditDialog(
     )
 }
 
-/** 批量导入对话框：粘贴内容（JSON/一行一个URL）或订阅链接下载 */
+/** 批量导入对话框：粘贴内容（JSON/一行一个URL）、订阅链接下载，或一键导入内置 animeko 订阅 */
 @Composable
 private fun ImportDialog(
     importing: Boolean,
+    presets: List<Pair<String, String>>,
     onDismiss: () -> Unit,
     onImport: (text: String, asUrl: Boolean) -> Unit
 ) {
-    var text by remember { mutableStateOf("") }
+    // 有内置订阅时预填第一条（用户点一下「链接订阅」即可导入）
+    var text by remember { mutableStateOf(presets.firstOrNull()?.second.orEmpty()) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("批量导入片源") },
+        title = { Text("批量导入源") },
         text = {
             Column {
                 Text(
-                    "支持 KVideo 订阅 JSON、或一行一个接口地址（名称|地址）",
+                    "支持：animeko 订阅（URL 或导出 JSON，BT/磁力源会自动跳过）、KVideo 订阅 JSON、本项目导出的源 JSON，或一行一个接口地址（名称|地址）",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (presets.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "内置订阅（点一下填入链接，再点「链接订阅」下载导入）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    presets.forEach { (name, url) ->
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 2.dp)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .clickable { text = url }
+                        ) {
+                            Text(
+                                name,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
                     label = { Text("粘贴内容或订阅链接") },
-                    minLines = 4,
-                    maxLines = 8,
+                    minLines = 3,
+                    maxLines = 6,
                     modifier = Modifier.fillMaxWidth()
                 )
             }
