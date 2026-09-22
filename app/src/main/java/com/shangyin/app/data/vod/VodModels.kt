@@ -4,9 +4,8 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * 采集源配置（用户在"设置 → 片源管理"里维护）。
- * - [kind] = `cms`（默认）：苹果CMS V10 采集源，baseUrl 形如 https://xx/api.php/provide/vod
- * - [kind] = `animeko`：animeko 网页源（web-selector），播放地址靠 [akConfig] 里的选择器/正则解析
+ * 苹果CMS V10 采集源配置（用户在"片源管理"里维护）。
+ * baseUrl 形如 https://jszyapi.com/api.php/provide/vod，搜索时拼 ?ac=videolist&wd=标题
  */
 @Serializable
 data class VodSource(
@@ -23,11 +22,7 @@ data class VodSource(
     /** 测试结果描述，如"可用 · 共 123 部" */
     val testMsg: String? = null,
     /** 最近测试时间戳（ms） */
-    val testAt: Long = 0L,
-    /** 源类型：cms（苹果CMS，默认，兼容旧数据）/ animeko（animeko 网页源） */
-    val kind: String = "cms",
-    /** animeko 网页源的 SelectorSearchConfig 原文（JSON），kind=animeko 时使用 */
-    val akConfig: String = ""
+    val testAt: Long = 0L
 )
 
 /** 苹果CMS videolist 接口响应（字段全默认值，防个别源缺字段解析崩） */
@@ -84,12 +79,7 @@ data class VodPlayGroup(
 
 data class VodEpisode(
     val name: String,
-    val url: String,
-    /**
-     * animeko 网页源：剧集页地址（url 为空表示"播放地址还没解析出来"，
-     * 由 AnimekoClient.resolveVideo 解析后填入）。
-     */
-    val pageUrl: String = ""
+    val url: String
 )
 
 /** 单源搜索结果（含错误信息，UI 可显示"该源无结果/失败"） */

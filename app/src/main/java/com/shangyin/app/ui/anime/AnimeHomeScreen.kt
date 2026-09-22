@@ -22,11 +22,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
-import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,8 +51,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
-import com.shangyin.app.data.animeko.AnimekoClient
-import com.shangyin.app.data.animeko.KIND_ANIMEKO
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.data.vod.VodSource
@@ -68,21 +64,16 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 动漫首页（里世界 → 动漫）：动漫源浏览 + 页内搜索。支持两类源：
- * - **苹果CMS 采集源**（kind=cms）：每个源一组「动漫」分类海报墙（可"查看全部"进分类资源库）
- * - **animeko 网页源**（kind=animeko）：只有搜索接口，所以留空时不请求，输入关键词后列出该源的命中条目
+ * 动漫首页（里世界 → 动漫）：动漫专源浏览 + 页内搜索。
+ * - 每个启用的动漫源一个分组，横向海报展示该源「动漫」分类的最新一页；点海报进动漫详情页
+ * - 搜索时会跨全部动漫源搜（不限分类，提高召回），命中结果同样横向展示
+ * - 「查看全部」进该源的资源库页（[com.shangyin.app.ui.search.SourceBrowseScreen] 的动漫模式：分类筛选 + 分页网格）
  */
 private data class SrcState(
     val status: Int,          // 0=加载中 1=完成 2=失败
     val total: Int,           // 该源动漫分类的总量（搜索时为命中数）
     val items: List<VodItem>,
     val page: Int
-)
-
-/** 网页源的搜索状态 */
-private data class WebState(
-    val status: Int,                                  // 0=加载中 1=完成 2=失败 3=仅支持搜索（关键词为空）
-    val results: List<AnimekoClient.WebSubject> = emptyList()
 )
 
 /**
@@ -94,7 +85,6 @@ private object AnimeCache {
     var keyword: String = ""
     var input: String = ""
     var stateMap: Map<String, SrcState> = emptyMap()
-    var webMap: Map<String, WebState> = emptyMap()
 }
 
 /** 各源「动漫」分类 type_id 记忆（避免每次进页都重新拉分类表）；只记成功结果，失败下次重试 */
@@ -116,24 +106,20 @@ fun AnimeHomeScreen(nav: NavHostController) {
     val keyboard = LocalSoftwareKeyboardController.current
 
     val sources = remember { SettingsStore.getAnimeSources().filter { it.enabled } }
-    val cmsSources = remember(sources) { sources.filter { it.kind != KIND_ANIMEKO } }
-    val webSources = remember(sources) { sources.filter { it.kind == KIND_ANIMEKO } }
 
     // 从会话缓存恢复（返回时不再重新加载）
     var keyword by remember { mutableStateOf(AnimeCache.keyword) }
     var input by remember { mutableStateOf(AnimeCache.input) }
     var stateMap by remember { mutableStateOf(AnimeCache.stateMap) }
-    var webMap by remember { mutableStateOf(AnimeCache.webMap) }
     val loadingKeys = remember { mutableSetOf<String>() } // "srcId:page" 防重复加载
 
-    LaunchedEffect(keyword, input, stateMap, webMap) {
+    LaunchedEffect(keyword, input, stateMap) {
         AnimeCache.keyword = keyword
         AnimeCache.input = input
         AnimeCache.stateMap = stateMap
-        AnimeCache.webMap = webMap
     }
 
-    /** 加载某苹果CMS源某页（浏览时限定「动漫」分类；搜索时不限分类） */
+    /** 加载某源某页（浏览时限定「动漫」分类；搜索时不限分类） */
     fun load(src: VodSource, page: Int, kw: String) {
         val key = "${src.id}:$page"
         if (!loadingKeys.add(key)) return
@@ -157,42 +143,17 @@ fun AnimeHomeScreen(nav: NavHostController) {
         }
     }
 
-    /** 搜索某个 animeko 网页源 */
-    fun searchWeb(src: VodSource, kw: String) {
-        val key = "w_${src.id}:$kw"
-        if (!loadingKeys.add(key)) return
-        webMap = webMap + (src.id to WebState(0))
-        scope.launch {
-            val r = runCatching { AnimekoClient.search(src, kw) }.getOrNull()
-            if (kw != keyword) { loadingKeys.remove(key); return@launch }
-            webMap = webMap.toMutableMap().apply {
-                put(src.id, if (r == null) WebState(2) else WebState(1, r))
-            }
-            loadingKeys.remove(key)
-        }
-    }
-
     // 关键词变化：新关键词全部源并行重载；恢复场景只补加载缺失的源
     LaunchedEffect(keyword) {
         if (sources.isEmpty()) return@LaunchedEffect
-        val restored = AnimeCache.stateKeyword == keyword
-        if (!restored) {
+        if (AnimeCache.stateKeyword == keyword) {
+            sources.filter { it.id !in stateMap }.forEach { src -> load(src, 1, keyword) }
+        } else {
             AnimeCache.stateKeyword = keyword
             loadingKeys.clear()
             stateMap = emptyMap()
-            webMap = emptyMap()
-        }
-        coroutineScope {
-            cmsSources.forEach { src ->
-                if (restored && stateMap.containsKey(src.id)) return@forEach
-                launch { load(src, 1, keyword) }
-            }
-            webSources.forEach { src ->
-                if (keyword.isBlank()) {
-                    webMap = webMap + (src.id to WebState(3))
-                } else if (!(restored && webMap.containsKey(src.id))) {
-                    launch { searchWeb(src, keyword) }
-                }
+            coroutineScope {
+                sources.forEach { src -> launch { load(src, 1, keyword) } }
             }
         }
     }
@@ -240,7 +201,7 @@ fun AnimeHomeScreen(nav: NavHostController) {
                 Text("还没有可用的动漫源", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "到 设置 → 片源管理 → 动漫源配置 里添加/启用采集源（带「动漫」分类的站点），或导入 animeko 网页源订阅。",
+                    "到 设置 → 片源管理 → 动漫源配置 里添加/启用采集源（带「动漫」分类的站点即可）。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -288,8 +249,7 @@ fun AnimeHomeScreen(nav: NavHostController) {
                 }
 
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-                    // ---------- 苹果CMS 采集源：海报墙 ----------
-                    cmsSources.forEach { src ->
+                    sources.forEach { src ->
                         val state = stateMap[src.id] ?: SrcState(0, 0, emptyList(), 0)
                         item(key = "a_${src.id}") {
                             Row(
@@ -337,86 +297,6 @@ fun AnimeHomeScreen(nav: NavHostController) {
                                             },
                                             onCollect = { collectTarget = src to item }
                                         )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // ---------- animeko 网页源：只支持搜索，结果按源列出 ----------
-                    if (webSources.isNotEmpty()) {
-                        item(key = "web_header") {
-                            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp)) {
-                                HorizontalDivider()
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    "网页源（animeko）· 仅支持搜索",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        webSources.forEach { src ->
-                            val st = webMap[src.id] ?: WebState(3)
-                            item(key = "w_${src.id}") {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp)
-                                ) {
-                                    Text(
-                                        src.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        when (st.status) {
-                                            0 -> "搜索中…"
-                                            1 -> "命中 ${st.results.size} 条"
-                                            2 -> "搜索失败（可能需外网环境）"
-                                            else -> "输入关键词后搜索"
-                                        },
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = when (st.status) {
-                                            2 -> MaterialTheme.colorScheme.error
-                                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                        }
-                                    )
-                                }
-                            }
-                            if (st.results.isNotEmpty()) {
-                                item(key = "wr_${src.id}") {
-                                    Column(Modifier.padding(horizontal = 16.dp)) {
-                                        st.results.take(20).forEach { r ->
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .clickable {
-                                                        AnimeWebNav.pending =
-                                                            AnimeWebSubject(src.id, r.name, r.pageUrl)
-                                                        nav.safeNavigate(
-                                                            "animeWebDetail/" + android.net.Uri.encode(src.id)
-                                                        )
-                                                    }
-                                                    .padding(vertical = 8.dp)
-                                            ) {
-                                                Icon(
-                                                    Icons.Rounded.PlayCircle,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                                Spacer(Modifier.width(10.dp))
-                                                Text(
-                                                    r.name,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                            }
-                                        }
                                     }
                                 }
                             }

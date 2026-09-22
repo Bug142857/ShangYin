@@ -180,31 +180,6 @@ object VodClient {
         )
     }
 
-    /**
-     * 把测试结果写回源（含自动归目录）。
-     * 影视源（[testSource]）与 animeko 网页源（AnimekoClient.testSource）共用，避免两处逻辑分叉。
-     */
-    fun withTestResult(src: VodSource, status: String, msg: String, at: Long): VodSource = src.copy(
-        testStatus = status,
-        testMsg = msg,
-        testAt = at,
-        region = if (src.regionManual) src.region else if (status == "proxy") "proxy" else "cn"
-    )
-
-    /** 网络异常归类（影视源 / 网页源测试共用）：连接类问题 → 需外网，其余 → 已失效 */
-    fun networkErrorResult(e: Throwable): Pair<String, String> {
-        val msg = e.message.orEmpty()
-        return when {
-            msg.contains("timeout", true) ||
-                msg.contains("connect", true) ||
-                msg.contains("refused", true) ||
-                msg.contains("unreachable", true) ||
-                msg.contains("failed to connect", true) ->
-                "proxy" to "需外网 · 直连超时/被拒"
-            else -> "dead" to "已失效 · 连接失败"
-        }
-    }
-
     private fun parseResp(body: String): VodResp? = runCatching {
         // 有的源会返回 HTML（被墙/域名失效），快速识别直接放弃
         if (!body.trimStart().startsWith("{")) return@runCatching null
@@ -280,11 +255,6 @@ object VodClient {
         if (trimmed.isEmpty()) return emptyList<VodSource>() to "内容为空"
         // JSON 数组 / 单对象（KVideo 订阅格式：id/name/baseUrl）
         if (trimmed.startsWith("[")) {
-            // 优先按本项目导出的源结构解析（带 kind/akConfig，保证"导出 → 再导入"不丢 animeko 网页源配置）
-            runCatching { json.decodeFromString<List<VodSource>>(trimmed) }
-                .getOrNull()
-                ?.takeIf { list -> list.isNotEmpty() && list.all { it.baseUrl.isNotBlank() || it.akConfig.isNotBlank() } }
-                ?.let { return it to null }
             return runCatching {
                 json.decodeFromString<List<VodSourceSub>>(trimmed)
             }.getOrElse { return emptyList<VodSource>() to "JSON 解析失败" }
@@ -315,9 +285,6 @@ object VodClient {
         val body = httpGet(url) ?: return emptyList<VodSource>() to "订阅链接下载失败"
         return parseImport(body)
     }
-
-    /** 下载任意订阅/配置文件原文（导入时自动判断是 KVideo 订阅还是 animeko 订阅） */
-    fun fetchText(url: String): String? = httpGet(url)
 
     @Serializable
     private data class VodSourceSub(

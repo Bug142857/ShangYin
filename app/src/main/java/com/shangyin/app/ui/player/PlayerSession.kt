@@ -23,12 +23,6 @@ object PlayerSession {
     /** 起始集内的续播位置（毫秒） */
     var startPosMs: Long = 0L
 
-    /**
-     * 视频请求头（animeko 网页源用）：多数字幕站按 Referer 防盗链，
-     * 解析出的 m3u8 必须带上 Referer / UA / Cookie 才能播。
-     */
-    var videoHeaders: Map<String, String> = emptyMap()
-
     fun clear() {
         itemId = 0L
         title = ""
@@ -37,6 +31,5 @@ object PlayerSession {
         groupIndex = 0
         startIndex = 0
         startPosMs = 0L
-        videoHeaders = emptyMap()
     }
 }

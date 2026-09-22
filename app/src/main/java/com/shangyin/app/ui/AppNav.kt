@@ -198,16 +198,6 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getLong("vodId") ?: 0L
                 )
             }
-            // animeko 网页源条目详情（条目用页面地址标识，走 AnimeWebNav 接力而不是路由参数）
-            composable(
-                route = "animeWebDetail/{srcId}",
-                arguments = listOf(navArgument("srcId") { type = NavType.StringType })
-            ) { entry ->
-                com.shangyin.app.ui.anime.AnimeWebDetailScreen(
-                    nav,
-                    entry.arguments?.getString("srcId").orEmpty()
-                )
-            }
             // 哔咔漫画详情 + 阅读
             composable(
                 route = "bikaComic/{id}",

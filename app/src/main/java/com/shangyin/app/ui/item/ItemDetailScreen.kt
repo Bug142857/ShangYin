@@ -233,35 +233,20 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             return@Scaffold
         }
 
-        // 动漫条目：跳动漫详情页（doubanId = "srcId|vodId"，与动漫页/详情页收藏同一口径；
-        // animeko 网页源条目是 "srcId|ak|剧集详情页地址"，走 AnimeWebNav 接力）
+        // 动漫条目：跳动漫详情页（doubanId = "srcId|vodId"，与动漫页/详情页收藏同一口径）
         if (entity.category == "动漫") {
             val context = LocalContext.current
             LaunchedEffect(entity.id) {
                 if (forwarded) return@LaunchedEffect
                 forwarded = true
-                val parts = entity.doubanId.split("|", limit = 3)
-                val curId = nav.currentBackStackEntry?.destination?.id
-                if (parts.size >= 3 && parts[1] == "ak") {
-                    com.shangyin.app.ui.anime.AnimeWebNav.pending = com.shangyin.app.ui.anime.AnimeWebSubject(
-                        srcId = parts[0],
-                        name = entity.title,
-                        pageUrl = parts[2]
-                    )
-                    runCatching {
-                        nav.navigate("animeWebDetail/${android.net.Uri.encode(parts[0])}") {
-                            curId?.let { popUpTo(it) { inclusive = true } }
-                            launchSingleTop = true
-                        }
-                    }
-                    return@LaunchedEffect
-                }
+                val parts = entity.doubanId.split("|")
                 val vid = parts.getOrNull(1)?.toLongOrNull()
                 if (parts.size != 2 || vid == null || vid <= 0L) {
                     Toast.makeText(context, "条目数据异常，无法打开", Toast.LENGTH_SHORT).show()
                     nav.safePopBackStack()
                     return@LaunchedEffect
                 }
+                val curId = nav.currentBackStackEntry?.destination?.id
                 runCatching {
                     nav.navigate("animeDetail/${android.net.Uri.encode(parts[0])}/$vid") {
                         curId?.let { popUpTo(it) { inclusive = true } }
