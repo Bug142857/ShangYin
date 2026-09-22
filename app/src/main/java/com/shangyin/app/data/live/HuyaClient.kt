@@ -5,8 +5,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
@@ -17,13 +17,14 @@ import java.util.concurrent.TimeUnit
 /**
  * 虎牙直播客户端（www.huya.com）。
  *
- * 实测（2026-09）：
- *  - 分区：`/g` 页面里带 `data-gid` 的元素有 749 个，同一 gid 重复出现，按出现顺序去重即可；
- *    分区 URL 里的英文别名（如 /g/lol）不能当 gid，必须用 data-gid 的数字。
- *  - 房间列表：`/cache.php?m=LiveList&do=getLiveListByPage` 的响应头是 text/html，
- *    但响应体其实是 JSON，所以用 parseToJsonElement 解析，不能依赖 content-type。
- *  - 播放地址：房间页 HTML 的内联 script 里直接含 gameStreamInfoList（FLV 地址 + antiCode），
- *    不用再发 XHR。HLS 直连实测 403，因此只取 FLV（http 直链保持原样）。
+ * UA 决定拿到哪套页面（2026-09 实测，这是本文件最关键的一条）：
+ *  - 手机 UA 下 `/g` 页面里 `data-gid` 数量为 **0**（分区被前端换成另一套渲染），房间页里也没有
+ *    `gameStreamInfoList`；换桌面 UA 后 `data-gid` 有 **757** 个、播放配置才内联在页面里。
+ *    所以分区列表、房间列表、HTML 兜底全部必须用桌面 UA。
+ *  - 播放地址改走移动端 JSON 接口 mp.huya.com/.../profileRoom：不依赖页面结构，桌面/手机 UA 都能拿。
+ *  - 分区 URL 里的英文别名（如 /g/lol）不能当 gid，必须用 data-gid 的数字。
+ *  - 房间列表 `cache.php?m=LiveList` 的响应头是 text/html，但响应体其实是 JSON，不能依赖 content-type。
+ *  - HLS 直连实测 403，因此只取 FLV（http 直链保持原样，App 已开 cleartext）。
  */
 object HuyaClient {
 
@@ -31,9 +32,14 @@ object HuyaClient {
 
     private const val REFERER = "https://www.huya.com/"
 
-    /** 桌面 UA */
+    /** 桌面 UA：分区数据与房间页内联配置只在桌面版页面里存在 */
     internal const val UA =
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+
+    private const val URL_CATEGORY = "https://www.huya.com/g"
+    private const val URL_ROOM_LIST = "https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage"
+    private const val URL_PROFILE_ROOM = "https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid="
+    private const val URL_ROOM_PAGE = "https://www.huya.com/"
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -69,11 +75,11 @@ object HuyaClient {
 
     /** 拉取分区表：Jsoup 取 [data-gid]，按出现顺序去重（同 gid 只留第一次） */
     suspend fun categories(): List<LiveCategory> = withContext(Dispatchers.IO) {
-        val html = httpGet("https://www.huya.com/g") ?: return@withContext emptyList()
+        val html = httpGet(URL_CATEGORY) ?: return@withContext emptyList()
         runCatching {
             val seen = HashSet<String>()
             val out = ArrayList<LiveCategory>()
-            Jsoup.parse(html, "https://www.huya.com/g").select("[data-gid]").forEach { el ->
+            Jsoup.parse(html, URL_CATEGORY).select("[data-gid]").forEach { el ->
                 val gid = el.attr("data-gid").trim()
                 val name = el.text().trim()
                 if (gid.isEmpty() || name.isEmpty()) return@forEach
@@ -91,8 +97,7 @@ object HuyaClient {
      */
     suspend fun rooms(categoryId: String, page: Int): List<LiveRoom> =
         withContext(Dispatchers.IO) {
-            val url = "https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage" +
-                "&gameId=$categoryId&tagAll=0&page=$page"
+            val url = "$URL_ROOM_LIST&gameId=$categoryId&tagAll=0&page=$page"
             // content-type 是 text/html 但 body 是 JSON，直接按 JSON 解析
             val body = httpGet(url) ?: return@withContext emptyList()
             runCatching {
@@ -121,25 +126,81 @@ object HuyaClient {
 
     // ---------- 播放地址 ----------
 
-    /** 解析房间页内联 script 里的 gameStreamInfoList，拼出 FLV 播放地址 */
+    /**
+     * 解析播放地址，两级策略：
+     *  1) 移动端 JSON 接口 mp.huya.com/.../profileRoom：结构稳定，直接取 baseSteamInfoList[0]；
+     *  2) 接口拿不到 / 结构对不上时，兜底用桌面 UA 抓房间页 HTML 的内联 gameStreamInfoList。
+     */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
-        // httpGet 内部已吞异常：null = 请求失败；非 null 但解析不出配置 = 未开播/结构变化
-        val html = httpGet("https://www.huya.com/$roomId")
-            ?: return@withContext LiveResolveResult(error = "网络请求失败，请重试")
-        val info = parseStream(html)
-            ?: return@withContext LiveResolveResult(error = "该房间未开播或页面结构有变，暂时拿不到直播地址")
-        LiveResolveResult(info = info)
+        val id = roomId.trim()
+        if (id.isEmpty()) return@withContext LiveResolveResult(error = "房间号为空")
+
+        val body = httpGet(URL_PROFILE_ROOM + id)
+        if (body != null) {
+            // 非 null = 明确结论（成功 / 未开播）；只有 null（结构对不上）才继续走兜底
+            runCatching { parseProfileRoom(body) }.getOrNull()?.let { return@withContext it }
+        }
+
+        val html = httpGet(URL_ROOM_PAGE + id)
+        val info = html?.let { parseStream(it) }
+        return@withContext when {
+            info != null -> LiveResolveResult(info = info)
+            body == null && html == null -> LiveResolveResult(error = "网络请求失败，请重试")
+            else -> LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
+        }
     }
 
     /**
-     * 从 HTML 里定位 gameStreamInfoList，取其后约 8000 字符窗口，
-     * 把窗口里的字面 `\"` 还原为 `"` 后再用正则取各字段。
+     * 解析 mp profileRoom 的 JSON。
+     * 返回 null = 结构对不上（交给 HTML 兜底）；非 null = 成功或明确的失败原因。
+     */
+    private fun parseProfileRoom(body: String): LiveResolveResult? {
+        val data = (json.parseToJsonElement(body) as? JsonObject)?.get("data") as? JsonObject
+            ?: return null
+        // liveStatus = "ON" 才在播；OFF / REPLAY 等一律按未开播处理
+        if (data.strOrNull("liveStatus") != "ON") {
+            return LiveResolveResult(error = "主播未开播")
+        }
+        val info = pickStream(data)
+            ?: return LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
+        return LiveResolveResult(info = info)
+    }
+
+    /** 取 baseSteamInfoList[0]；没有就退回 data.stream.data[0].gameStreamInfoList[0] */
+    private fun pickStream(data: JsonObject): LivePlayInfo? {
+        val stream = data["stream"] as? JsonObject ?: return null
+        val node = (stream["baseSteamInfoList"] as? JsonArray)
+            ?.filterIsInstance<JsonObject>()?.firstOrNull()
+            ?: ((stream["data"] as? JsonArray)?.filterIsInstance<JsonObject>()?.firstOrNull()
+                    ?.get("gameStreamInfoList") as? JsonArray)
+                ?.filterIsInstance<JsonObject>()?.firstOrNull()
+            ?: return null
+
+        val name = node.strOrNull("sStreamName") ?: return null
+        val flvUrl = node.strOrNull("sFlvUrl") ?: return null
+        val suffix = node.strOrNull("sFlvUrlSuffix").orEmpty().ifBlank { "flv" }
+        val anti = node.strOrNull("sFlvAntiCode").orEmpty()
+        // 拼法：{sFlvUrl}/{sStreamName}.{sFlvUrlSuffix}?{sFlvAntiCode}，http 保持原样
+        val url = buildString {
+            append(flvUrl)
+            append('/')
+            append(name)
+            append('.')
+            append(suffix)
+            if (anti.isNotEmpty()) append('?').append(anti)
+        }
+        return LivePlayInfo(url = url, isHls = false, referer = REFERER)
+    }
+
+    /**
+     * 兜底：从房间页 HTML 里定位 gameStreamInfoList，取其后约 8000 字符窗口，
+     * 把窗口里的字面 `\"` 还原为 `"`、`\/` 还原为 `/` 后再正则取各字段。
      */
     private fun parseStream(html: String): LivePlayInfo? {
         val idx = html.indexOf("gameStreamInfoList")
         if (idx < 0) return null
         val end = minOf(html.length, idx + 8000)
-        val window = html.substring(idx, end).replace("\\\"", "\"")
+        val window = html.substring(idx, end).replace("\\\"", "\"").replace("\\/", "/")
         val name = reStreamName.find(window)?.groupValues?.get(1) ?: return null
         val flvUrl = reFlvUrl.find(window)?.groupValues?.get(1) ?: return null
         val suffix = reFlvSuffix.find(window)?.groupValues?.get(1) ?: "flv"
@@ -160,4 +221,8 @@ object HuyaClient {
     /** 取 JSON 字符串字段，缺失/非字符串/JsonNull → 空串 */
     private fun JsonObject.str(key: String): String =
         this[key]?.jsonPrimitive?.contentOrNull.orEmpty()
+
+    /** 取 JSON 字符串字段；顺便把被转义的 `\/` 还原成 `/`（实测接口把 URL 写成 http:\/\/…） */
+    private fun JsonObject.strOrNull(key: String): String? =
+        (this[key] as? JsonPrimitive)?.contentOrNull?.replace("\\/", "/")
 }

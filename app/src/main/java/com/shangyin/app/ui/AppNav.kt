@@ -153,6 +153,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("cloudsync") { CloudSyncScreen(nav) }
             composable("dataManage") { DataManageScreen(nav) }
             composable("vodSources") { VodSourceScreen(nav) }
+            // 片源管理（总入口：影视源配置 + 电视源配置）
+            composable("sourceHub") { com.shangyin.app.ui.live.SourceHubScreen(nav) }
             composable("player") { PlayerScreen(nav) }
             composable(
                 route = "h1search?kw={kw}",
@@ -231,6 +233,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
 
         // Z-Library 接口用的常驻隐藏 WebView（DiamWall 是 JS 挑战，接口必须走浏览器环境）
         com.shangyin.app.ui.zlib.ZlibWebHost()
+        // 直播用的常驻隐藏 WebView（斗鱼的播放地址只能由页面自己的 JS 拿到）
+        com.shangyin.app.ui.live.LiveWebHost()
     }
 
     // 导航栈安全网：NavHost 空栈或快速返回异常时强制回首页

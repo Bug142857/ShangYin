@@ -10,7 +10,8 @@ object LivePlatforms {
     const val HUYA = "huya"
     const val DOUYU = "douyu"
     const val BILI = "bili"
-    /** 自定义 M3U / M3U8 直播源（导入的频道） */
+    const val DOUYIN = "douyin"
+    /** 自定义 M3U / M3U8 直播源（导入的电视频道），UI 里叫「电视」 */
     const val CUSTOM = "custom"
 
     /** 收藏条目的分类名（与番号 / 本子 / 漫画 / 游戏 / 图书 同级） */
@@ -20,12 +21,13 @@ object LivePlatforms {
         HUYA -> "虎牙"
         DOUYU -> "斗鱼"
         BILI -> "B站"
-        CUSTOM -> "自定义源"
+        DOUYIN -> "抖音"
+        CUSTOM -> "电视"
         else -> key
     }
 
     /** 支持切换的平台（顺序即 UI 顺序） */
-    val ALL = listOf(HUYA, DOUYU, BILI, CUSTOM)
+    val ALL = listOf(HUYA, DOUYU, BILI, DOUYIN, CUSTOM)
 }
 
 /** 平台分区（虎牙 gid / 斗鱼 cid1_cid2 / B站 parentId_areaId / 自定义源为「源 id」） */

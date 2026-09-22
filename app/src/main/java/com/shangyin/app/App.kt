@@ -37,6 +37,8 @@ class App : Application(), ImageLoaderFactory {
         runCatching { com.shangyin.app.data.zlib.ZlibClient.clearTransientCookies() }
         // 首次使用播种内置默认采集源（在线观影）
         SettingsStore.ensureDefaultVodSourcesSeeded()
+        // 首次使用播种内置默认电视源（里世界 → 直播 → 电视）
+        SettingsStore.ensureDefaultLiveSourcesSeeded()
         // 配置变更（登录/云同步/片源等）时自动备份到公共目录
         SettingsStore.registerListener { _, key ->
             if (key in com.shangyin.app.data.ConfigBackup.KEYS) {

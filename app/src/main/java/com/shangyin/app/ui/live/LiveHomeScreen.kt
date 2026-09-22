@@ -25,12 +25,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items as lazyItems
+import androidx.compose.foundation.lazy.itemsIndexed as lazyItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -38,6 +40,8 @@ import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -69,6 +73,7 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.live.BiliLiveClient
 import com.shangyin.app.data.live.DouyuClient
+import com.shangyin.app.data.live.DouyinClient
 import com.shangyin.app.data.live.HuyaClient
 import com.shangyin.app.data.live.LiveCategory
 import com.shangyin.app.data.live.LiveChannelResult
@@ -81,6 +86,7 @@ import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -248,6 +254,7 @@ private fun PlatformPane(
             when (platform) {
                 LivePlatforms.HUYA -> HuyaClient.rooms(cat.id, targetPage)
                 LivePlatforms.DOUYU -> DouyuClient.rooms(cat.id, targetPage)
+                LivePlatforms.DOUYIN -> DouyinClient.rooms(cat.id, targetPage)
                 else -> BiliLiveClient.rooms(cat.id, targetPage)
             }
         }.getOrDefault(emptyList())
@@ -267,13 +274,22 @@ private fun PlatformPane(
         var cat = selected
         if (categories.isEmpty()) {
             loading = true
-            val fetched = runCatching {
-                when (platform) {
-                    LivePlatforms.HUYA -> HuyaClient.categories()
-                    LivePlatforms.DOUYU -> DouyuClient.categories()
-                    else -> BiliLiveClient.categories()
-                }
-            }.getOrDefault(emptyList())
+            error = null
+            // 首次打开偶发失败（网络抖动/站点限速）时自动重试一次，避免"要点几下才出来"
+            var fetched = emptyList<LiveCategory>()
+            var attempt = 0
+            while (attempt < 2 && fetched.isEmpty()) {
+                if (attempt > 0) delay(800)
+                fetched = runCatching {
+                    when (platform) {
+                        LivePlatforms.HUYA -> HuyaClient.categories()
+                        LivePlatforms.DOUYU -> DouyuClient.categories()
+                        LivePlatforms.DOUYIN -> DouyinClient.categories()
+                        else -> BiliLiveClient.categories()
+                    }
+                }.getOrDefault(emptyList())
+                attempt++
+            }
             categories = fetched
             LiveCache.categories[platform] = fetched
             loading = false
@@ -298,66 +314,30 @@ private fun PlatformPane(
     }
 
     Column(Modifier.fillMaxSize()) {
-        // 分区筛选：收起=横滑一行；展开=换行平铺（限高可滚）
         if (categories.isNotEmpty()) {
-            if (!catExpanded) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp, end = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(
-                        Modifier
-                            .weight(1f)
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        categories.forEach { cat ->
-                            CategoryChip(cat, selected?.id == cat.id) {
-                                if (selected?.id != cat.id) {
-                                    selected = cat
-                                    LiveCache.selectedCat[platform] = cat
-                                    rooms = LiveCache.roomsOf(platform, cat.id)
-                                    page = LiveCache.pageOf(platform, cat.id)
-                                    hasMore = rooms.isNotEmpty()
-                                    error = null
-                                    scope.launch {
-                                        if (rooms.isEmpty()) {
-                                            loadRooms(cat, 1, reset = true)
-                                        } else {
-                                            LiveCache.rooms["$platform|${cat.id}"] = rooms
-                                        }
-                                    }
-                                }
+            // 分区选择窗（下拉）：平台接口拿不到"每个分区有多少房间"，只列名称
+            CategoryDropdown(
+                title = selected?.name ?: "选择分区",
+                items = categories.map { it.name to (it.id == selected?.id) },
+                onPick = { idx ->
+                    val cat = categories.getOrNull(idx)
+                    if (cat != null && selected?.id != cat.id) {
+                        selected = cat
+                        LiveCache.selectedCat[platform] = cat
+                        rooms = LiveCache.roomsOf(platform, cat.id)
+                        page = LiveCache.pageOf(platform, cat.id)
+                        hasMore = rooms.isNotEmpty()
+                        error = null
+                        scope.launch {
+                            if (rooms.isEmpty()) {
+                                loadRooms(cat, 1, reset = true)
+                            } else {
+                                LiveCache.rooms["$platform|${cat.id}"] = rooms
                             }
                         }
-                    }
-                    IconButton(onClick = { catExpanded = true; LiveCache.catExpanded[platform] = true }) {
-                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "展开分区")
                     }
                 }
-            } else {
-                ExpandableCategories(
-                    categories = categories,
-                    selectedId = selected?.id,
-                    onPick = { cat ->
-                        if (selected?.id != cat.id) {
-                            selected = cat
-                            LiveCache.selectedCat[platform] = cat
-                            rooms = LiveCache.roomsOf(platform, cat.id)
-                            page = LiveCache.pageOf(platform, cat.id)
-                            hasMore = rooms.isNotEmpty()
-                            error = null
-                            scope.launch {
-                                if (rooms.isEmpty()) loadRooms(cat, 1, reset = true)
-                                else LiveCache.rooms["$platform|${cat.id}"] = rooms
-                            }
-                        }
-                    },
-                    onCollapse = { catExpanded = false; LiveCache.catExpanded[platform] = false }
-                )
-            }
+            )
         }
 
         // 房间网格
@@ -427,50 +407,62 @@ private fun PlatformPane(
     }
 }
 
-/** 分区 chip（收起态横滑用） */
+/**
+ * 分类选择窗（下拉）：点标题弹出、限高可滚（斗鱼分区上百个，必须用 LazyColumn）。
+ * items = (显示名, 是否当前选中)，onPick 回传下标。
+ */
 @Composable
-private fun CategoryChip(cat: LiveCategory, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(cat.name, maxLines = 1) }
-    )
-}
-
-/** 展开态分区：换行平铺 + 限高可滚 + 收起按钮 */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ExpandableCategories(
-    categories: List<LiveCategory>,
-    selectedId: String?,
-    onPick: (LiveCategory) -> Unit,
-    onCollapse: () -> Unit
+private fun CategoryDropdown(
+    title: String,
+    items: List<Pair<String, Boolean>>,
+    onPick: (Int) -> Unit
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .heightIn(max = 190.dp)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp)
-        ) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
-            ) {
-                categories.forEach { cat ->
-                    CategoryChip(cat, selectedId == cat.id) { onPick(cat) }
-                }
-            }
-        }
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(end = 4.dp),
-            horizontalArrangement = Arrangement.End
+                .clickable { open = true }
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onCollapse) {
-                Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "收起分区")
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "选择分类")
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            LazyColumn(Modifier.width(260.dp).heightIn(max = 380.dp)) {
+                lazyItemsIndexed(items) { i, item ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                item.first,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = if (item.second) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface
+                            )
+                        },
+                        trailingIcon = if (item.second) {
+                            {
+                                Icon(
+                                    Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        } else null,
+                        onClick = {
+                            open = false
+                            onPick(i)
+                        }
+                    )
+                }
             }
         }
     }
@@ -600,32 +592,25 @@ private fun CustomSourcePane(
     val failed = remember(results) { results.orEmpty().filter { it.error != null } }
 
     Column(Modifier.fillMaxSize()) {
-        if (results?.isNotEmpty() == true && groups.isNotEmpty()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilterChip(
-                    selected = selGroup == null,
-                    onClick = { selGroup = null; LiveCache.customGroup = null },
-                    label = { Text("全部") }
-                )
-                groups.forEach { g ->
-                    FilterChip(
-                        selected = selGroup == g,
-                        onClick = { selGroup = g; LiveCache.customGroup = g },
-                        label = { Text(g, maxLines = 1) }
-                    )
+        if (groups.isNotEmpty()) {
+            // 分组选择窗（下拉）：电视源能精确统计每组频道数，所以带数量显示
+            val counts = allChannels.groupingBy { it.second.group }.eachCount()
+            val names = listOf("全部频道（${allChannels.size}）") +
+                groups.map { "$it（${counts[it] ?: 0}）" }
+            val selIdx = if (selGroup == null) 0 else groups.indexOf(selGroup) + 1
+            CategoryDropdown(
+                title = names.getOrElse(selIdx) { names.first() },
+                items = names.mapIndexed { i, n -> n to (i == selIdx) },
+                onPick = { idx ->
+                    selGroup = if (idx == 0) null else groups.getOrNull(idx - 1)
+                    LiveCache.customGroup = selGroup
                 }
-            }
+            )
         }
 
         when {
             sources.none { it.enabled } -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyView("还没有自定义直播源\n点右上角「源管理」添加 M3U / M3U8 地址，或从本地文件导入")
+                EmptyView("还没有电视源\n点右上角「源管理」添加 M3U / M3U8 地址，或从本地文件导入")
             }
 
             loading && shown.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -639,7 +624,7 @@ private fun CustomSourcePane(
                         else "该源没有解析到频道，可在「源管理」里更换地址或导入本地文件"
                     )
                     Spacer(Modifier.height(12.dp))
-                    Button(onClick = { nav.safeNavigate("liveSources") }) { Text("去管理直播源") }
+                    Button(onClick = { nav.safeNavigate("liveSources") }) { Text("去电视源配置") }
                 }
             }
 

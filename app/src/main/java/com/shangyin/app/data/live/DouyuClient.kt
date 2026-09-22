@@ -15,7 +15,9 @@ import java.util.concurrent.TimeUnit
  * 斗鱼直播客户端。
  * - 分类：GET japi/weblist/apinc/newDirectory（一级 cateList[].id + 二级 list[].cid2 拼成 "cid1_cid2"）
  * - 房间：GET gapi/rknc/directory/mixListV1/{cid1_cid2}/{page}（页码必须带，page 从 1 开始，缺页码 404）
- * - 播放：GET m.douyu.com/{roomId}，SSR HTML 里直接内嵌可播放的 FLV 直链，正则提取
+ * - 播放：两步法。裸 HTTP 抓 m.douyu.com/{roomId} 实测**拿不到**播放地址 —— 那条 flv 链接是页面 JS
+ *   跑完才注入 DOM 的（无 Cookie 的 146KB HTML 里一个 .flv 都没有），而接口 /lapi/live/getH5PlayV1
+ *   又要求页面运行时生成的 enc_data 签名。所以先纯 HTTP 碰运气，不行就走隐藏 WebView 被动接住页面自己拿到的地址。
  */
 object DouyuClient {
 
@@ -29,13 +31,12 @@ object DouyuClient {
         .writeTimeout(12, TimeUnit.SECONDS)
         .build()
 
-    /** 桌面 UA（PC 接口校验 UA + Referer 才给数据） */
+    /**
+     * 桌面 UA：PC 接口校验 UA + Referer 才给数据；m 端页面也必须用桌面 UA
+     * （手机 UA 下拿到的是另一套页面，同样不含播放地址）。
+     */
     private const val UA_DESKTOP =
-        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36"
-
-    /** 移动端 UA（m.douyu.com 抓取用） */
-    private const val UA_MOBILE =
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     private const val REFERER_DESKTOP = "https://www.douyu.com/"
     private const val REFERER_MOBILE = "https://m.douyu.com/"
@@ -148,40 +149,93 @@ object DouyuClient {
 
     // ---------- 播放地址解析 ----------
 
+    /** WebView 通道里 link 标签返回的地址前缀（见 [parseWebResult]） */
+    private const val URL_PREFIX = "URL:"
+
     /**
-     * 解析直播间播放地址：m 端页面 SSR 里直接内嵌 FLV 直链（&amp; 需还原成 &）。
-     * FLV 找不到再兜底找 m3u8（isHls = true）；都没有给出明确失败原因。
+     * 解析直播间播放地址，两步：
+     *  1) 纯 HTTP 抓 m.douyu.com/{roomId} 碰运气：页面里若已内联 .flv / .m3u8 直接用（少数情况）；
+     *  2) 否则走隐藏 WebView —— 地址只有页面自身那次带签名的 XHR 才拿得到，裸 HTTP 不行。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
         val id = roomId.trim()
         if (id.isEmpty()) return@withContext LiveResolveResult(error = "房间号为空")
-        val html = httpGet(URL_ROOM_PAGE + id, UA_MOBILE, REFERER_MOBILE)
-            ?: return@withContext LiveResolveResult(error = "网络请求失败，请重试")
 
-        val flv = FLV_REGEX.find(html)?.value
-        if (flv != null) {
-            return@withContext LiveResolveResult(
-                info = LivePlayInfo(
-                    url = flv.replace("&amp;", "&"),
-                    isHls = false,
-                    referer = REFERER_DESKTOP
+        // 1) 纯 HTTP 先试一次
+        val html = httpGet(URL_ROOM_PAGE + id, UA_DESKTOP, REFERER_MOBILE)
+        if (html != null) {
+            FLV_REGEX.find(html)?.value?.let { flv ->
+                return@withContext LiveResolveResult(
+                    info = LivePlayInfo(flv.replace("&amp;", "&"), isHls = false, referer = REFERER_DESKTOP)
                 )
-            )
+            }
+            M3U8_REGEX.find(html)?.value?.let { m3u8 ->
+                return@withContext LiveResolveResult(
+                    info = LivePlayInfo(m3u8.replace("&amp;", "&"), isHls = true, referer = REFERER_DESKTOP)
+                )
+            }
         }
 
-        val m3u8 = M3U8_REGEX.find(html)?.value
-        if (m3u8 != null) {
-            return@withContext LiveResolveResult(
-                info = LivePlayInfo(
-                    url = m3u8.replace("&amp;", "&"),
-                    isHls = true,
-                    referer = REFERER_DESKTOP
-                )
-            )
-        }
-
-        LiveResolveResult(error = "该房间未开播或页面结构有变，暂时拿不到直播地址")
+        // 2) 隐藏 WebView：LiveWeb 已挂好钩子，会把页面自己那次 XHR 的请求地址 + 响应体记到 window.__syLiveHit
+        if (!LiveWeb.isReady) return@withContext LiveResolveResult(error = "获取播放地址失败，请重试")
+        val js = """
+          (function(){
+            var hit = window.__syLiveHit || '';
+            var i = hit.indexOf('@@BODY@@');
+            if (i > 0) {
+              var body = hit.substring(i + 8);
+              if (body && /rtmp_url|rtmp_live|"error":0|hls_url|\.flv|\.m3u8/.test(body)) return body;
+            }
+            var l = document.querySelector('link[as="fetch"][href*=".flv"], link[rel="preload"][href*=".flv"], link[href*=".m3u8"]');
+            if (l && l.href) return 'URL:' + l.href;
+            return '';
+          })()
+        """
+        // 直接 suspend 调用即可：pollJs 内部自己切主线程并带超时，不要再包一层调度器
+        val raw = LiveWeb.pollJs("https://m.douyu.com/$id", js, timeoutMs = 18_000)
+            ?: return@withContext LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
+        val info = parseWebResult(raw)
+            ?: return@withContext LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
+        LiveResolveResult(info = info)
     }
+
+    /**
+     * 解析 WebView 通道拿到的结果：
+     *  a) "URL:xxx" → DOM 里 link 的绝对地址（页面 JS 跑完后注入的直链）；
+     *  b) 否则当作页面自己那次 XHR 的响应体 JSON：data.rtmp_url + "/" + data.rtmp_live；
+     *  c) 再不行就整体正则捞 .flv / .m3u8。
+     */
+    private fun parseWebResult(raw: String): LivePlayInfo? {
+        if (raw.startsWith(URL_PREFIX)) {
+            val u = raw.removePrefix(URL_PREFIX).trim()
+            if (u.isEmpty()) return null
+            return LivePlayInfo(u, isHls = isHlsUrl(u), referer = REFERER_DESKTOP)
+        }
+
+        // 响应体里的 URL 可能是 JSON 转义过的（http:\/\/…），先还原再匹配
+        val body = raw.replace("\\/", "/")
+        runCatching {
+            val data = (json.parseToJsonElement(body) as? JsonObject)?.obj("data")
+            val host = data?.str("rtmp_url")?.trimEnd('/')
+            val live = data?.str("rtmp_live")
+            if (!host.isNullOrBlank() && !live.isNullOrBlank()) {
+                val u = "$host/$live"
+                return LivePlayInfo(u, isHls = isHlsUrl(live), referer = REFERER_DESKTOP)
+            }
+        }
+
+        FLV_REGEX.find(body)?.value?.let {
+            return LivePlayInfo(it.replace("&amp;", "&"), isHls = false, referer = REFERER_DESKTOP)
+        }
+        M3U8_REGEX.find(body)?.value?.let {
+            return LivePlayInfo(it.replace("&amp;", "&"), isHls = true, referer = REFERER_DESKTOP)
+        }
+        return null
+    }
+
+    /** 按扩展名判断是否 HLS（忽略 query） */
+    private fun isHlsUrl(url: String): Boolean =
+        url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
 
     // ---------- JSON 容错读取 ----------
 

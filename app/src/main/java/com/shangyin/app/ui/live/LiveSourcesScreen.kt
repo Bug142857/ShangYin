@@ -55,7 +55,7 @@ import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 
 /**
- * 直播源管理（自定义 M3U / M3U8）：
+ * 电视源配置（自定义 M3U / M3U8）：
  * - 网络源：填名称 + M3U 地址
  * - 本地文件：从手机选 .m3u / .m3u8 文本文件导入（内容存进配置，卸载重装由配置文件备份带回）
  * - 可启用/停用、改名、删除；导入后到「里世界 → 直播 → 我的源」看频道
@@ -109,7 +109,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("直播源管理", fontWeight = FontWeight.Bold) },
+                title = { Text("电视源配置", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -126,14 +126,14 @@ fun LiveSourcesScreen(nav: NavHostController) {
             ExtendedFloatingActionButton(
                 onClick = { showAdd = true },
                 icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("添加直播源") }
+                text = { Text("添加电视源") }
             )
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
             Text(
-                "支持 M3U / M3U8 直播源：填网络地址，或点右上角从手机里导入 .m3u 文件。" +
-                    "导入后到「直播 → 我的源」看频道（按分组展示，点频道直接播放）。",
+                "支持 M3U / M3U8 电视源：填网络地址，或点右上角从手机里导入 .m3u 文件。" +
+                    "导入后到「直播 → 电视」看频道（按分组展示、点频道直接播放，分组选择窗会显示每组频道数）。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
@@ -145,7 +145,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        "还没有直播源\n点右下角「添加直播源」，或从本地导入 m3u 文件",
+                        "还没有电视源\n点右下角「添加电视源」，或从本地导入 m3u 文件",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -210,7 +210,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
         var url by remember(target.id) { mutableStateOf(if (target.isLocal) "" else target.url) }
         AlertDialog(
             onDismissRequest = { showAdd = false; editing = null },
-            title = { Text(if (showAdd) "添加直播源" else "编辑直播源") },
+            title = { Text(if (showAdd) "添加电视源" else "编辑电视源") },
             text = {
                 Column {
                     OutlinedTextField(

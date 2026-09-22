@@ -227,6 +227,13 @@ object SettingsStore {
         )
     }
 
+    /** 首次使用时播种内置默认电视源（仅当从未配置过时执行一次；用户删光也不会重新播种） */
+    fun ensureDefaultLiveSourcesSeeded() {
+        if (!sp.contains(KEY_LIVE_SOURCES)) {
+            setLiveSources(com.shangyin.app.data.live.DEFAULT_LIVE_SOURCES)
+        }
+    }
+
     /** B站登录 Cookie（WebView 登录后抓取；含 SESSDATA 才算登录，登录后直播可看原画） */
     var biliCookie: String
         get() = sp.getString(KEY_BILI_COOKIE, "").orEmpty()

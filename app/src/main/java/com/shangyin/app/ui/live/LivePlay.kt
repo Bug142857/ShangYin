@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.live.BiliLiveClient
 import com.shangyin.app.data.live.DouyuClient
+import com.shangyin.app.data.live.DouyinClient
 import com.shangyin.app.data.live.HuyaClient
 import com.shangyin.app.data.live.LivePlatforms
 import com.shangyin.app.data.live.LivePlayInfo
@@ -35,6 +36,7 @@ suspend fun openLiveAndPlay(
         LivePlatforms.HUYA -> HuyaClient.resolve(room.roomId)
         LivePlatforms.DOUYU -> DouyuClient.resolve(room.roomId)
         LivePlatforms.BILI -> BiliLiveClient.resolve(room.roomId)
+        LivePlatforms.DOUYIN -> DouyinClient.resolve(room.roomId)
         LivePlatforms.CUSTOM -> {
             // 自定义源：roomId 就是频道播放地址，直接播
             val isHls = room.roomId.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
