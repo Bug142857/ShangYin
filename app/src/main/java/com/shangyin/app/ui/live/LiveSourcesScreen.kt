@@ -78,7 +78,7 @@ private val liveJson = Json { prettyPrint = true }
  * - 网络源：填名称 + M3U 地址
  * - 本地文件：从手机选 .m3u / .m3u8 文本文件导入（内容存进配置，卸载重装由配置文件备份带回）
  * - 可启用/停用、改名、删除，可测试可用性，可从文件 / 批量导入，也可导出成 JSON
- * - 导入后到「里世界 → 直播 → 电视」看频道
+ * - 导入后到「里世界 → 电视」看频道
  * 交互与「影视源配置」(VodSourceScreen) 保持一致，只是措辞换成「电视源」。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -109,7 +109,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
     fun persist(list: List<LiveSource>) {
         sources = list
         SettingsStore.setLiveSources(list)
-        // 源变了：丢掉「我的源」会话缓存，回到直播页会重新解析
+        // 源变了：丢掉「电视源」会话缓存，回到电视页会重新解析
         LiveCache.customResults = null
         LiveCache.customGroup = null
     }
@@ -122,7 +122,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
     /**
      * 把解析出的源合并进现有配置（去重）。
      * 去重的理由：同一份导出文件/订阅被反复导入时不该越堆越多，
-     * 否则直播页「电视」分页会出现一堆同名同址的重复源。
+     * 否则电视页会出现一堆同名同址的重复源。
      * @return 是否真的新增了源
      */
     fun importSources(incoming: List<LiveSource>, failMsg: String? = null): Boolean {
@@ -304,7 +304,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
             Text(
                 "支持 M3U / M3U8 电视源：填网络地址，或点右上角从手机里导入 .m3u 文件；" +
                     "右上角还能「测试全部电视源」、导出配置、批量导入（粘贴 JSON/地址列表/订阅链接）。" +
-                    "导入后到「直播 → 电视」看频道（按分组展示、点频道直接播放，分组选择窗会显示每组频道数）。",
+                    "导入后到「里世界 → 电视」看频道（按分组展示、点频道直接播放，分组选择窗会显示每组频道数）。",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)

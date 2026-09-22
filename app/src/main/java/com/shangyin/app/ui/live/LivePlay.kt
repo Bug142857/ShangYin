@@ -3,10 +3,6 @@ package com.shangyin.app.ui.live
 import android.content.Context
 import android.widget.Toast
 import androidx.navigation.NavHostController
-import com.shangyin.app.data.live.BiliLiveClient
-import com.shangyin.app.data.live.DouyuClient
-import com.shangyin.app.data.live.DouyinClient
-import com.shangyin.app.data.live.HuyaClient
 import com.shangyin.app.data.live.LivePlatforms
 import com.shangyin.app.data.live.LivePlayInfo
 import com.shangyin.app.data.live.LiveResolveResult
@@ -20,16 +16,12 @@ import com.shangyin.app.ui.safeNavigate
 /**
  * 只做"解析"，不导航：播放页的「刷新」按钮与断流自动重连都复用它。
  *
- * 为什么必须能重新解析：直播地址是**短时效**的 —— 实测虎牙的 antiCode 90 秒后就 403、
- * 斗鱼地址里带 `token`/`wsAuth`、抖音地址带 `expire`，所以"切画质/断流"都不能复用旧地址。
+ * 电视源的播放地址由用户自己导入（M3U 里的频道地址），不像平台直播那样短时效过期；
+ * 但 M3U 里的直播流同样会断开，所以「刷新 / 重连」仍然必须保留（重连时重新解析一次地址）。
  */
 suspend fun resolveLive(room: LiveRoom): LiveResolveResult = when (room.platform) {
-    LivePlatforms.HUYA -> HuyaClient.resolve(room.roomId)
-    LivePlatforms.DOUYU -> DouyuClient.resolve(room.roomId)
-    LivePlatforms.BILI -> BiliLiveClient.resolve(room.roomId)
-    LivePlatforms.DOUYIN -> DouyinClient.resolve(room.roomId)
     LivePlatforms.CUSTOM -> {
-        // 自定义源：roomId 就是频道播放地址，直接播
+        // 电视源：roomId 就是频道播放地址，直接播
         val isHls = room.roomId.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
         LiveResolveResult(info = LivePlayInfo(url = room.roomId, isHls = isHls, referer = ""))
     }
@@ -37,11 +29,11 @@ suspend fun resolveLive(room: LiveRoom): LiveResolveResult = when (room.platform
 }
 
 /**
- * 直播 → 播放页的公共流程：
- * 解析房间真实流地址（虎牙/斗鱼/B站各不相同）→ 填充 PlayerSession（直播模式，带防盗链请求头）→ 进播放页。
+ * 电视 → 播放页的公共流程：
+ * 解析频道地址 → 填充 PlayerSession（直播模式，带请求头）→ 进播放页。
  *
  * popCurrent=true 时用单次原子导航（navigate + popUpTo 当前页），
- * 用于从清单里的直播条目（中间过渡页）直接进播放器。
+ * 用于从清单里的电视频道条目（中间过渡页）直接进播放器。
  *
  * 返回 true = 已发起播放（导航离开）；false = 解析失败（已 Toast 说明原因）。
  */
@@ -60,13 +52,13 @@ suspend fun openLiveAndPlay(
         Toast.makeText(context, result.error ?: "获取直播地址失败，请重试", Toast.LENGTH_LONG).show()
         return false
     }
-    // 可选清晰度/线路：调用方给的优先（电视源同名频道多条地址），否则用解析结果
-    // （虎牙 4 档、抖音多档、B站登录后多档；斗鱼只有一档 → 播放器不显示菜单）
+    // 可选清晰度/线路：调用方给的优先（电视源同名频道多条地址），否则用解析结果；
+    // 只有一档时播放器不显示画质菜单
     val qualities = (if (extraQualities.isNotEmpty()) extraQualities else result.qualities).ifEmpty {
         listOf(com.shangyin.app.data.live.LiveQuality("默认", info.url, info.isHls))
     }
 
-    // 主播 + 平台信息（清单里收藏时用的是同一口径）
+    // 来源信息（清单里收藏时用的是同一口径）
     val subTitle = buildString {
         append(LivePlatforms.label(room.platform))
         val who = info.streamer.ifBlank { room.streamer }
@@ -81,18 +73,18 @@ suspend fun openLiveAndPlay(
     PlayerSession.groups = listOf(
         VodPlayGroup(
             name = LivePlatforms.label(room.platform),
-            episodes = listOf(VodEpisode(name = "直播", url = info.url))
+            episodes = listOf(VodEpisode(name = "频道", url = info.url))
         )
     )
     PlayerSession.groupIndex = 0
     PlayerSession.startIndex = 0
     PlayerSession.startPosMs = 0L
     PlayerSession.isLive = true
+    // 电视的多线路（同名频道的多条地址）由调用方从这里传进来，播放页换线路直接换地址
     PlayerSession.liveQualities = qualities
-    // 播放页要用它做「刷新」与断流自动重连（直播地址会过期，必须能重新解析）
+    // 播放页要用它做「刷新」与断流自动重连（流会断开，必须能重新解析）
     PlayerSession.liveRoom = room
-    PlayerSession.liveExtraQualities = extraQualities
-    // 防盗链：三个平台都校验 Referer（虎牙/斗鱼/B站实测必须带），UA 与站点脚本保持一致
+    // 请求头：电视源通常不需要 Referer；统一带上浏览器 UA，解析结果给了 referer 就一并带上
     PlayerSession.streamHeaders = buildMap {
         put("User-Agent", VodClient.UA)
         if (info.referer.isNotBlank()) put("Referer", info.referer)
@@ -112,7 +104,10 @@ suspend fun openLiveAndPlay(
     return true
 }
 
-/** 清单里收藏直播条目时用的 doubanId："{platform}|{roomId}" */
+/**
+ * 清单里收藏电视频道时用的 doubanId："{platform}|{roomId}"
+ * （platform 固定为 custom，roomId 就是频道播放地址）
+ */
 fun liveRoomFromCollect(doubanId: String, title: String, subTitle: String, cover: String?): LiveRoom? {
     val parts = doubanId.split("|")
     if (parts.size != 2) return null

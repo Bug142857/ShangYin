@@ -36,7 +36,6 @@ object ConfigBackup {
         "zlib_cookie",
         "zlib_host",
         "live_sources_json",
-        "bili_cookie",
         "theme"
     )
 

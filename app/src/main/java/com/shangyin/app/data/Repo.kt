@@ -406,6 +406,16 @@ object Repo {
         }
     }
 
+    /**
+     * 一次性数据迁移：收藏分类「直播」→「电视」。
+     *
+     * 平台直播已整体移除，分类名跟着改成「电视」；不迁移的话老收藏会在清单里"消失"。
+     * 幂等：UPDATE 匹配不到就是 0 行，重复执行无害。
+     */
+    suspend fun migrateLiveCategoryToTv() {
+        itemDao.renameCategory("直播", "电视")
+    }
+
     /** 导入全部数据（清空后全量替换；备份带片源时同步替换片源配置） */
     suspend fun importAll(data: ExportData) {
         db.withTransaction {

@@ -95,7 +95,6 @@ import com.shangyin.app.R
 import androidx.media3.ui.R as media3R
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.ui.settings.SettingsStore
-import com.shangyin.app.data.live.LivePlatforms
 import com.shangyin.app.ui.live.resolveLive
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.delay
@@ -148,7 +147,7 @@ fun PlayerScreen(nav: NavHostController) {
     val view = LocalView.current
 
     val groups = PlayerSession.groups
-    // 直播模式：不记忆进度、不显示选集/线路/倍速（由里世界「直播」模块进入）
+    // 直播模式：不记忆进度、不显示选集/线路/倍速（由里世界「电视」模块进入）
     val isLive = PlayerSession.isLive
     var groupIndex by remember {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
@@ -169,13 +168,13 @@ fun PlayerScreen(nav: NavHostController) {
             .setConnectTimeoutMs(8000)
             .setReadTimeoutMs(15000)
             .setAllowCrossProtocolRedirects(true)
-            // 直播防盗链：虎牙/斗鱼/B站 的流地址都要带 Referer（进播放页前由 PlayerSession 传好）
+            // 直播防盗链：个别源要求带 Referer（进播放页前由 PlayerSession 传好；电视源通常为空）
             .setDefaultRequestProperties(PlayerSession.streamHeaders)
         val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
         // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms
-        // 直播的缓冲与点播分开：直播流"突发一段就断"（实测虎牙 CDN 发送 ~5MB 后 EOF），
-        // 缓冲给大一些才能把这一整段吃掉，减少重连次数；同时起播别太慢
+        // 直播的缓冲与点播分开：直播流可能"发一段就断"，
+        // 缓冲给大一些才能把这一段吃掉、减少重连次数；同时起播别太慢
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 /* minBufferMs = */ if (isLive) 10000 else 30000,
@@ -195,7 +194,7 @@ fun PlayerScreen(nav: NavHostController) {
     var speedMenuOpen by remember { mutableStateOf(false) }  // 倍速菜单
     var speed by remember { mutableFloatStateOf(1f) }        // 当前倍速
 
-    // 直播画质（虎牙 4 档、抖音多档、B站登录后多档；斗鱼/电视通常一档 → 不显示菜单）
+    // 直播画质/线路（电视源同名频道的多条地址就是多档；只有一档时不显示菜单）
     var liveQualities by remember { mutableStateOf(PlayerSession.liveQualities) }
     var qualityIdx by remember {
         mutableIntStateOf(
@@ -205,7 +204,7 @@ fun PlayerScreen(nav: NavHostController) {
     }
     var qualityMenuOpen by remember { mutableStateOf(false) }
 
-    // 直播重连/提示（用户要「刷新」按钮；虎牙的流实测是"发一段就断"，必须能自动续上）
+    // 直播重连/提示（用户要「刷新」按钮；直播流可能断开，必须能自动续上）
     val liveRoom = remember { PlayerSession.liveRoom }
     var reconnecting by remember { mutableStateOf(false) }
     var liveHint by remember { mutableStateOf<String?>(null) }
@@ -253,9 +252,8 @@ fun PlayerScreen(nav: NavHostController) {
     /**
      * 重新解析并接着播：「刷新」按钮、切清晰度、断流自动重连都走这里。
      *
-     * 为什么必须重新解析而不是复用地址：直播地址是**短时效**的 ——
-     * 实测虎牙的 antiCode 90 秒后同一个 URL 就变 403，抖音地址带 expire、斗鱼带 token/wsAuth。
-     * 复用旧地址正是用户看到的「切换画质 → 该线路网络连接失败」。
+     * 为什么必须重新解析而不是复用地址：直播流断开后旧地址可能已失效，
+     * 复用旧地址正是用户看到的「该线路网络连接失败」。
      */
     fun reloadLive(preferLabel: String? = null, reason: String? = null) {
         val room = liveRoom
@@ -273,12 +271,9 @@ fun PlayerScreen(nav: NavHostController) {
                 reconnecting = false
                 return@launch
             }
-            // 电视那种"调用方给的线路"优先，其余用新解析出来的档位
-            val fresh = (if (PlayerSession.liveExtraQualities.isNotEmpty()) {
-                PlayerSession.liveExtraQualities
-            } else {
-                res.qualities
-            }).ifEmpty {
+            // 重连只保证「用同一档继续播」：档位用这次解析出来的结果，不在重连里换线路
+            // （电视的多线路由调用方通过 PlayerSession.liveQualities 传进来）
+            val fresh = res.qualities.ifEmpty {
                 listOf(com.shangyin.app.data.live.LiveQuality("默认", info.url, info.isHls))
             }
             val wantLabel = preferLabel ?: liveQualities.getOrNull(qualityIdx)?.label
@@ -293,12 +288,12 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    /** 切清晰度：电视那种自带多线路的直接换地址；平台流重新解析（旧地址可能已过期） */
+    /** 切清晰度/线路：电视源自带多线路的直接换地址；其余重新解析（旧地址可能已失效） */
     fun switchQuality(idx: Int) {
         val q = liveQualities.getOrNull(idx) ?: return
         if (idx == qualityIdx) return
         qualityIdx = idx
-        if (PlayerSession.liveExtraQualities.isNotEmpty()) {
+        if (liveQualities.size > 1 && liveRoom?.platform == "custom") {
             playLiveUrl(q)
         } else {
             reloadLive(preferLabel = q.label, reason = "正在切换画质…")
@@ -350,11 +345,11 @@ fun PlayerScreen(nav: NavHostController) {
     }
 
     // 进入播放页默认横屏全屏（画面最大化）。**直播也自动横屏**（用户明确要求），
-    // 唯一的例外是**抖音的竖屏直播流**：那种要竖着看、并按视频比例撑满纵向屏幕。
-    // 竖屏流只能等第一帧画面尺寸出来才知道（宽高比 < 1 = 竖屏流），所以这里依赖 videoAspect 二次判断。
+    // 唯一的例外是**竖屏直播流**：那种要竖着看、并按视频比例撑满纵向屏幕。
+    // 是不是竖屏流只能等第一帧画面尺寸出来才知道（宽高比 < 1 = 竖屏流），所以这里依赖 videoAspect 二次判断。
     LaunchedEffect(Unit, videoAspect) {
         val isPortraitStream = videoAspect > 0f && videoAspect < 1f
-        val keepPortrait = isLive && PlayerSession.liveRoom?.platform == LivePlatforms.DOUYIN && isPortraitStream
+        val keepPortrait = isLive && isPortraitStream
         if (!keepPortrait && config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
@@ -369,7 +364,7 @@ fun PlayerScreen(nav: NavHostController) {
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
-                // 直播流"发一段就断"（实测虎牙 CDN 行为）→ 自动重新解析续上，最多连续 5 次
+                // 直播流可能断开 → 自动重新解析续上，最多连续 5 次
                 if (playbackState == androidx.media3.common.Player.STATE_READY) {
                     reconnectAttempts = 0
                     reconnecting = false
@@ -574,7 +569,7 @@ fun PlayerScreen(nav: NavHostController) {
         } else {
             Column(Modifier.fillMaxSize()) {
                 // 视频区：横屏铺满全屏；竖屏 16:9 置顶；
-                // **竖屏直播流（抖音那种 h>w）**按视频真实比例撑满纵向屏幕并居中（用户要的"纵向全屏"）
+                // **竖屏直播流（h>w）**按视频真实比例撑满纵向屏幕并居中（用户要的"纵向全屏"）
                 val isPortraitStream = isLive && videoAspect > 0f && videoAspect < 1f
                 Box(
                     Modifier
@@ -694,7 +689,7 @@ fun PlayerScreen(nav: NavHostController) {
                                     Text("选集", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
                             }
-                            // 直播画质（多档才显示；斗鱼/电视通常一档）
+                            // 直播画质/线路（多档才显示）
                             if (isLive && liveQualities.size > 1) {
                                 TextButton(onClick = { qualityMenuOpen = true }) {
                                     Text(
@@ -704,7 +699,7 @@ fun PlayerScreen(nav: NavHostController) {
                                     )
                                 }
                             }
-                            // 直播刷新：重新解析地址接着播（直播地址短时效，卡住时点一下最有效）
+                            // 直播刷新：重新解析地址接着播（流断开时点一下最有效）
                             if (isLive) {
                                 TextButton(onClick = {
                                     reconnectAttempts = 0
@@ -940,7 +935,7 @@ fun PlayerScreen(nav: NavHostController) {
                     }
                 }
 
-                // 竖屏直播信息（直播没有选集/线路，只显示房间信息）
+                // 竖屏直播信息（直播没有选集/线路，只显示频道信息）
                 if (!isLandscape && isLive) {
                     Column(
                         Modifier
@@ -980,7 +975,7 @@ fun PlayerScreen(nav: NavHostController) {
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
-                            "直播不支持拖动进度；若一直缓冲，先点「刷新」，再考虑切「标清 / 流畅」或换个房间",
+                            "直播不支持拖动进度；若一直缓冲，先点「刷新」，再考虑切换线路或换个频道",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )

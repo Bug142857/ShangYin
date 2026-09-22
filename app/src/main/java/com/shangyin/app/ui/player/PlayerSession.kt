@@ -23,23 +23,20 @@ object PlayerSession {
     /** 起始集内的续播位置（毫秒） */
     var startPosMs: Long = 0L
 
-    /** 直播模式：不记忆进度、不显示选集/倍速，播放器用 streamHeaders 里的防盗链请求头 */
+    /** 直播模式：不记忆进度、不显示选集/倍速，播放器用 streamHeaders 里的请求头 */
     var isLive: Boolean = false
 
-    /** 二级信息（直播：平台 · 主播 / 在线观影为空） */
+    /** 二级信息（直播：来源 · 频道副标题 / 在线观影为空） */
     var subTitle: String = ""
 
-    /** 播放请求头（直播平台防盗链：Referer 等） */
+    /** 播放请求头（直播防盗链：Referer 等；电视源通常为空） */
     var streamHeaders: Map<String, String> = emptyMap()
 
-    /** 直播可选清晰度（>1 项时播放器显示「画质」菜单；切换直接换流地址，不用重新解析） */
+    /** 直播可选清晰度/线路（>1 项时播放器显示「画质」菜单；电视源同名频道的多条地址走这里） */
     var liveQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
 
-    /** 当前直播房间：播放页的「刷新」与断流自动重连要用它重新解析（地址短时效） */
+    /** 当前频道：播放页的「刷新」与断流自动重连要用它重新解析（流会断开） */
     var liveRoom: com.shangyin.app.data.live.LiveRoom? = null
-
-    /** 电视源那种"调用方已知的线路"，重连时要原样带上 */
-    var liveExtraQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
 
     fun clear() {
         itemId = 0L
@@ -54,6 +51,5 @@ object PlayerSession {
         streamHeaders = emptyMap()
         liveQualities = emptyList()
         liveRoom = null
-        liveExtraQualities = emptyList()
     }
 }

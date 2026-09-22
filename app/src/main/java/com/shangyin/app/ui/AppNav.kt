@@ -217,9 +217,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getString("hash").orEmpty()
                 )
             }
-            // 直播 = 虎牙 / 斗鱼 / B站 / 抖音 / 电视（里世界第六入口）
-            // 搜索不再单开页面：搜索框做在直播页内，返回键逐级返回（先退出搜索态再离开直播页）
-            composable("liveHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
+            // 电视 = 自定义 M3U / M3U8 源（里世界第六入口；页内搜索，返回键逐级返回）
+            composable("tvHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
             composable("liveSources") { com.shangyin.app.ui.live.LiveSourcesScreen(nav) }
             composable(
                 route = "list/{id}",
@@ -234,8 +233,6 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
 
         // Z-Library 接口用的常驻隐藏 WebView（DiamWall 是 JS 挑战，接口必须走浏览器环境）
         com.shangyin.app.ui.zlib.ZlibWebHost()
-        // 直播用的常驻隐藏 WebView（斗鱼的播放地址只能由页面自己的 JS 拿到）
-        com.shangyin.app.ui.live.LiveWebHost()
     }
 
     // 导航栈安全网：NavHost 空栈或快速返回异常时强制回首页

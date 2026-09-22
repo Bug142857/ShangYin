@@ -63,7 +63,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import com.shangyin.app.data.live.BiliLiveClient
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.data.zlib.ZlibClient
 import com.shangyin.app.data.zlib.ZlibWeb
@@ -483,43 +482,6 @@ class ZlibLoginActivity : ComponentActivity() {
                             }
                         },
                         onCustomHost = { host -> if (host.isNotBlank()) SettingsStore.zlibHost = host }
-                    ),
-                    onBack = { finish() },
-                    onLoginSuccess = {
-                        setResult(Activity.RESULT_OK)
-                        finish()
-                    }
-                )
-            }
-        }
-    }
-}
-
-/** B站（哔哩哔哩）登录：登录后里世界「直播」的 B 站频道可看原画清晰度 */
-class BiliLoginActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContent {
-            ShangYinTheme {
-                WebLoginContent(
-                    spec = LoginSpec(
-                        title = "B站登录",
-                        startUrls = listOf("https://passport.bilibili.com/login"),
-                        cookieUrls = listOf(
-                            "https://www.bilibili.com",
-                            "https://api.bilibili.com",
-                            "https://live.bilibili.com"
-                        ),
-                        hint = "登录后里世界「直播」的 B 站频道可看原画清晰度（不登录只能到超清）。\n" +
-                            "默认的扫码登录需要另一台设备扫码，也可以切到「密码登录 / 短信登录」在本机完成。\n" +
-                            "登录信息仅保存在本机。",
-                        loginDetect = { c -> c.contains("SESSDATA", true) },
-                        isLoggedIn = { SettingsStore.isBiliLoggedIn },
-                        save = { SettingsStore.biliCookie = it },
-                        logout = { SettingsStore.clearBiliLogin() },
-                        // 服务端说了算：Cookie 在 ≠ 会话有效（风控/过期时 auto-close 会骗人）
-                        verifyLogin = { BiliLiveClient.sessionOk() },
-                        failHint = "若登录页打不开或一直转圈，请检查网络后重试。"
                     ),
                     onBack = { finish() },
                     onLoginSuccess = {

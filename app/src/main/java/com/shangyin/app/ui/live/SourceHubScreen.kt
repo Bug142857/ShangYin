@@ -39,7 +39,7 @@ import com.shangyin.app.ui.settings.SettingsStore
 /**
  * 片源管理（总入口）：把两类源配置收在一处
  * - 影视源配置：苹果 CMS 采集源（在线观影 / 番号，原来就叫「片源管理」）
- * - 电视源配置：自定义 M3U / M3U8 电视源（里世界 → 直播 → 电视）
+ * - 电视源配置：自定义 M3U / M3U8 电视源（里世界 → 电视）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -82,7 +82,7 @@ fun SourceHubScreen(nav: NavHostController) {
                 title = "电视源配置",
                 subtitle = SettingsStore.getLiveSources().let { list ->
                     val n = list.count { it.enabled }
-                    if (n > 0) "已启用 $n 个电视源 · 里世界「直播 → 电视」看频道"
+                    if (n > 0) "已启用 $n 个电视源 · 里世界「电视」看频道"
                     else "导入 M3U / M3U8 电视源（网络地址或本地文件）"
                 },
                 onClick = { nav.safeNavigate("liveSources") }

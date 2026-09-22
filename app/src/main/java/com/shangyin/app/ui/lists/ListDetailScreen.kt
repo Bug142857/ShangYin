@@ -634,7 +634,7 @@ private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
                                         "番号" -> "番号 · ${e.subTitle}"
                                         "本子" -> "本子 · ${e.subTitle}"
                                         com.shangyin.app.data.live.LivePlatforms.CATEGORY ->
-                                            "直播 · ${e.subTitle}"
+                                            "电视 · ${e.subTitle}"
                                         else -> "漫画 · ${e.subTitle}"
                                     },
                                     style = MaterialTheme.typography.labelSmall,

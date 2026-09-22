@@ -23,7 +23,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.Cloud
-import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material3.AlertDialog
@@ -165,28 +164,6 @@ fun AccountScreen(nav: NavHostController) {
         }
     }
 
-    // B站登录（里世界「直播」看原画清晰度；匿名只能到超清）
-    var biliLoginKey by remember { mutableStateOf(0) }
-    val isBiliLoggedIn = remember(biliLoginKey) { SettingsStore.isBiliLoggedIn }
-    var showBiliLogout by remember { mutableStateOf(false) }
-    var biliSessionOk by remember(biliLoginKey) { mutableStateOf<Boolean?>(null) }
-    var biliChecked by remember(biliLoginKey) { mutableStateOf(false) }
-    LaunchedEffect(biliLoginKey) {
-        biliChecked = false
-        if (SettingsStore.isBiliLoggedIn) {
-            biliSessionOk = checkSession { com.shangyin.app.data.live.BiliLiveClient.sessionOk() }
-        }
-        biliChecked = true
-    }
-    val biliLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        biliLoginKey++
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            Toast.makeText(context, "B站登录成功", Toast.LENGTH_SHORT).show()
-        }
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -310,29 +287,6 @@ fun AccountScreen(nav: NavHostController) {
                     else zlibLauncher.launch(Intent(context, ZlibLoginActivity::class.java))
                 }
             )
-
-            // B站登录（直播原画）
-            SettingCard(
-                icon = {
-                    Icon(
-                        Icons.Rounded.LiveTv, contentDescription = null,
-                        tint = if (isBiliLoggedIn && biliSessionOk != false) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline
-                    )
-                },
-                title = "B站登录",
-                subtitle = when {
-                    !isBiliLoggedIn -> "未登录，里世界「直播」只能看超清（登录后可看原画）"
-                    !biliChecked -> "已登录，正在检测登录状态…"
-                    biliSessionOk == false -> "登录已失效！直播会退回超清，点这里重新登录"
-                    biliSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
-                    else -> "已登录，直播可看原画清晰度"
-                },
-                onClick = {
-                    if (isBiliLoggedIn && biliSessionOk == true) showBiliLogout = true
-                    else biliLauncher.launch(Intent(context, BiliLoginActivity::class.java))
-                }
-            )
         }
     }
 
@@ -426,26 +380,6 @@ fun AccountScreen(nav: NavHostController) {
                 ) { Text("退出", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { showZlibLogout = false }) { Text("取消") } }
-        )
-    }
-
-    // B站登出确认
-    if (showBiliLogout) {
-        AlertDialog(
-            onDismissRequest = { showBiliLogout = false },
-            title = { Text("退出 B站登录") },
-            text = { Text("退出后里世界「直播」只能看超清清晰度，确认退出？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        SettingsStore.clearBiliLogin()
-                        biliLoginKey++
-                        showBiliLogout = false
-                        Toast.makeText(context, "已退出 B站登录", Toast.LENGTH_SHORT).show()
-                    }
-                ) { Text("退出", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { showBiliLogout = false }) { Text("取消") } }
         )
     }
 }
