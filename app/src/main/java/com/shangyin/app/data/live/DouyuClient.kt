@@ -42,6 +42,10 @@ object DouyuClient {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     private const val REFERER_DESKTOP = "https://www.douyu.com/"
+    /**
+     * 播放地址的防盗链 Referer 用**移动页**：这些直链是 m.douyu.com 页面自己的 JS 请求出来的，
+     * 它当时带的 Referer 就是 m.douyu.com（用户实测用 www.douyu.com 会「该线路网络连接失败」）。
+     */
     private const val REFERER_MOBILE = "https://m.douyu.com/"
 
     private const val URL_CATEGORY = "https://www.douyu.com/japi/weblist/apinc/newDirectory"
@@ -238,12 +242,12 @@ object DouyuClient {
         if (html != null) {
             FLV_REGEX.find(html)?.value?.let { flv ->
                 return@withContext LiveResolveResult(
-                    info = LivePlayInfo(flv.replace("&amp;", "&"), isHls = false, referer = REFERER_DESKTOP)
+                    info = LivePlayInfo(flv.replace("&amp;", "&"), isHls = false, referer = REFERER_MOBILE)
                 ).withFallbackQuality()
             }
             M3U8_REGEX.find(html)?.value?.let { m3u8 ->
                 return@withContext LiveResolveResult(
-                    info = LivePlayInfo(m3u8.replace("&amp;", "&"), isHls = true, referer = REFERER_DESKTOP)
+                    info = LivePlayInfo(m3u8.replace("&amp;", "&"), isHls = true, referer = REFERER_MOBILE)
                 ).withFallbackQuality()
             }
         }
@@ -281,7 +285,7 @@ object DouyuClient {
         if (raw.startsWith(URL_PREFIX)) {
             val u = raw.removePrefix(URL_PREFIX).trim()
             if (u.isEmpty()) return null
-            return LivePlayInfo(u, isHls = isHlsUrl(u), referer = REFERER_DESKTOP)
+            return LivePlayInfo(u, isHls = isHlsUrl(u), referer = REFERER_MOBILE)
         }
 
         // 响应体里的 URL 可能是 JSON 转义过的（http:\/\/…），先还原再匹配
@@ -292,15 +296,15 @@ object DouyuClient {
             val live = data?.str("rtmp_live")
             if (!host.isNullOrBlank() && !live.isNullOrBlank()) {
                 val u = "$host/$live"
-                return LivePlayInfo(u, isHls = isHlsUrl(live), referer = REFERER_DESKTOP)
+                return LivePlayInfo(u, isHls = isHlsUrl(live), referer = REFERER_MOBILE)
             }
         }
 
         FLV_REGEX.find(body)?.value?.let {
-            return LivePlayInfo(it.replace("&amp;", "&"), isHls = false, referer = REFERER_DESKTOP)
+            return LivePlayInfo(it.replace("&amp;", "&"), isHls = false, referer = REFERER_MOBILE)
         }
         M3U8_REGEX.find(body)?.value?.let {
-            return LivePlayInfo(it.replace("&amp;", "&"), isHls = true, referer = REFERER_DESKTOP)
+            return LivePlayInfo(it.replace("&amp;", "&"), isHls = true, referer = REFERER_MOBILE)
         }
         return null
     }

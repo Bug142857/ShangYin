@@ -218,20 +218,9 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 )
             }
             // 直播 = 虎牙 / 斗鱼 / B站 / 抖音 / 电视（里世界第六入口）
+            // 搜索不再单开页面：搜索框做在直播页内，返回键逐级返回（先退出搜索态再离开直播页）
             composable("liveHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
             composable("liveSources") { com.shangyin.app.ui.live.LiveSourcesScreen(nav) }
-            composable(
-                route = "liveSearch?platform={platform}",
-                arguments = listOf(navArgument("platform") {
-                    type = NavType.StringType
-                    defaultValue = "huya"
-                })
-            ) { entry ->
-                com.shangyin.app.ui.live.LiveSearchScreen(
-                    nav,
-                    entry.arguments?.getString("platform").orEmpty().ifBlank { "huya" }
-                )
-            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

@@ -18,6 +18,25 @@ import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 
 /**
+ * 只做"解析"，不导航：播放页的「刷新」按钮与断流自动重连都复用它。
+ *
+ * 为什么必须能重新解析：直播地址是**短时效**的 —— 实测虎牙的 antiCode 90 秒后就 403、
+ * 斗鱼地址里带 `token`/`wsAuth`、抖音地址带 `expire`，所以"切画质/断流"都不能复用旧地址。
+ */
+suspend fun resolveLive(room: LiveRoom): LiveResolveResult = when (room.platform) {
+    LivePlatforms.HUYA -> HuyaClient.resolve(room.roomId)
+    LivePlatforms.DOUYU -> DouyuClient.resolve(room.roomId)
+    LivePlatforms.BILI -> BiliLiveClient.resolve(room.roomId)
+    LivePlatforms.DOUYIN -> DouyinClient.resolve(room.roomId)
+    LivePlatforms.CUSTOM -> {
+        // 自定义源：roomId 就是频道播放地址，直接播
+        val isHls = room.roomId.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+        LiveResolveResult(info = LivePlayInfo(url = room.roomId, isHls = isHls, referer = ""))
+    }
+    else -> LiveResolveResult(error = "不支持的直播平台")
+}
+
+/**
  * 直播 → 播放页的公共流程：
  * 解析房间真实流地址（虎牙/斗鱼/B站各不相同）→ 填充 PlayerSession（直播模式，带防盗链请求头）→ 进播放页。
  *
@@ -34,18 +53,7 @@ suspend fun openLiveAndPlay(
     /** 调用方已知的备用线路/清晰度（如电视源里同名频道的多条地址），非空时优先用它 */
     extraQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
 ): Boolean {
-    val result: LiveResolveResult = when (room.platform) {
-        LivePlatforms.HUYA -> HuyaClient.resolve(room.roomId)
-        LivePlatforms.DOUYU -> DouyuClient.resolve(room.roomId)
-        LivePlatforms.BILI -> BiliLiveClient.resolve(room.roomId)
-        LivePlatforms.DOUYIN -> DouyinClient.resolve(room.roomId)
-        LivePlatforms.CUSTOM -> {
-            // 自定义源：roomId 就是频道播放地址，直接播
-            val isHls = room.roomId.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
-            LiveResolveResult(info = LivePlayInfo(url = room.roomId, isHls = isHls, referer = ""))
-        }
-        else -> LiveResolveResult(error = "不支持的直播平台")
-    }
+    val result: LiveResolveResult = resolveLive(room)
 
     val info = result.info
     if (info == null) {
@@ -81,6 +89,9 @@ suspend fun openLiveAndPlay(
     PlayerSession.startPosMs = 0L
     PlayerSession.isLive = true
     PlayerSession.liveQualities = qualities
+    // 播放页要用它做「刷新」与断流自动重连（直播地址会过期，必须能重新解析）
+    PlayerSession.liveRoom = room
+    PlayerSession.liveExtraQualities = extraQualities
     // 防盗链：三个平台都校验 Referer（虎牙/斗鱼/B站实测必须带），UA 与站点脚本保持一致
     PlayerSession.streamHeaders = buildMap {
         put("User-Agent", VodClient.UA)

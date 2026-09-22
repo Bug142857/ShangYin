@@ -1,5 +1,6 @@
 package com.shangyin.app.ui.live
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -29,10 +30,13 @@ import androidx.compose.foundation.lazy.itemsIndexed as lazyItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -57,6 +61,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -68,7 +73,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -110,6 +117,18 @@ internal object LiveCache {
     var customResults: List<LiveChannelResult>? = null
     var customGroup: String? = null
 
+    /**
+     * 页内搜索态（按平台分别存，key = 平台）：
+     * - searchInput：搜索框里的字（切平台不串味）
+     * - searchKeyword：已提交的关键词（非空 = 处于搜索态）
+     * - searchResults / searchPage：搜索结果与已加载页码
+     * 都放在这里是为了「进播放页再返回」时原样恢复——搜索也是用户花时间翻出来的，不能白搜。
+     */
+    val searchInput = mutableMapOf<String, String>()
+    val searchKeyword = mutableMapOf<String, String>()
+    val searchResults = mutableMapOf<String, List<LiveRoom>>()
+    val searchPage = mutableMapOf<String, Int>()
+
     fun roomsOf(platform: String, catId: String): List<LiveRoom> = rooms["$platform|$catId"].orEmpty()
     fun pageOf(platform: String, catId: String): Int = page["$platform|$catId"] ?: 1
     fun scrollOf(platform: String): Int = scroll[platform] ?: 0
@@ -117,22 +136,176 @@ internal object LiveCache {
 
 /**
  * 里世界「直播」：
- * - 平台切换：虎牙 / 斗鱼 / B站 / 我的源（自定义 M3U 频道）
+ * - 页内搜索窗（照着 H1 / 外网源浏览页的手感）：输入法回车直接搜，结果就显示在本页内容区，
+ *   顶栏不单放放大镜、也没有独立搜索页；返回键逐级返回（搜索态先退出搜索回分区浏览）
+ * - 平台切换：虎牙 / 斗鱼 / B站 / 抖音 / 电视（自定义 M3U 频道）
  * - 平台页：分区筛选（收起横滑一行 / 展开平铺）+ 房间封面网格，点卡片直接播放，右上角爱心收藏到里世界清单
- * - 我的源页：导入的 M3U 频道按分组展示，点频道直接播放
+ * - 电视页：导入的 M3U 频道按分组展示，点频道直接播放
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LiveHomeScreen(nav: NavHostController) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val focus = LocalFocusManager.current
+
     var platform by rememberSaveable { mutableStateOf(LiveCache.platform) }
     var collectTarget by remember { mutableStateOf<LiveRoom?>(null) }
     var biliLoggedIn by remember { mutableStateOf(SettingsStore.isBiliLoggedIn) }
+
+    // 页内搜索态：input = 输入框里的字，keyword = 已提交的关键词（非空就是"处于搜索态"）。
+    // 两者都按平台存进 LiveCache：① 切换平台各搜各的、不串味；② 进播放页再返回时原样恢复，不白搜。
+    var searchInput by remember { mutableStateOf(LiveCache.searchInput[platform].orEmpty()) }
+    var searchKeyword by remember { mutableStateOf(LiveCache.searchKeyword[platform].orEmpty()) }
+    var searchResults by remember { mutableStateOf(LiveCache.searchResults[platform].orEmpty()) }
+    var searchPage by remember { mutableIntStateOf(LiveCache.searchPage[platform] ?: 1) }
+    var searchLoading by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf<String?>(null) }
+    var searchOpeningId by remember { mutableStateOf<String?>(null) }
+    val searchActive = searchKeyword.isNotBlank()
 
     // 已收藏的直播条目（爱心高亮；从清单返回后状态实时更新）
     val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
     val savedIds = remember(allItems) {
         allItems.filter { it.category == LivePlatforms.CATEGORY }.mapNotNull { it.doubanId }.toSet()
     }
+
+    // 各平台能不能搜不一样，占位文字直接说人话（B站/抖音没有可用搜索接口 → 不请求也不假装有结果）
+    val searchPlaceholder = when (platform) {
+        LivePlatforms.HUYA, LivePlatforms.DOUYU -> "搜索直播间 / 主播"
+        LivePlatforms.CUSTOM -> "搜索电视频道名"
+        else -> "该平台暂不支持搜索，可搜虎牙 / 斗鱼 / 电视"
+    }
+
+    /** 切换平台：把该平台自己的搜索态从缓存换回来（各平台搜索框分别保留，互不干扰） */
+    fun switchPlatform(key: String) {
+        platform = key
+        LiveCache.platform = key
+        searchInput = LiveCache.searchInput[key].orEmpty()
+        searchKeyword = LiveCache.searchKeyword[key].orEmpty()
+        searchResults = LiveCache.searchResults[key].orEmpty()
+        searchPage = LiveCache.searchPage[key] ?: 1
+        searchError = null
+        searchLoading = false
+        searchOpeningId = null
+    }
+
+    /**
+     * 退出搜索态：关键词与结果都清掉，回到分区浏览。
+     * 分区选择 / 已加载房间 / 滚动位置本来就在 LiveCache 里（分区浏览侧没被改动过），所以原样还在。
+     */
+    fun exitSearch() {
+        searchInput = ""
+        searchKeyword = ""
+        searchResults = emptyList()
+        searchPage = 1
+        searchError = null
+        searchLoading = false
+        searchOpeningId = null
+        LiveCache.searchInput.remove(platform)
+        LiveCache.searchKeyword.remove(platform)
+        LiveCache.searchResults.remove(platform)
+        LiveCache.searchPage.remove(platform)
+        focus.clearFocus()
+    }
+
+    /**
+     * 执行搜索（next = 斗鱼翻页）。
+     * 数据来源：虎牙 HuyaClient.search（接口只有一页）/ 斗鱼 DouyuClient.search（支持翻页）/
+     * 电视 = 本地在已导入的频道名里过滤 / B站·抖音没有可用搜索接口 → 不请求，内容区给说明。
+     */
+    fun runSearch(next: Boolean = false) {
+        val kw = searchInput.trim()
+        if (kw.isEmpty()) {
+            exitSearch()
+            return
+        }
+        val atPlatform = platform
+        // 只有斗鱼的搜索接口支持翻页；虎牙一页、电视是本地过滤
+        if (next && atPlatform != LivePlatforms.DOUYU) return
+        val target = if (next) searchPage + 1 else 1
+        searchInput = kw
+        searchKeyword = kw
+        LiveCache.searchInput[atPlatform] = kw
+        LiveCache.searchKeyword[atPlatform] = kw
+        searchLoading = true
+        searchError = null
+        if (!next) {
+            // 新关键词：先清掉上一次的结果，避免"字换了结果还是旧的"
+            searchResults = emptyList()
+            LiveCache.searchResults[atPlatform] = emptyList()
+        }
+        scope.launch {
+            val fetched = runCatching {
+                when (atPlatform) {
+                    LivePlatforms.HUYA -> HuyaClient.search(kw, 1)
+                    LivePlatforms.DOUYU -> DouyuClient.search(kw, target)
+                    // 电视：M3U 没有远端搜索，在已加载（没有就先拉一次）的频道名里本地过滤
+                    LivePlatforms.CUSTOM -> {
+                        val sources = SettingsStore.getLiveSources().filter { it.enabled }
+                        val loaded = LiveCache.customResults
+                            ?: runCatching { M3uClient.loadAll(sources) }
+                                .getOrDefault(emptyList())
+                                .also { list ->
+                                    // 与「电视」页同一口径：全部成功才写缓存，失败别把空列表缓存住
+                                    if (list.isNotEmpty() && list.none { it.error != null }) {
+                                        LiveCache.customResults = list
+                                    }
+                                }
+                        loaded.flatMap { r ->
+                            r.channels.filter { it.name.contains(kw, ignoreCase = true) }
+                                .map { ch ->
+                                    LiveRoom(
+                                        platform = LivePlatforms.CUSTOM,
+                                        roomId = ch.url,
+                                        title = ch.name,
+                                        streamer = r.source.name,
+                                        categoryName = ch.group
+                                    )
+                                }
+                        }
+                    }
+                    // B站 412 风控 / 抖音要签名：没有可用的搜索接口，不请求也不编结果
+                    else -> emptyList()
+                }
+            }.getOrDefault(emptyList())
+            val merged = if (next) searchResults + fetched else fetched
+            // 请求期间可能已经切了平台：只写回发起搜索的那个平台的缓存，别把别人的结果盖到当前平台
+            LiveCache.searchResults[atPlatform] = merged
+            LiveCache.searchPage[atPlatform] = target
+            if (platform == atPlatform) {
+                searchResults = merged
+                searchPage = target
+                searchLoading = false
+            }
+        }
+    }
+
+    /** 打开搜索结果：电视源同名频道常有多条地址 → 和「电视」页一致，交给播放器当「线路」菜单 */
+    fun openSearchRoom(room: LiveRoom) {
+        if (searchOpeningId != null) return
+        searchOpeningId = room.collectId
+        scope.launch {
+            val lines = if (room.platform == LivePlatforms.CUSTOM) {
+                val sameName = LiveCache.customResults.orEmpty()
+                    .flatMap { r -> r.channels }
+                    .filter { it.name == room.title }
+                    .map { it.url }
+                    .distinct()
+                if (sameName.size > 1) {
+                    sameName.mapIndexed { i, u ->
+                        LiveQuality("线路 ${i + 1}", u, u.substringBefore('?').endsWith(".m3u8", ignoreCase = true))
+                    }
+                } else emptyList()
+            } else emptyList()
+            val ok = openLiveAndPlay(nav, context, room, extraQualities = lines)
+            if (!ok) searchOpeningId = null
+        }
+    }
+
+    // 返回逐级返回（用户原话「记得返回要逐级返回以免白搜了」）：
+    // 搜索是页内的一层 → 搜索态下返回键只退出搜索回分区浏览，不离开直播页；非搜索态不拦截，返回行为照旧
+    BackHandler(enabled = searchActive) { exitSearch() }
 
     Scaffold(
         topBar = {
@@ -144,10 +317,7 @@ fun LiveHomeScreen(nav: NavHostController) {
                     }
                 },
                 actions = {
-                    // 搜索（虎牙/斗鱼走平台搜索接口；电视搜频道名；B站/抖音没有可用搜索接口，进去会有说明）
-                    IconButton(onClick = { nav.safeNavigate("liveSearch?platform=$platform") }) {
-                        Icon(Icons.Rounded.Search, contentDescription = "搜索")
-                    }
+                    // 顶栏不再放放大镜：搜索框就在内容区顶部（用户原话「直接搜索窗就行，不用单独弄个搜索按钮」）
                     // 电视源配置（添加 / 导入 / 删除）
                     IconButton(onClick = { nav.safeNavigate("liveSources") }) {
                         Icon(Icons.Rounded.PlaylistPlay, contentDescription = "电视源配置")
@@ -157,6 +327,34 @@ fun LiveHomeScreen(nav: NavHostController) {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
+            // 页内搜索窗：不开独立搜索页、顶栏也没有放大镜，输入法回车（imeAction = Search）直接搜，
+            // 结果就显示在下面这片内容区（和 H1 / 外网源浏览页同一手感）
+            OutlinedTextField(
+                value = searchInput,
+                onValueChange = {
+                    searchInput = it
+                    LiveCache.searchInput[platform] = it
+                },
+                placeholder = {
+                    Text(searchPlaceholder, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                singleLine = true,
+                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                trailingIcon = {
+                    // 清空 = 退出搜索态回到分区浏览（不是只把字擦掉）
+                    if (searchInput.isNotEmpty() || searchActive) {
+                        IconButton(onClick = { exitSearch() }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "清空")
+                        }
+                    }
+                },
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { runSearch() }),
+                shape = RoundedCornerShape(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            )
             // 平台切换
             Row(
                 Modifier
@@ -168,10 +366,7 @@ fun LiveHomeScreen(nav: NavHostController) {
                 LivePlatforms.ALL.forEach { key ->
                     FilterChip(
                         selected = platform == key,
-                        onClick = {
-                            platform = key
-                            LiveCache.platform = key
-                        },
+                        onClick = { switchPlatform(key) },
                         label = { Text(LivePlatforms.label(key)) }
                     )
                 }
@@ -194,8 +389,21 @@ fun LiveHomeScreen(nav: NavHostController) {
                 }
             }
 
-            when (platform) {
-                LivePlatforms.CUSTOM -> CustomSourcePane(nav, savedIds, onCollect = { collectTarget = it })
+            when {
+                // 搜索态：内容区给搜索结果，分区选择窗与分区浏览网格都不显示（退出搜索态原样回来）
+                searchActive -> LiveSearchResultsPane(
+                    platform = platform,
+                    results = searchResults,
+                    loading = searchLoading,
+                    error = searchError,
+                    savedIds = savedIds,
+                    openingId = searchOpeningId,
+                    onOpen = { openSearchRoom(it) },
+                    onCollect = { collectTarget = it },
+                    onLoadMore = { runSearch(next = true) }
+                )
+
+                platform == LivePlatforms.CUSTOM -> CustomSourcePane(nav, savedIds, onCollect = { collectTarget = it })
                 // ⚠️ key(platform) 必须有：四个平台共用同一个 composable 调用点，
                 // 不加 key 时 remember 会把上一个平台的分区/房间状态带过来 → 切平台「没反应」
                 else -> key(platform) {
@@ -242,7 +450,6 @@ private fun PlatformPane(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val gridState = rememberLazyGridState()
 
     var categories by remember { mutableStateOf(LiveCache.categories[platform].orEmpty()) }
     val cachedCat = LiveCache.selectedCat[platform]
@@ -250,6 +457,13 @@ private fun PlatformPane(
     var rooms by remember {
         mutableStateOf(if (cachedCat != null) LiveCache.roomsOf(platform, cachedCat.id) else emptyList())
     }
+    // 网格起点 = 缓存里的滚动位置：进搜索态 / 进播放页都会让本组合被销毁重建，
+    // 靠它直接把列表滚回原位（否则"搜一下再退回来"就回到顶部，等于白翻了）
+    val gridState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = if (rooms.isNotEmpty()) {
+            LiveCache.scrollOf(platform).coerceIn(0, rooms.size - 1)
+        } else 0
+    )
     var page by remember {
         mutableStateOf(if (cachedCat != null) LiveCache.pageOf(platform, cachedCat.id) else 1)
     }
@@ -618,6 +832,90 @@ internal fun RoomCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+/**
+ * 搜索结果面板（页内搜索态的内容区）：
+ * 复用分区浏览同一张 RoomCard 两列网格（收藏 / 打开是同一套逻辑），"没结果"按平台如实说明：
+ * - 虎牙 / 斗鱼：平台搜索接口；斗鱼支持翻页 → 底部给「加载更多」（追加不替换）
+ * - 电视：本地在已导入的频道名里过滤（所以要说清"找的是频道名"）
+ * - B站 / 抖音：没有可用搜索接口 → 只给说明，绝不假装有结果
+ */
+@Composable
+private fun LiveSearchResultsPane(
+    platform: String,
+    results: List<LiveRoom>,
+    loading: Boolean,
+    error: String?,
+    savedIds: Set<String>,
+    openingId: String?,
+    onOpen: (LiveRoom) -> Unit,
+    onCollect: (LiveRoom) -> Unit,
+    onLoadMore: () -> Unit
+) {
+    // B站 412 风控 / 抖音要签名：搜不了就直说，别让用户等一个永远不来的结果
+    if (platform == LivePlatforms.BILI || platform == LivePlatforms.DOUYIN) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            EmptyView(
+                "${LivePlatforms.label(platform)} 暂不支持搜索\n" +
+                    "该平台没有可用的搜索接口（B站有风控、抖音要签名）\n" +
+                    "可切到虎牙、斗鱼或电视搜索"
+            )
+        }
+        return
+    }
+    when {
+        results.isEmpty() && loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+
+        results.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                EmptyView(error ?: "没有搜到相关直播间")
+                if (platform == LivePlatforms.CUSTOM) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "电视搜索是在已导入的频道名里找；没有就是源里没有这个频道",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+        }
+
+        else -> LazyVerticalGrid(
+            columns = GridCells.Fixed(2),
+            contentPadding = PaddingValues(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(results, key = { it.collectId }) { room ->
+                RoomCard(
+                    room = room,
+                    collected = room.collectId in savedIds,
+                    opening = openingId == room.collectId,
+                    onClick = { onOpen(room) },
+                    onCollect = { onCollect(room) }
+                )
+            }
+            // 只有斗鱼的搜索接口能翻页；虎牙一页、电视本地过滤 → 不给「加载更多」
+            if (platform == LivePlatforms.DOUYU) {
+                item {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Button(enabled = !loading, onClick = onLoadMore) {
+                            Text(if (loading) "加载中…" else "加载更多")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

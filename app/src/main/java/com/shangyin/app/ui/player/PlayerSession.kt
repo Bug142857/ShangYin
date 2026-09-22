@@ -35,6 +35,12 @@ object PlayerSession {
     /** 直播可选清晰度（>1 项时播放器显示「画质」菜单；切换直接换流地址，不用重新解析） */
     var liveQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
 
+    /** 当前直播房间：播放页的「刷新」与断流自动重连要用它重新解析（地址短时效） */
+    var liveRoom: com.shangyin.app.data.live.LiveRoom? = null
+
+    /** 电视源那种"调用方已知的线路"，重连时要原样带上 */
+    var liveExtraQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
+
     fun clear() {
         itemId = 0L
         title = ""
@@ -47,5 +53,7 @@ object PlayerSession {
         subTitle = ""
         streamHeaders = emptyMap()
         liveQualities = emptyList()
+        liveRoom = null
+        liveExtraQualities = emptyList()
     }
 }
