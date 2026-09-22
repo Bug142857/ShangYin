@@ -60,6 +60,12 @@ object DouyinClient {
     /** 已结束标记："status_code":4（后面不能紧跟数字，避免误伤 4xx 之类） */
     private val RE_STATUS_END = Regex("\"status_code\"\\s*:\\s*4(?!\\d)")
 
+    /**
+     * 在播标记：实测（2026-09）房间 JSON 窗口里「在播」的房间**一定**含 `"streamSrc":"http`
+     * （15/15 全部命中）；窗口里没有它就按未开播处理（房间本身仍保留在列表里）。
+     */
+    private const val LIVE_STREAM_SRC = "\"streamSrc\":\"http"
+
     // ---------- 请求 ----------
 
     /** 统一 GET：非 200 / 异常都返回 null（异常不外抛） */
@@ -102,6 +108,7 @@ object DouyinClient {
     /**
      * 拉取分区下的房间。SSR 页面没有分页参数，page > 1 直接返回空列表。
      * 单条房间的标题/封面缺失不影响该房间出现在列表里（只留空串）。
+     * 返回前把未开播的房间排到后面（sortedByDescending 是稳定排序，在播之间保持原有相对顺序）。
      */
     suspend fun rooms(categoryId: String, page: Int): List<LiveRoom> = withContext(Dispatchers.IO) {
         if (page > 1) return@withContext emptyList()
@@ -117,11 +124,14 @@ object DouyinClient {
         val rids = LinkedHashSet<String>()
         RE_WEB_RID.findAll(text).forEach { rids.add(it.groupValues[1]) }
         return rids.mapNotNull { rid -> buildRoom(text, rid) }
+            // 未开播的房间不要排在前面（稳定排序，在播之间保持原有相对顺序）
+            .sortedByDescending { it.isLive }
     }
 
     /**
      * 单个房间：以 `"web_rid":"xxx"` 为锚点取「前 4000 字符 + 后 400 字符」窗口，
      * 在窗口里取最后一个 title / nickname / url_list（最近的才是这个房间自己的）。
+     * 在播判定见 [LIVE_STREAM_SRC]；未开播的房间**不丢弃**，只是 isLive = false。
      */
     private fun buildRoom(text: String, rid: String): LiveRoom? {
         val idx = text.indexOf("\"web_rid\":\"$rid\"")
@@ -142,7 +152,7 @@ object DouyinClient {
             cover = pickCover(window),
             hot = hot,
             categoryName = "",
-            isLive = true
+            isLive = window.contains(LIVE_STREAM_SRC)
         )
     }
 
@@ -164,7 +174,8 @@ object DouyinClient {
      *
      * 实测（2026-09）：房间页 HTML unescape 后有 **117 个 .flv、11 个不同流名**（同一档在多个 CDN
      * 域名下重复），后缀即清晰度：_or4 原画 / _uhd 超高清 / _hd 高清 / _sd 标清 / _ld 流畅 /
-     * _md 中等 / _hiqhd5·_hiquhd5·_hiqsd5 是 H.265 系（兼容性差，菜单里放最后）。
+     * _md 中等 / _hiqhd5·_hiquhd5·_hiqsd5 是 H.265 系（兼容性差，菜单里放最后）/ 无后缀「默认」/
+     * 其它未知后缀标成「其他（后缀）」；映射后若仍撞名再追加序号（见 [qualityLabel]、[dedupeLabels]）。
      *
      * 默认档刻意不选原画：原画实测 8~15Mbps，手机放会卡（用户反馈「直播特别卡」的主因之一），
      * 优先高清 → 标清 → 超高清 → 原画 → 列表第一项。
@@ -201,7 +212,7 @@ object DouyinClient {
 
     /**
      * 从页面里解析全部 FLV 清晰度档：按「清晰度后缀」去重（同一档只留页面顺序里的第一条，
-     * 因为同一档会在多个 CDN 域名下重复），最后按画质菜单顺序排列。
+     * 因为同一档会在多个 CDN 域名下重复），按画质菜单顺序排列，最后再兜一层 label 去重。
      */
     private fun parseFlvQualities(text: String): List<LiveQuality> {
         val bySuffix = LinkedHashMap<String, LiveQuality>()
@@ -212,7 +223,7 @@ object DouyinClient {
             bySuffix[suffix] = LiveQuality(label = qualityLabel(suffix), url = url, isHls = false)
         }
         // sortedBy 是稳定排序，同 rank 的 H.265 系之间保持页面顺序
-        return bySuffix.values.sortedBy { qualityRank(it.label) }
+        return dedupeLabels(bySuffix.values.sortedBy { qualityRank(it.label) })
     }
 
     /** 取 flv 地址的清晰度后缀：文件名最后一个 `_` 之后的部分；没有 `_`（形如 stream-xxx.flv）返回空串 */
@@ -221,7 +232,11 @@ object DouyinClient {
         return if ('_' in name) name.substringAfterLast('_') else ""
     }
 
-    /** 后缀 → 中文 label；其它 / 无后缀 → 默认 */
+    /**
+     * 后缀 → 中文 label。
+     * 实测（2026-09）房间页 unescape 后共有 11 个不同流名，后缀与其中文名对应关系如下表；
+     * **未知后缀不再一律叫「默认」**，而是标出原文（`其他（abc）`），免得用户看到好几个「默认」。
+     */
     private fun qualityLabel(suffix: String): String = when (suffix) {
         "or4" -> "原画"
         "uhd" -> "超高清"
@@ -232,7 +247,18 @@ object DouyinClient {
         "hiqhd5" -> "H.265 高清"
         "hiquhd5" -> "H.265 超高清"
         "hiqsd5" -> "H.265 标清"
-        else -> "默认"
+        "" -> "默认"
+        else -> "其他（$suffix）"
+    }
+
+    /** 兜底去重：映射后万一还是撞名，第 2 个及以后追加序号（如「高清 2」），保证菜单里不出现重名 */
+    private fun dedupeLabels(list: List<LiveQuality>): List<LiveQuality> {
+        val counter = HashMap<String, Int>()
+        return list.map { q ->
+            val n = (counter[q.label] ?: 0) + 1
+            counter[q.label] = n
+            if (n == 1) q else q.copy(label = "${q.label} $n")
+        }
     }
 
     /** 画质菜单顺序：原画 → 超高清 → 高清 → 标清 → 流畅 → 中等 → 默认 → H.265 系（放最后） */

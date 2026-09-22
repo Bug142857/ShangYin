@@ -30,7 +30,9 @@ suspend fun openLiveAndPlay(
     nav: NavHostController,
     context: Context,
     room: LiveRoom,
-    popCurrent: Boolean = false
+    popCurrent: Boolean = false,
+    /** 调用方已知的备用线路/清晰度（如电视源里同名频道的多条地址），非空时优先用它 */
+    extraQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
 ): Boolean {
     val result: LiveResolveResult = when (room.platform) {
         LivePlatforms.HUYA -> HuyaClient.resolve(room.roomId)
@@ -50,8 +52,9 @@ suspend fun openLiveAndPlay(
         Toast.makeText(context, result.error ?: "获取直播地址失败，请重试", Toast.LENGTH_LONG).show()
         return false
     }
-    // 可选清晰度（虎牙/斗鱼只有一档；抖音多档、B站登录后多档）——播放器用它做「画质」菜单
-    val qualities = result.qualities.ifEmpty {
+    // 可选清晰度/线路：调用方给的优先（电视源同名频道多条地址），否则用解析结果
+    // （虎牙 4 档、抖音多档、B站登录后多档；斗鱼只有一档 → 播放器不显示菜单）
+    val qualities = (if (extraQualities.isNotEmpty()) extraQualities else result.qualities).ifEmpty {
         listOf(com.shangyin.app.data.live.LiveQuality("默认", info.url, info.isHls))
     }
 

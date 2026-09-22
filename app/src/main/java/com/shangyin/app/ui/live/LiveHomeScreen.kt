@@ -38,6 +38,7 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,6 +52,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -79,6 +81,7 @@ import com.shangyin.app.data.live.HuyaClient
 import com.shangyin.app.data.live.LiveCategory
 import com.shangyin.app.data.live.LiveChannelResult
 import com.shangyin.app.data.live.LivePlatforms
+import com.shangyin.app.data.live.LiveQuality
 import com.shangyin.app.data.live.LiveRoom
 import com.shangyin.app.data.live.M3uClient
 import com.shangyin.app.ui.common.CollectDialog
@@ -141,9 +144,13 @@ fun LiveHomeScreen(nav: NavHostController) {
                     }
                 },
                 actions = {
-                    // 自定义源管理（添加 / 导入 / 删除）
+                    // 搜索（虎牙/斗鱼走平台搜索接口；电视搜频道名；B站/抖音没有可用搜索接口，进去会有说明）
+                    IconButton(onClick = { nav.safeNavigate("liveSearch?platform=$platform") }) {
+                        Icon(Icons.Rounded.Search, contentDescription = "搜索")
+                    }
+                    // 电视源配置（添加 / 导入 / 删除）
                     IconButton(onClick = { nav.safeNavigate("liveSources") }) {
-                        Icon(Icons.Rounded.PlaylistPlay, contentDescription = "直播源管理")
+                        Icon(Icons.Rounded.PlaylistPlay, contentDescription = "电视源配置")
                     }
                 }
             )
@@ -225,6 +232,7 @@ fun LiveHomeScreen(nav: NavHostController) {
 }
 
 /** 平台分区 + 房间网格 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PlatformPane(
     nav: NavHostController,
@@ -250,6 +258,7 @@ private fun PlatformPane(
     var error by remember { mutableStateOf<String?>(null) }
     var catExpanded by remember { mutableStateOf(LiveCache.catExpanded[platform] ?: false) }
     var pickerOpen by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
     var openingId by remember { mutableStateOf<String?>(null) }
 
     /** 拉某个分区的房间（reset = 回到第一页） */
@@ -388,7 +397,21 @@ private fun PlatformPane(
                 }
             }
 
-            else -> LazyVerticalGrid(
+            else -> PullToRefreshBox(
+                isRefreshing = refreshing,
+                onRefresh = {
+                    val cat = selected
+                    if (cat != null) {
+                        scope.launch {
+                            refreshing = true
+                            loadRooms(cat, 1, reset = true)
+                            refreshing = false
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            ) {
+            LazyVerticalGrid(
                 columns = GridCells.Fixed(2),
                 state = gridState,
                 contentPadding = PaddingValues(12.dp),
@@ -430,6 +453,7 @@ private fun PlatformPane(
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -513,9 +537,9 @@ internal fun LivePickerDialog(
     )
 }
 
-/** 房间封面卡：16:9 封面 + 标题 + 主播 / 人气 + 右上角爱心 */
+/** 房间封面卡：16:9 封面 + 标题 + 主播 / 人气 + 右上角爱心（未开播的显示灰色角标，列表里也排在最后） */
 @Composable
-private fun RoomCard(
+internal fun RoomCard(
     room: LiveRoom,
     collected: Boolean,
     opening: Boolean,
@@ -529,19 +553,17 @@ private fun RoomCard(
                 corner = 10.dp,
                 modifier = Modifier.fillMaxSize()
             )
-            if (room.isLive) {
-                Text(
-                    "直播中",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(6.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(Color(0xFFE53935))
-                        .padding(horizontal = 5.dp, vertical = 1.dp)
-                )
-            }
+            Text(
+                if (room.isLive) "直播中" else "未开播",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(if (room.isLive) Color(0xFFE53935) else Color(0xFF757575))
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            )
             if (room.hot.isNotBlank()) {
                 Text(
                     room.hot,
@@ -599,7 +621,8 @@ private fun RoomCard(
     }
 }
 
-/** 自定义源：导入的 M3U 频道（按分组筛选，点频道直接播） */
+/** 电视：导入的 M3U 频道（按分组筛选，点频道直接播；同名频道多条地址当「线路」） */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CustomSourcePane(
     nav: NavHostController,
@@ -613,6 +636,7 @@ private fun CustomSourcePane(
     var selGroup by remember { mutableStateOf(LiveCache.customGroup) }
     var openingUrl by remember { mutableStateOf<String?>(null) }
     var pickerOpen by remember { mutableStateOf(false) }
+    var refreshing by remember { mutableStateOf(false) }
 
     // 源配置可能在「源管理」里改过：每次进入本页都重读一次
     val sources = remember { SettingsStore.getLiveSources() }
@@ -709,7 +733,20 @@ private fun CustomSourcePane(
                 }
             }
 
-            else -> LazyColumn(
+            else -> PullToRefreshBox(
+                isRefreshing = refreshing,
+                onRefresh = {
+                    scope.launch {
+                        refreshing = true
+                        results = null
+                        LiveCache.customResults = null
+                        reload()
+                        refreshing = false
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            ) {
+            LazyColumn(
                 contentPadding = PaddingValues(vertical = 6.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -728,7 +765,21 @@ private fun CustomSourcePane(
                                 if (openingUrl == null) {
                                     openingUrl = ch.url
                                     scope.launch {
-                                        val ok = openLiveAndPlay(nav, context, room)
+                                        // 电视源里同名频道常有多条地址（不同线路）→ 交给播放器当「线路」菜单
+                                        val sameName = allChannels
+                                            .filter { it.second.name == ch.name }
+                                            .map { it.second.url }
+                                            .distinct()
+                                        val lines = if (sameName.size > 1) {
+                                            sameName.mapIndexed { i, u ->
+                                                LiveQuality(
+                                                    "线路 ${i + 1}",
+                                                    u,
+                                                    u.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+                                                )
+                                            }
+                                        } else emptyList()
+                                        val ok = openLiveAndPlay(nav, context, room, extraQualities = lines)
                                         if (!ok) openingUrl = null
                                     }
                                 }
@@ -776,6 +827,7 @@ private fun CustomSourcePane(
                         )
                     }
                 }
+            }
             }
         }
     }

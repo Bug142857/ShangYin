@@ -1,17 +1,22 @@
 package com.shangyin.app.data.live
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.jsoup.Jsoup
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
@@ -39,6 +44,10 @@ object HuyaClient {
     private const val URL_CATEGORY = "https://www.huya.com/g"
     private const val URL_ROOM_LIST = "https://www.huya.com/cache.php?m=LiveList&do=getLiveListByPage"
     private const val URL_PROFILE_ROOM = "https://mp.huya.com/cache.php?m=Live&do=profileRoom&roomid="
+
+    /** 搜索接口（搜索页 JS 自己用的那个；末尾拼关键词，需 URL 编码） */
+    private const val URL_SEARCH =
+        "https://search.cdn.huya.com/?m=Search&do=getSearchContent&uid=0&v=4&typ=-5&livestate=0&rows=16&q="
     private const val URL_ROOM_PAGE = "https://www.huya.com/"
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -124,17 +133,86 @@ object HuyaClient {
             }.getOrDefault(emptyList())
         }
 
+    // ---------- 搜索 ----------
+
+    /**
+     * 搜索直播间。
+     *
+     * ⚠️ 实测踩坑：搜索页 `search.php?hsk=xx` 的结果是 **JS 渲染**的 —— 裸 HTTP 抓到的 HTML 里只有
+     * 「无结果 → 推荐直播」模板（`<script type="text/html" id="js-emptyDom">`），照它解析会拿到**推荐位**而不是搜索结果。
+     * 页面 JS 真正请求的是 `search.cdn.huya.com` 的 `getSearchContent`（返回 JSON）：
+     *   `{"response":{"1":{"docs":[{...,"game_nick":"主播名","gameLiveOn":true,"room_id":660000,"live_intro":"简介",...}]}}}`
+     * 所以直接打这个接口，只取带 `room_id` 的条目（按 room_id 去重），在播的排前面。
+     */
+    suspend fun search(keyword: String, page: Int = 1): List<LiveRoom> = withContext(Dispatchers.IO) {
+        val kw = keyword.trim()
+        if (kw.isEmpty() || page > 1) return@withContext emptyList()
+        val body = httpGet(URL_SEARCH + URLEncoder.encode(kw, "UTF-8"))
+            ?: return@withContext emptyList()
+        runCatching {
+            val response = json.parseToJsonElement(body).jsonObject["response"]?.jsonObject
+                ?: return@runCatching emptyList<LiveRoom>()
+            val seen = HashSet<String>()
+            val out = ArrayList<LiveRoom>()
+            response.values.forEach { group ->
+                val docs = (group as? JsonObject)?.get("docs") as? JsonArray ?: return@forEach
+                docs.forEach { el ->
+                    val doc = el as? JsonObject ?: return@forEach
+                    val rid = doc.str("room_id")
+                    if (rid.isBlank() || !seen.add(rid)) return@forEach
+                    out.add(
+                        LiveRoom(
+                            platform = PLATFORM,
+                            roomId = rid,
+                            // 房间简介才是"房间名"，取不到退主播名
+                            title = doc.str("live_intro").ifBlank { doc.str("game_nick") },
+                            streamer = doc.str("game_nick"),
+                            cover = doc.str("game_avatarUrl180"),
+                            hot = "",
+                            categoryName = doc.str("game_name"),
+                            isLive = doc["gameLiveOn"]?.jsonPrimitive?.booleanOrNull ?: true
+                        )
+                    )
+                }
+            }
+            out.sortedByDescending { it.isLive }
+        }.getOrDefault(emptyList())
+    }
+
+    /** 封面可能是 `//host/…` 协议相对地址，补成 https（否则图片加载不出来） */
+    private fun fixCoverUrl(raw: String?): String {
+        val u = raw?.trim().orEmpty()
+        return if (u.startsWith("//")) "https:$u" else u
+    }
+
     // ---------- 播放地址 ----------
 
     /**
+     * 4 档画质（iBitRate → 兜底中文名），顺序即画质菜单顺序：蓝光8M → 蓝光4M → 超清 → 流畅。
+     * profileRoom 的 rateArray 里会给 sDisplayName，取得到就用它（见 [rateLabelMap]）。
+     */
+    private val RATE_LABELS = linkedMapOf(8000 to "蓝光8M", 4000 to "蓝光4M", 2000 to "超清", 500 to "流畅")
+
+    /** 默认档：超清(2000)——比蓝光省流量、比流畅清晰 */
+    private const val DEFAULT_RATE = 2000
+
+    /** 默认档中文名（4 档全失败退回单档时用的 label，与旧版一致） */
+    private const val DEFAULT_LABEL = "超清"
+
+    /**
      * 解析播放地址，两级策略：
-     *  1) 移动端 JSON 接口 mp.huya.com/.../profileRoom：结构稳定，直接取 baseSteamInfoList[0]；
-     *  2) 接口拿不到 / 结构对不上时，兜底用桌面 UA 抓房间页 HTML 的内联 gameStreamInfoList。
+     *  1) 移动端 JSON 接口 mp.huya.com/.../profileRoom：结构稳定，先拿基础档确认在播，
+     *     再按 [RATE_LABELS] 并发补 4 档（见 [resolveQualities]）；
+     *  2) 接口拿不到 / 结构对不上时，兜底用桌面 UA 抓房间页 HTML 的内联 gameStreamInfoList（单档）。
      *
-     * 清晰度**只有一档（超清）**，实测依据：虎牙 HLS 一律 403（带 Referer 也一样，加 ratio 也一样）
-     * → 只能用 FLV；FLV 只有 ratio=2000（超清）返回 200，ratio=500/4000/8000 全部 403，
-     * 不写 ratio 也 200。profileRoom 里虽有 data.stream.rateArray（蓝光8M 8000 / 蓝光4M 4000 /
-     * 超清 2000 / 流畅 500）与 flv.multiLine[]，但只有超清档能播，所以不据此生成多档，只补一项「超清」。
+     * 实测（2026-09-22，桌面 UA + Referer www.huya.com）：
+     *  - HLS 一律 403，所以只用 FLV；
+     *  - 直接给播放地址加 `ratio=` 只有 ratio=2000（超清）能 200，ratio=500/4000/8000 全 403；
+     *  - 但在 profileRoom 请求上加 `&iBitRate={8000|4000|2000|500}`，服务端会返回对应的
+     *    antiCode，用该响应的 sFlvUrl/sStreamName/sFlvAntiCode 拼出的 FLV 地址（**不加 ratio**）
+     *    实测可播（HEAD 200 / 同一 room 4 档都能拿到地址），所以多档走 iBitRate 这条路。
+     *  - 注意 antiCode 是服务端按 (流, 档位) 短时缓存的，部分房间 rateArray 实测只有
+     *    「超清(iBitRate=0)/流畅(500)」两项，因此 label 以 rateArray 为准、取不到才用兜底表。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
         val id = roomId.trim()
@@ -143,17 +221,86 @@ object HuyaClient {
         val body = httpGet(URL_PROFILE_ROOM + id)
         if (body != null) {
             // 非 null = 明确结论（成功 / 未开播）；只有 null（结构对不上）才继续走兜底
-            runCatching { parseProfileRoom(body) }.getOrNull()
-                ?.let { return@withContext it.withFallbackQuality("超清") }
+            runCatching { parseProfileRoom(body) }.getOrNull()?.let { base ->
+                if (base.info != null) {
+                    val qualities = resolveQualities(id, body)
+                    if (qualities.isNotEmpty()) {
+                        // 默认档选「超清」(2000)，它没成功才退列表第一项
+                        val def = qualities.firstOrNull { it.first == DEFAULT_RATE }?.second
+                            ?: qualities.first().second
+                        return@withContext LiveResolveResult(
+                            info = LivePlayInfo(url = def.url, isHls = false, referer = REFERER),
+                            qualities = qualities.map { it.second }
+                        )
+                    }
+                }
+                // 4 档全失败（或未开播）→ 保留原有单档逻辑，错误文案不变
+                return@withContext base.withFallbackQuality(DEFAULT_LABEL)
+            }
         }
 
         val html = httpGet(URL_ROOM_PAGE + id)
         val info = html?.let { parseStream(it) }
         return@withContext when {
-            info != null -> LiveResolveResult(info = info).withFallbackQuality("超清")
+            info != null -> LiveResolveResult(info = info).withFallbackQuality(DEFAULT_LABEL)
             body == null && html == null -> LiveResolveResult(error = "网络请求失败，请重试")
             else -> LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
         }
+    }
+
+    /**
+     * 并发请求 4 档：在 profileRoom 上追加 `&iBitRate={rate}`，取该响应里的
+     * sFlvUrl / sStreamName / sFlvAntiCode 拼 FLV 地址（isHls = false，label 用 rateArray 的
+     * sDisplayName，取不到用 [RATE_LABELS] 兜底）。**某一档失败只跳过该档，绝不拖垮整体**；
+     * 返回 (iBitRate, LiveQuality)，顺序与 [RATE_LABELS] 一致（即画质菜单顺序）。
+     */
+    private suspend fun resolveQualities(
+        roomId: String,
+        profileBody: String
+    ): List<Pair<Int, LiveQuality>> = coroutineScope {
+        val labels = rateLabelMap(profileBody)
+        RATE_LABELS.keys
+            .map { rate ->
+                async {
+                    rate to fetchQualityByRate(roomId, rate, labels[rate] ?: RATE_LABELS[rate].orEmpty())
+                }
+            }
+            .awaitAll()
+            .mapNotNull { (rate, q) -> q?.let { rate to it } }
+    }
+
+    /** 单档请求：换 iBitRate 拿对应 antiCode 并拼地址；失败 / 结构对不上返回 null（跳过该档） */
+    private fun fetchQualityByRate(roomId: String, rate: Int, label: String): LiveQuality? = runCatching {
+        val body = httpGet("$URL_PROFILE_ROOM$roomId&iBitRate=$rate") ?: return@runCatching null
+        val data = (json.parseToJsonElement(body) as? JsonObject)?.get("data") as? JsonObject
+            ?: return@runCatching null
+        val info = pickStream(data) ?: return@runCatching null
+        LiveQuality(label = label, url = info.url, isHls = false)
+    }.getOrNull()
+
+    /**
+     * rateArray[] → iBitRate 到中文名的映射。实测 rateArray 同时出现在 `data.stream.rateArray`
+     * 与 `data.stream.flv.rateArray`（内容一致），两处都看；同一 iBitRate 只留先出现的。
+     * 例：{"sDisplayName":"超清","iBitRate":0,…}, {"sDisplayName":"流畅","iBitRate":500,…}。
+     */
+    private fun rateLabelMap(profileBody: String): Map<Int, String> {
+        val root = runCatching { json.parseToJsonElement(profileBody) as? JsonObject }.getOrNull()
+            ?: return emptyMap()
+        val stream = (root["data"] as? JsonObject)?.get("stream") as? JsonObject ?: return emptyMap()
+        val arrays = listOfNotNull(
+            stream["rateArray"] as? JsonArray,
+            (stream["flv"] as? JsonObject)?.get("rateArray") as? JsonArray
+        )
+        val out = LinkedHashMap<Int, String>()
+        arrays.forEach { arr ->
+            arr.filterIsInstance<JsonObject>().forEach inner@{ o ->
+                val rate = o.intOrNull("iBitRate") ?: return@inner
+                val name = o.strOrNull("sDisplayName")
+                if (name.isNullOrBlank()) return@inner
+                if (!out.containsKey(rate)) out[rate] = name
+            }
+        }
+        return out
     }
 
     /**
@@ -231,4 +378,8 @@ object HuyaClient {
     /** 取 JSON 字符串字段；顺便把被转义的 `\/` 还原成 `/`（实测接口把 URL 写成 http:\/\/…） */
     private fun JsonObject.strOrNull(key: String): String? =
         (this[key] as? JsonPrimitive)?.contentOrNull?.replace("\\/", "/")
+
+    /** 取 JSON 整数字段（数字 / 数字字符串都能解析），失败返回 null */
+    private fun JsonObject.intOrNull(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.contentOrNull?.trim()?.toIntOrNull()
 }

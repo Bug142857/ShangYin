@@ -285,9 +285,10 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 进入播放页默认横屏全屏（画面最大化），退出时在 onDispose 恢复竖屏
+    // 进入播放页默认横屏全屏（画面最大化）；**直播保持竖屏**（用户要求：竖屏看直播不该被强制横过来，
+    // 想要大屏可以点右上角全屏按钮自己切）
     LaunchedEffect(Unit) {
-        if (config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
+        if (!isLive && config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
     }

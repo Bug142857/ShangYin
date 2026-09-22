@@ -126,6 +126,8 @@ object BiliLiveClient {
                 val o = el as? JsonObject ?: return@mapNotNull null
                 val roomId = o.str("roomid")
                 if (roomId.isBlank()) return@mapNotNull null
+                // 列表项里的 online 是当前人气，实测可以直接用来判在播：online <= 0 视为未开播
+                val online = o.str("online")
                 LiveRoom(
                     platform = LivePlatforms.BILI,
                     roomId = roomId,
@@ -133,11 +135,13 @@ object BiliLiveClient {
                     streamer = o.str("uname"),
                     // system_cover 是官方系统封面，兜底用主播自定义封面
                     cover = o.str("system_cover").ifBlank { o.str("user_cover") },
-                    hot = formatLiveHot(o.str("online")),
+                    hot = formatLiveHot(online),
                     categoryName = o.str("area_name"),
-                    isLive = true
+                    isLive = (online.toLongOrNull() ?: 0L) > 0
                 )
             }
+                // 未开播的房间不要排在前面（sortedByDescending 是稳定排序，在播之间保持原有相对顺序）
+                .sortedByDescending { it.isLive }
         }.getOrElse { emptyList() }
     }
 
@@ -145,7 +149,7 @@ object BiliLiveClient {
 
     /**
      * 解析房间的真实播放地址（每次播放都要重新调用，地址里有短时效签名）。
-     * 成功 → info 是原画那一档（qn=10000），qualities 是并发的去重多档；
+     * 成功 → info 是 qn=10000 那次请求的结果，qualities 是按「服务端实际档位」去重后的多档；
      * 未开播 / 风控 / 其它失败都返回带原因的 error（错误分支与单档时代保持一致）。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
@@ -170,9 +174,11 @@ object BiliLiveClient {
             if (playUrl.isBlank()) {
                 return@runCatching LiveResolveResult(error = "获取播放地址失败，请重试")
             }
+            // info 那一档的 label 也要按服务端实际给的档位（匿名时 10000 会被降到 250）
+            val infoQn = pickCurrentQn(data) ?: QN_ORIGINAL
             LiveResolveResult(
                 info = LivePlayInfo(url = playUrl, isHls = true, referer = REFERER),
-                qualities = resolveQualities(roomId, data, playUrl)
+                qualities = resolveQualities(roomId, data, infoQn, playUrl)
             )
         }.getOrElse { LiveResolveResult(error = "获取播放地址失败，请重试") }
     }
@@ -180,36 +186,43 @@ object BiliLiveClient {
     // ---------- 清晰度分档 ----------
 
     /**
-     * 多档清晰度：取当前协议（http_hls → ts → codec 优先 avc）的 accept_qn 候选
-     * （最多前 4 个，按数值从大到小），每个候选 qn 各请求一次 getRoomPlayInfo（并发，复用同一个
-     * OkHttpClient）；**任何一档失败只跳过该档，绝不拖垮整体**。地址相同的档只留 qn 最高的那个。
+     * 多档清晰度：取当前协议（http_hls → ts → codec 优先 avc）的 accept_qn 候选（最多前 4 个，
+     * 按数值从大到小），每个候选 qn 各请求一次 getRoomPlayInfo（并发，复用同一个 OkHttpClient）；
+     * **任何一档失败只跳过该档，绝不拖垮整体**。
+     *
+     * label 必须按**响应里的 codec[].current_qn（服务端实际下发的档位）** 决定，不能按请求的 qn：
+     * 匿名时服务端把任何 qn 都降级到 250，若按请求 qn 命名就会出现「原画/蓝光/超清/高清」四个
+     * 名字其实都是同一档（用户实测反馈「名称不对或者没写全」）。所以再按 current_qn 去重
+     * （同一 current_qn 只保留先出现的 = 请求 qn 更大的那档）；匿名时通常只剩「超清」一档，
+     * 播放器因此自动不显示画质菜单，这是正确行为；登录后才会真正出现原画 / 蓝光等多档。
      *
      * 实测：avc 的 accept_qn = [10000,400,250,150]；g_qn_desc 是 30000 杜比 / 20000 4K /
      * 15000 2K / 10000 原画 / 400 蓝光 / 250 超清 / 150 高清 / 80 流畅。
-     * 匿名时服务端会把任何 qn 都降到 250，所以未登录时多档常常拿到同一个地址、去重后只剩一档，
-     * 这是预期行为；登录后才会真正出现原画 / 蓝光等多档。
+     * 返回顺序：info 那一档在前（qn=10000），随后按请求 qn 从大到小。
      */
     private suspend fun resolveQualities(
         roomId: String,
         data: JsonObject,
+        infoQn: Int,
         infoUrl: String
     ): List<LiveQuality> = coroutineScope {
         val descMap = gQnDescMap(data)
-        val infoQuality = LiveQuality(qnLabel(QN_ORIGINAL, descMap), infoUrl, isHls = true)
+        // 服务端实际档位 → 地址；先放 info 那一档（qn=10000 的请求刚刚已成功，保证它一定在列表里）
+        val byRealQn = LinkedHashMap<Int, String>()
+        byRealQn[infoQn] = infoUrl
+
         val candidates = pickAcceptQn(data).take(4)
-        if (candidates.isEmpty()) return@coroutineScope listOf(infoQuality)
-
-        val fetched = candidates
-            .map { qn -> async { qn to fetchQualityUrl(roomId, qn) } }
-            .awaitAll()
-            .mapNotNull { (qn, url) ->
-                url?.let { LiveQuality(qnLabel(qn, descMap), it, isHls = true) }
-            }
-            // candidates 已按 qn 从大到小，distinctBy 天然保留地址相同时 qn 最高的那一档
-            .distinctBy { it.url }
-
-        // 至少含 info 那一档：qn=10000 的请求刚刚已成功，即便并发里它自己失败也要补上
-        if (fetched.any { it.url == infoUrl }) fetched else listOf(infoQuality) + fetched
+        if (candidates.isNotEmpty()) {
+            candidates
+                .map { qn -> async { fetchQuality(roomId, qn) } }
+                .awaitAll()
+                .mapNotNull { it }
+                .forEach { (realQn, url) ->
+                    // 同一 current_qn 只保留先出现的（candidates 已按 qn 从大到小）
+                    if (!byRealQn.containsKey(realQn)) byRealQn[realQn] = url
+                }
+        }
+        byRealQn.map { (qn, url) -> LiveQuality(qnLabel(qn, descMap), url, isHls = true) }
     }
 
     /**
@@ -220,14 +233,34 @@ object BiliLiveClient {
         "$API_BASE/xlive/web-room/v2/index/getRoomPlayInfo" +
             "?room_id=$roomId&protocol=0,1&format=0,1,2&codec=0,1&qn=$qn&platform=web&ptype=8"
 
-    /** 单档 qn 请求一次并拼出 HLS 地址；任何失败返回 null（该档直接跳过） */
-    private fun fetchQualityUrl(roomId: String, qn: Int): String? = runCatching {
+    /**
+     * 单档 qn 请求一次，返回 (服务端实际档位 current_qn, HLS 地址)；
+     * 任何失败（请求失败 / code != 0 / 拿不到地址）返回 null（该档直接跳过）。
+     */
+    private fun fetchQuality(roomId: String, qn: Int): Pair<Int, String>? = runCatching {
         val body = httpGet(playInfoUrl(roomId, qn)) ?: return@runCatching null
         val root = json.parseToJsonElement(body).jsonObject
         if (root.int("code") != 0) return@runCatching null
         val data = root.obj("data") ?: return@runCatching null
-        pickHlsUrl(data).ifBlank { null }
+        val url = pickHlsUrl(data).ifBlank { return@runCatching null }
+        // 服务端实际下发的档位；字段缺失时退回请求 qn
+        (pickCurrentQn(data) ?: qn) to url
     }.getOrNull()
+
+    /**
+     * codec[].current_qn：服务端**实际下发**的档位（与 [pickHlsUrl] 走同一条协议/格式/codec 选择路径）。
+     * 取不到返回 null，由调用方退回请求的 qn。
+     */
+    private fun pickCurrentQn(data: JsonObject): Int? {
+        val streams = data.obj("playurl_info")?.obj("playurl")?.arr("stream") ?: return null
+        val hls = streams.filterIsInstance<JsonObject>()
+            .firstOrNull { it.str("protocol_name") == "http_hls" } ?: return null
+        val ts = hls.arr("format")?.filterIsInstance<JsonObject>()
+            ?.firstOrNull { it.str("format_name") == "ts" } ?: return null
+        val codecs = ts.arr("codec")?.filterIsInstance<JsonObject>() ?: return null
+        val codec = codecs.firstOrNull { it.str("codec_name") == "avc" } ?: codecs.firstOrNull() ?: return null
+        return codec.int("current_qn")
+    }
 
     /** 当前协议（http_hls → format ts → codec 优先 avc）的 accept_qn，按数值从大到小 */
     private fun pickAcceptQn(data: JsonObject): List<Int> {

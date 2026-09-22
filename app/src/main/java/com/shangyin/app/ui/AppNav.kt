@@ -217,9 +217,21 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getString("hash").orEmpty()
                 )
             }
-            // 直播 = 虎牙 / 斗鱼 / B站 / 自定义 M3U 源（里世界第六入口）
+            // 直播 = 虎牙 / 斗鱼 / B站 / 抖音 / 电视（里世界第六入口）
             composable("liveHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
             composable("liveSources") { com.shangyin.app.ui.live.LiveSourcesScreen(nav) }
+            composable(
+                route = "liveSearch?platform={platform}",
+                arguments = listOf(navArgument("platform") {
+                    type = NavType.StringType
+                    defaultValue = "huya"
+                })
+            ) { entry ->
+                com.shangyin.app.ui.live.LiveSearchScreen(
+                    nav,
+                    entry.arguments?.getString("platform").orEmpty().ifBlank { "huya" }
+                )
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

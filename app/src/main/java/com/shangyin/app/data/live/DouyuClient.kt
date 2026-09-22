@@ -9,12 +9,15 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
 /**
  * 斗鱼直播客户端。
  * - 分类：GET japi/weblist/apinc/newDirectory（一级 cateList[].id + 二级 list[].cid2 拼成 "cid1_cid2"）
- * - 房间：GET gapi/rknc/directory/mixListV1/{cid1_cid2}/{page}（页码必须带，page 从 1 开始，缺页码 404）
+ * - 房间：GET gapi/rknc/directory/mixListV1/{前缀_cid2}/{page}（页码必须带，page 从 1 开始，缺页码 404）；
+ *   前缀不能直接用 cateList[].id（实测永远返回 0 条），要按 cid1 → 1 → 2 依次重试，详见 [rooms]。
+ * - 搜索：GET japi/search/api/searchShow?kw=&page=&pageSize=20（实测可用），详见 [search]。
  * - 播放：两步法。裸 HTTP 抓 m.douyu.com/{roomId} 实测**拿不到**播放地址 —— 那条 flv 链接是页面 JS
  *   跑完才注入 DOM 的（无 Cookie 的 146KB HTML 里一个 .flv 都没有），而接口 /lapi/live/getH5PlayV1
  *   又要求页面运行时生成的 enc_data 签名。所以先纯 HTTP 碰运气，不行就走隐藏 WebView 被动接住页面自己拿到的地址。
@@ -43,6 +46,7 @@ object DouyuClient {
 
     private const val URL_CATEGORY = "https://www.douyu.com/japi/weblist/apinc/newDirectory"
     private const val URL_ROOM_PREFIX = "https://www.douyu.com/gapi/rknc/directory/mixListV1/"
+    private const val URL_SEARCH = "https://www.douyu.com/japi/search/api/searchShow"
     private const val URL_ROOM_PAGE = "https://m.douyu.com/"
 
     /** 播放地址：FLV 直链（渐进式） */
@@ -98,20 +102,85 @@ object DouyuClient {
     // ---------- 房间列表 ----------
 
     /**
-     * 拉取某分类下的房间列表（categoryId 形如 "2_1"，由 categories() 得到）。
-     * page 从 1 开始且必须带上；无更多数据（rl 为空）/ 解析失败都返回空列表。
+     * 拉取某分类下的房间列表（categoryId 形如 "cid1_cid2"，由 categories() 得到）。
+     * page 从 1 开始且必须带上；三个前缀都拿不到数据 / 解析失败都返回空列表。
+     *
+     * ⚠️ 实测（2026-09-22，无 Cookie + 桌面 UA）：路径里的第一个数字**不能直接用**分类接口给的
+     * cateList[].id，否则列表永远是空的（本文件最初的 bug 根因）：
+     *   - .../mixListV1/4_1/1   → 200 但 `"rid"` 计数 = 0（4 就是 cateList[].id，直接拼必然空）；
+     *   - .../mixListV1/1_1/1   → 40 条（前缀 1 对部分分类有数据，如英雄联盟 / lol云顶之弈）；
+     *   - .../mixListV1/2_1/1   → 40 条（前缀 2 对实测的每个分类都有数据）。
+     * 实测量化（cid1=4，逐个 cid2 试前缀）：cid2=1 → p4=0/p1=40/p2=40；cid2=2 → 0/40/34；
+     * cid2=917 → 0/0/39；cid2=270、4133、3、5、6 → 0/0/40。可见 cid1 恒为 0，前缀 2 恒有数据。
+     * 所以：先用传入的 cid1 请求，0 条就依次换前缀 "1"、"2" 重试（同一 cid2、同一 page），
+     * 取第一个非空结果；三个前缀都空才返回 emptyList()。
      */
     suspend fun rooms(categoryId: String, page: Int): List<LiveRoom> = withContext(Dispatchers.IO) {
         val cid = categoryId.trim()
         if (cid.isEmpty()) return@withContext emptyList()
+        val sep = cid.indexOf('_')
+        if (sep <= 0) return@withContext emptyList()
+        val cid1 = cid.substring(0, sep)
+        val cid2 = cid.substring(sep + 1)
+        if (cid1.isBlank() || cid2.isBlank()) return@withContext emptyList()
         val safePage = if (page < 1) 1 else page
-        val body = httpGet("$URL_ROOM_PREFIX$cid/$safePage", UA_DESKTOP, REFERER_DESKTOP)
-            ?: return@withContext emptyList()
-        runCatching<List<LiveRoom>> {
+        // 依次尝试：传入的 cid1 → "1" → "2"（去重，避免 cid1 本身就是 1/2 时重复请求同一地址）
+        val prefixes = listOf(cid1, "1", "2").distinct()
+        for (prefix in prefixes) {
+            val body = httpGet("$URL_ROOM_PREFIX${prefix}_$cid2/$safePage", UA_DESKTOP, REFERER_DESKTOP)
+                ?: continue
+            val list = runCatching { parseRoomList(body) }.getOrElse { emptyList() }
+            if (list.isNotEmpty()) return@withContext list
+        }
+        emptyList()
+    }
+
+    /** 解析 mixListV1 响应：data.rl[] → LiveRoom；结构不符返回空列表 */
+    private fun parseRoomList(body: String): List<LiveRoom> {
+        val root = json.parseToJsonElement(body) as? JsonObject ?: return emptyList()
+        val rl = root.obj("data")?.arr("rl") ?: return emptyList()
+        return rl.mapNotNull { (it as? JsonObject)?.toLiveRoom() }
+    }
+
+    // ---------- 搜索 ----------
+
+    /**
+     * 关键词搜索直播间。
+     * 实测（2026-09-22，无 Cookie + 桌面 UA + Referer www.douyu.com）：
+     *   GET .../japi/search/api/searchShow?kw={关键词}&page={页码}&pageSize=20 → 200 + JSON，
+     *   data.relateShow[] 实测 20 条，字段：rid / roomName（标题）/ nickName（主播）/ roomSrc（封面）/
+     *   cateName（分类）/ hot（**接口已给格式化字符串**，如 "277.5万"，不要再过 formatLiveHot）/
+     *   isLive（1 = 在播）。关键词必须 URL 编码。
+     * 失败 / 无结果一律 emptyList()（异常不外抛）。
+     */
+    suspend fun search(keyword: String, page: Int = 1): List<LiveRoom> = withContext(Dispatchers.IO) {
+        val kw = keyword.trim()
+        if (kw.isEmpty()) return@withContext emptyList()
+        val safePage = if (page < 1) 1 else page
+        val url = "$URL_SEARCH?kw=${URLEncoder.encode(kw, "UTF-8")}&page=$safePage&pageSize=20"
+        val body = httpGet(url, UA_DESKTOP, REFERER_DESKTOP) ?: return@withContext emptyList()
+        runCatching {
             val root = json.parseToJsonElement(body) as? JsonObject ?: return@runCatching emptyList()
-            val rl = root.obj("data")?.arr("rl") ?: return@runCatching emptyList()
-            rl.mapNotNull { (it as? JsonObject)?.toLiveRoom() }
+            val shows = root.obj("data")?.arr("relateShow") ?: return@runCatching emptyList()
+            shows.mapNotNull { (it as? JsonObject)?.toSearchRoom() }
         }.getOrElse { emptyList() }
+    }
+
+    /** 搜索结果一条 → LiveRoom；缺 rid 视为无效条目 */
+    private fun JsonObject.toSearchRoom(): LiveRoom? {
+        val rid = str("rid") ?: return null
+        if (rid.isBlank()) return null
+        return LiveRoom(
+            platform = LivePlatforms.DOUYU,
+            roomId = rid,
+            title = str("roomName").orEmpty(),
+            streamer = str("nickName").orEmpty(),
+            cover = str("roomSrc").orEmpty(),
+            // 接口已给格式化人气（"277.5万"），直接用；formatLiveHot 对非数字串只会返回空
+            hot = str("hot").orEmpty(),
+            categoryName = str("cateName").orEmpty(),
+            isLive = str("isLive") == "1"
+        )
     }
 
     /** 单条房间 JSON → LiveRoom；缺 rid 视为无效条目 */
