@@ -2,6 +2,9 @@ package com.shangyin.app.data.live
 
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -32,6 +35,9 @@ object BiliLiveClient {
     private const val REFERER = "https://live.bilibili.com/"
 
     private const val API_BASE = "https://api.live.bilibili.com"
+
+    /** 原画 qn：info 一直用这一档（改造前写死在 URL 里的那个 qn） */
+    private const val QN_ORIGINAL = 10000
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -139,13 +145,12 @@ object BiliLiveClient {
 
     /**
      * 解析房间的真实播放地址（每次播放都要重新调用，地址里有短时效签名）。
-     * 成功 → LivePlayInfo(m3u8, isHls = true)；未开播 / 风控 / 其它失败都返回带原因的 error。
+     * 成功 → info 是原画那一档（qn=10000），qualities 是并发的去重多档；
+     * 未开播 / 风控 / 其它失败都返回带原因的 error（错误分支与单档时代保持一致）。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
         runCatching {
-            val url = "$API_BASE/xlive/web-room/v2/index/getRoomPlayInfo" +
-                "?room_id=$roomId&protocol=0,1&format=0,1,2&codec=0,1&qn=10000&platform=web&ptype=8"
-            val body = httpGet(url)
+            val body = httpGet(playInfoUrl(roomId, QN_ORIGINAL))
                 ?: return@runCatching LiveResolveResult(error = "获取播放地址失败，请重试")
             val root = json.parseToJsonElement(body).jsonObject
             when {
@@ -166,10 +171,100 @@ object BiliLiveClient {
                 return@runCatching LiveResolveResult(error = "获取播放地址失败，请重试")
             }
             LiveResolveResult(
-                info = LivePlayInfo(url = playUrl, isHls = true, referer = REFERER)
+                info = LivePlayInfo(url = playUrl, isHls = true, referer = REFERER),
+                qualities = resolveQualities(roomId, data, playUrl)
             )
         }.getOrElse { LiveResolveResult(error = "获取播放地址失败，请重试") }
     }
+
+    // ---------- 清晰度分档 ----------
+
+    /**
+     * 多档清晰度：取当前协议（http_hls → ts → codec 优先 avc）的 accept_qn 候选
+     * （最多前 4 个，按数值从大到小），每个候选 qn 各请求一次 getRoomPlayInfo（并发，复用同一个
+     * OkHttpClient）；**任何一档失败只跳过该档，绝不拖垮整体**。地址相同的档只留 qn 最高的那个。
+     *
+     * 实测：avc 的 accept_qn = [10000,400,250,150]；g_qn_desc 是 30000 杜比 / 20000 4K /
+     * 15000 2K / 10000 原画 / 400 蓝光 / 250 超清 / 150 高清 / 80 流畅。
+     * 匿名时服务端会把任何 qn 都降到 250，所以未登录时多档常常拿到同一个地址、去重后只剩一档，
+     * 这是预期行为；登录后才会真正出现原画 / 蓝光等多档。
+     */
+    private suspend fun resolveQualities(
+        roomId: String,
+        data: JsonObject,
+        infoUrl: String
+    ): List<LiveQuality> = coroutineScope {
+        val descMap = gQnDescMap(data)
+        val infoQuality = LiveQuality(qnLabel(QN_ORIGINAL, descMap), infoUrl, isHls = true)
+        val candidates = pickAcceptQn(data).take(4)
+        if (candidates.isEmpty()) return@coroutineScope listOf(infoQuality)
+
+        val fetched = candidates
+            .map { qn -> async { qn to fetchQualityUrl(roomId, qn) } }
+            .awaitAll()
+            .mapNotNull { (qn, url) ->
+                url?.let { LiveQuality(qnLabel(qn, descMap), it, isHls = true) }
+            }
+            // candidates 已按 qn 从大到小，distinctBy 天然保留地址相同时 qn 最高的那一档
+            .distinctBy { it.url }
+
+        // 至少含 info 那一档：qn=10000 的请求刚刚已成功，即便并发里它自己失败也要补上
+        if (fetched.any { it.url == infoUrl }) fetched else listOf(infoQuality) + fetched
+    }
+
+    /**
+     * getRoomPlayInfo 地址（qn 可换）：protocol=0,1 / format=0,1,2 / codec=0,1 都带上，
+     * 服务端才会返回 http_hls 的 ts 流与 accept_qn 列表。
+     */
+    private fun playInfoUrl(roomId: String, qn: Int): String =
+        "$API_BASE/xlive/web-room/v2/index/getRoomPlayInfo" +
+            "?room_id=$roomId&protocol=0,1&format=0,1,2&codec=0,1&qn=$qn&platform=web&ptype=8"
+
+    /** 单档 qn 请求一次并拼出 HLS 地址；任何失败返回 null（该档直接跳过） */
+    private fun fetchQualityUrl(roomId: String, qn: Int): String? = runCatching {
+        val body = httpGet(playInfoUrl(roomId, qn)) ?: return@runCatching null
+        val root = json.parseToJsonElement(body).jsonObject
+        if (root.int("code") != 0) return@runCatching null
+        val data = root.obj("data") ?: return@runCatching null
+        pickHlsUrl(data).ifBlank { null }
+    }.getOrNull()
+
+    /** 当前协议（http_hls → format ts → codec 优先 avc）的 accept_qn，按数值从大到小 */
+    private fun pickAcceptQn(data: JsonObject): List<Int> {
+        val streams = data.obj("playurl_info")?.obj("playurl")?.arr("stream") ?: return emptyList()
+        val hls = streams.filterIsInstance<JsonObject>()
+            .firstOrNull { it.str("protocol_name") == "http_hls" } ?: return emptyList()
+        val ts = hls.arr("format")?.filterIsInstance<JsonObject>()
+            ?.firstOrNull { it.str("format_name") == "ts" } ?: return emptyList()
+        val codecs = ts.arr("codec")?.filterIsInstance<JsonObject>() ?: return emptyList()
+        val codec = codecs.firstOrNull { it.str("codec_name") == "avc" }
+            ?: codecs.firstOrNull() ?: return emptyList()
+        return (codec.arr("accept_qn") ?: return emptyList())
+            .mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.toIntOrNull() }
+            .sortedDescending()
+    }
+
+    /** g_qn_desc[]（{qn, desc}）→ qn 到中文名的映射 */
+    private fun gQnDescMap(data: JsonObject): Map<Int, String> {
+        val arr = data.obj("playurl_info")?.obj("playurl")?.arr("g_qn_desc") ?: return emptyMap()
+        return arr.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val qn = o.int("qn") ?: return@mapNotNull null
+            val desc = o.str("desc")
+            if (desc.isBlank()) null else qn to desc
+        }.toMap()
+    }
+
+    /** label：优先用 g_qn_desc 里的 desc，取不到按 qn 兜底 */
+    private fun qnLabel(qn: Int, descMap: Map<Int, String>): String =
+        descMap[qn] ?: when (qn) {
+            QN_ORIGINAL -> "原画"
+            400 -> "蓝光"
+            250 -> "超清"
+            150 -> "高清"
+            80 -> "流畅"
+            else -> "qn=$qn"
+        }
 
     /**
      * 从 playurl_info 里挑 HLS 地址（匿名 qn 会被限制在 250，但拿到地址即可播）：

@@ -32,6 +32,9 @@ object PlayerSession {
     /** 播放请求头（直播平台防盗链：Referer 等） */
     var streamHeaders: Map<String, String> = emptyMap()
 
+    /** 直播可选清晰度（>1 项时播放器显示「画质」菜单；切换直接换流地址，不用重新解析） */
+    var liveQualities: List<com.shangyin.app.data.live.LiveQuality> = emptyList()
+
     fun clear() {
         itemId = 0L
         title = ""
@@ -43,5 +46,6 @@ object PlayerSession {
         isLive = false
         subTitle = ""
         streamHeaders = emptyMap()
+        liveQualities = emptyList()
     }
 }

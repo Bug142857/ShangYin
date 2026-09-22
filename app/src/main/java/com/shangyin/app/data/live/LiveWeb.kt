@@ -118,7 +118,7 @@ object LiveWeb {
     ): String? = withContext(Dispatchers.Main) {
         val v = view ?: return@withContext null
         runCatching { v.loadUrl(url) }
-        withTimeoutOrNull(timeoutMs) {
+        val hit = withTimeoutOrNull(timeoutMs) {
             var text: String? = null
             while (text.isNullOrBlank()) {
                 text = evalValue(v, jsExpr)?.takeIf { it.isNotBlank() }
@@ -126,6 +126,9 @@ object LiveWeb {
             }
             text
         }
+        // 拿到（或超时）后停止加载：斗鱼那个页面是重型 SPA，留着一直跑会白占 CPU/流量
+        runCatching { v.stopLoading() }
+        hit
     }
 
     /** 打开 [url] 并等页面加载完成，返回整页 HTML（拿不到返回 null） */

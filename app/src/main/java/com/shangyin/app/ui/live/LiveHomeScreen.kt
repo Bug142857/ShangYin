@@ -38,15 +38,15 @@ import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.PlaylistPlay
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -54,6 +54,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -188,7 +189,11 @@ fun LiveHomeScreen(nav: NavHostController) {
 
             when (platform) {
                 LivePlatforms.CUSTOM -> CustomSourcePane(nav, savedIds, onCollect = { collectTarget = it })
-                else -> PlatformPane(nav, platform, savedIds, onCollect = { collectTarget = it })
+                // ⚠️ key(platform) 必须有：四个平台共用同一个 composable 调用点，
+                // 不加 key 时 remember 会把上一个平台的分区/房间状态带过来 → 切平台「没反应」
+                else -> key(platform) {
+                    PlatformPane(nav, platform, savedIds, onCollect = { collectTarget = it })
+                }
             }
         }
     }
@@ -244,6 +249,7 @@ private fun PlatformPane(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var catExpanded by remember { mutableStateOf(LiveCache.catExpanded[platform] ?: false) }
+    var pickerOpen by remember { mutableStateOf(false) }
     var openingId by remember { mutableStateOf<String?>(null) }
 
     /** 拉某个分区的房间（reset = 回到第一页） */
@@ -315,11 +321,32 @@ private fun PlatformPane(
 
     Column(Modifier.fillMaxSize()) {
         if (categories.isNotEmpty()) {
-            // 分区选择窗（下拉）：平台接口拿不到"每个分区有多少房间"，只列名称
-            CategoryDropdown(
-                title = selected?.name ?: "选择分区",
-                items = categories.map { it.name to (it.id == selected?.id) },
+            // 分区选择窗：点开弹窗选（斗鱼分区上百个 → 弹窗里带搜索；平台接口拿不到每区房间数，只列名称）
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { pickerOpen = true }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    selected?.name ?: "选择分区",
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "选择分区")
+            }
+        }
+
+        if (pickerOpen) {
+            LivePickerDialog(
+                title = "选择分区",
+                items = categories.map { it.name },
+                selectedIndex = categories.indexOfFirst { it.id == selected?.id },
                 onPick = { idx ->
+                    pickerOpen = false
                     val cat = categories.getOrNull(idx)
                     if (cat != null && selected?.id != cat.id) {
                         selected = cat
@@ -336,7 +363,8 @@ private fun PlatformPane(
                             }
                         }
                     }
-                }
+                },
+                onDismiss = { pickerOpen = false }
             )
         }
 
@@ -408,64 +436,81 @@ private fun PlatformPane(
 }
 
 /**
- * 分类选择窗（下拉）：点标题弹出、限高可滚（斗鱼分区上百个，必须用 LazyColumn）。
- * items = (显示名, 是否当前选中)，onPick 回传下标。
+ * 分类/分组选择窗：弹窗里列全部分类（可搜索），限高可滚。
+ *
+ * ⚠️ 为什么用 AlertDialog 而不是 DropdownMenu：斗鱼分区上百个，DropdownMenu 里塞 LazyColumn
+ * 会踩「滚动组件被无限高度约束测量」的崩溃（用户实测「直播点下拉闪退」），
+ * 弹窗自带确定的高度约束，安全且更适合长列表。
  */
 @Composable
-private fun CategoryDropdown(
+internal fun LivePickerDialog(
     title: String,
-    items: List<Pair<String, Boolean>>,
-    onPick: (Int) -> Unit
+    items: List<String>,
+    selectedIndex: Int,
+    onPick: (Int) -> Unit,
+    onDismiss: () -> Unit
 ) {
-    var open by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable { open = true }
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "选择分类")
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            LazyColumn(Modifier.width(260.dp).heightIn(max = 380.dp)) {
-                lazyItemsIndexed(items) { i, item ->
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                item.first,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                color = if (item.second) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurface
-                            )
-                        },
-                        trailingIcon = if (item.second) {
-                            {
-                                Icon(
-                                    Icons.Rounded.Check,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        } else null,
-                        onClick = {
-                            open = false
-                            onPick(i)
-                        }
+    var query by remember { mutableStateOf("") }
+    val shown = remember(query, items) {
+        items.mapIndexed { i, n -> i to n }
+            .filter { query.isBlank() || it.second.contains(query, ignoreCase = true) }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                // 条目多时给搜索框（斗鱼分区上百个，翻着找太累）
+                if (items.size > 12) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        placeholder = { Text("搜索分类") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (shown.isEmpty()) {
+                    Text(
+                        "没有匹配的分类",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                } else {
+                    LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                        lazyItems(shown, key = { it.first }) { (idx, name) ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onPick(idx) }
+                                    .padding(vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    color = if (idx == selectedIndex) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (idx == selectedIndex) {
+                                    Icon(
+                                        Icons.Rounded.Check,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
-        }
-    }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
 }
 
 /** 房间封面卡：16:9 封面 + 标题 + 主播 / 人气 + 右上角爱心 */
@@ -567,18 +612,24 @@ private fun CustomSourcePane(
     var loading by remember { mutableStateOf(false) }
     var selGroup by remember { mutableStateOf(LiveCache.customGroup) }
     var openingUrl by remember { mutableStateOf<String?>(null) }
+    var pickerOpen by remember { mutableStateOf(false) }
 
     // 源配置可能在「源管理」里改过：每次进入本页都重读一次
     val sources = remember { SettingsStore.getLiveSources() }
 
+    /** 重新拉取并解析所有电视源的频道（失败不写缓存，见下） */
+    suspend fun reload() {
+        loading = true
+        val list = runCatching { M3uClient.loadAll(sources) }.getOrDefault(emptyList())
+        results = list
+        // ⚠️ 只有全部成功才写会话缓存：否则首次失败会被缓存成"空列表"，
+        // 之后即使网络恢复也不会再自动重试（用户实测「电视里是空的」就是这个成因）
+        LiveCache.customResults = if (list.isNotEmpty() && list.none { it.error != null }) list else null
+        loading = false
+    }
+
     LaunchedEffect(sources) {
-        if (results == null) {
-            loading = true
-            val list = runCatching { M3uClient.loadAll(sources) }.getOrDefault(emptyList())
-            results = list
-            LiveCache.customResults = list
-            loading = false
-        }
+        if (results == null) reload()
     }
 
     // 频道 + 分组
@@ -593,19 +644,40 @@ private fun CustomSourcePane(
 
     Column(Modifier.fillMaxSize()) {
         if (groups.isNotEmpty()) {
-            // 分组选择窗（下拉）：电视源能精确统计每组频道数，所以带数量显示
+            // 分组选择窗：电视源能精确统计每组频道数，所以带数量显示
             val counts = allChannels.groupingBy { it.second.group }.eachCount()
             val names = listOf("全部频道（${allChannels.size}）") +
                 groups.map { "$it（${counts[it] ?: 0}）" }
             val selIdx = if (selGroup == null) 0 else groups.indexOf(selGroup) + 1
-            CategoryDropdown(
-                title = names.getOrElse(selIdx) { names.first() },
-                items = names.mapIndexed { i, n -> n to (i == selIdx) },
-                onPick = { idx ->
-                    selGroup = if (idx == 0) null else groups.getOrNull(idx - 1)
-                    LiveCache.customGroup = selGroup
-                }
-            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable { pickerOpen = true }
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    names.getOrElse(selIdx) { names.first() },
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "选择分组")
+            }
+            if (pickerOpen) {
+                LivePickerDialog(
+                    title = "选择分组",
+                    items = names,
+                    selectedIndex = selIdx,
+                    onPick = { idx ->
+                        pickerOpen = false
+                        selGroup = if (idx == 0) null else groups.getOrNull(idx - 1)
+                        LiveCache.customGroup = selGroup
+                    },
+                    onDismiss = { pickerOpen = false }
+                )
+            }
         }
 
         when {
@@ -624,7 +696,16 @@ private fun CustomSourcePane(
                         else "该源没有解析到频道，可在「源管理」里更换地址或导入本地文件"
                     )
                     Spacer(Modifier.height(12.dp))
-                    Button(onClick = { nav.safeNavigate("liveSources") }) { Text("去电视源配置") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = {
+                            scope.launch {
+                                results = null
+                                LiveCache.customResults = null
+                                reload()
+                            }
+                        }) { Text(if (loading) "加载中…" else "重试") }
+                        Button(onClick = { nav.safeNavigate("liveSources") }) { Text("去电视源配置") }
+                    }
                 }
             }
 

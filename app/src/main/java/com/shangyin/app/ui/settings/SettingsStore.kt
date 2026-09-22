@@ -227,9 +227,9 @@ object SettingsStore {
         )
     }
 
-    /** 首次使用时播种内置默认电视源（仅当从未配置过时执行一次；用户删光也不会重新播种） */
+    /** 首次使用（或用户把电视源全删了）时播种内置默认电视源 */
     fun ensureDefaultLiveSourcesSeeded() {
-        if (!sp.contains(KEY_LIVE_SOURCES)) {
+        if (!sp.contains(KEY_LIVE_SOURCES) || getLiveSources().isEmpty()) {
             setLiveSources(com.shangyin.app.data.live.DEFAULT_LIVE_SOURCES)
         }
     }

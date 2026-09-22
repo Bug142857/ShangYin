@@ -156,6 +156,9 @@ object DouyuClient {
      * 解析直播间播放地址，两步：
      *  1) 纯 HTTP 抓 m.douyu.com/{roomId} 碰运气：页面里若已内联 .flv / .m3u8 直接用（少数情况）；
      *  2) 否则走隐藏 WebView —— 地址只有页面自身那次带签名的 XHR 才拿得到，裸 HTTP 不行。
+     *
+     * 清晰度**只有一档**：斗鱼接口要页面运行时生成的签名（enc_data），页面那次 XHR 拿到什么地址
+     * 就是什么地址，无法在不重放签名的前提下请求别的清晰度，所以成功时只补一项「默认」。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
         val id = roomId.trim()
@@ -167,12 +170,12 @@ object DouyuClient {
             FLV_REGEX.find(html)?.value?.let { flv ->
                 return@withContext LiveResolveResult(
                     info = LivePlayInfo(flv.replace("&amp;", "&"), isHls = false, referer = REFERER_DESKTOP)
-                )
+                ).withFallbackQuality()
             }
             M3U8_REGEX.find(html)?.value?.let { m3u8 ->
                 return@withContext LiveResolveResult(
                     info = LivePlayInfo(m3u8.replace("&amp;", "&"), isHls = true, referer = REFERER_DESKTOP)
-                )
+                ).withFallbackQuality()
             }
         }
 
@@ -196,7 +199,7 @@ object DouyuClient {
             ?: return@withContext LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
         val info = parseWebResult(raw)
             ?: return@withContext LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
-        LiveResolveResult(info = info)
+        LiveResolveResult(info = info).withFallbackQuality()
     }
 
     /**

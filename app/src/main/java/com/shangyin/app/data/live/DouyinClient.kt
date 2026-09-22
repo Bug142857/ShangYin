@@ -159,8 +159,15 @@ object DouyinClient {
     // ---------- 播放地址 ----------
 
     /**
-     * 解析房间播放地址：先 unescape（`\"`→`"`、`\u0026`→`&`）再正则取第一个 .flv；
-     * 只有 m3u8 时才 isHls = true。地址保持 http 原样（App 已开 cleartext）。
+     * 解析房间播放地址：先 unescape（`\"`→`"`、`\u0026`→`&`）再正则取全部 .flv 并按清晰度分档；
+     * 一个 .flv 都没有才退回 m3u8（单档，isHls = true）。地址保持 http 原样（App 已开 cleartext）。
+     *
+     * 实测（2026-09）：房间页 HTML unescape 后有 **117 个 .flv、11 个不同流名**（同一档在多个 CDN
+     * 域名下重复），后缀即清晰度：_or4 原画 / _uhd 超高清 / _hd 高清 / _sd 标清 / _ld 流畅 /
+     * _md 中等 / _hiqhd5·_hiquhd5·_hiqsd5 是 H.265 系（兼容性差，菜单里放最后）。
+     *
+     * 默认档刻意不选原画：原画实测 8~15Mbps，手机放会卡（用户反馈「直播特别卡」的主因之一），
+     * 优先高清 → 标清 → 超高清 → 原画 → 列表第一项。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
         val id = roomId.trim()
@@ -170,9 +177,12 @@ object DouyinClient {
             ?: return@withContext LiveResolveResult(error = "网络请求失败，请重试")
         val text = unescape(html)
 
-        FLV_REGEX.find(text)?.value?.let { flv ->
+        val qualities = parseFlvQualities(text)
+        if (qualities.isNotEmpty()) {
+            val def = pickDefaultQuality(qualities)
             return@withContext LiveResolveResult(
-                info = LivePlayInfo(url = flv, isHls = false, referer = REFERER)
+                info = LivePlayInfo(url = def.url, isHls = false, referer = REFERER),
+                qualities = qualities
             )
         }
         M3U8_REGEX.find(text)?.value?.let { m3u8 ->
@@ -186,6 +196,64 @@ object DouyinClient {
         }
         LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
     }
+
+    // ---------- 清晰度分档 ----------
+
+    /**
+     * 从页面里解析全部 FLV 清晰度档：按「清晰度后缀」去重（同一档只留页面顺序里的第一条，
+     * 因为同一档会在多个 CDN 域名下重复），最后按画质菜单顺序排列。
+     */
+    private fun parseFlvQualities(text: String): List<LiveQuality> {
+        val bySuffix = LinkedHashMap<String, LiveQuality>()
+        FLV_REGEX.findAll(text).forEach { m ->
+            val url = m.value
+            val suffix = flvSuffix(url)
+            if (bySuffix.containsKey(suffix)) return@forEach
+            bySuffix[suffix] = LiveQuality(label = qualityLabel(suffix), url = url, isHls = false)
+        }
+        // sortedBy 是稳定排序，同 rank 的 H.265 系之间保持页面顺序
+        return bySuffix.values.sortedBy { qualityRank(it.label) }
+    }
+
+    /** 取 flv 地址的清晰度后缀：文件名最后一个 `_` 之后的部分；没有 `_`（形如 stream-xxx.flv）返回空串 */
+    private fun flvSuffix(url: String): String {
+        val name = url.substringBefore('?').substringAfterLast('/').substringBeforeLast('.')
+        return if ('_' in name) name.substringAfterLast('_') else ""
+    }
+
+    /** 后缀 → 中文 label；其它 / 无后缀 → 默认 */
+    private fun qualityLabel(suffix: String): String = when (suffix) {
+        "or4" -> "原画"
+        "uhd" -> "超高清"
+        "hd" -> "高清"
+        "sd" -> "标清"
+        "ld" -> "流畅"
+        "md" -> "中等"
+        "hiqhd5" -> "H.265 高清"
+        "hiquhd5" -> "H.265 超高清"
+        "hiqsd5" -> "H.265 标清"
+        else -> "默认"
+    }
+
+    /** 画质菜单顺序：原画 → 超高清 → 高清 → 标清 → 流畅 → 中等 → 默认 → H.265 系（放最后） */
+    private fun qualityRank(label: String): Int = when (label) {
+        "原画" -> 0
+        "超高清" -> 1
+        "高清" -> 2
+        "标清" -> 3
+        "流畅" -> 4
+        "中等" -> 5
+        "默认" -> 6
+        else -> 7
+    }
+
+    /** 默认档：高清 → 标清 → 超高清 → 原画 → 第一项（原画码率太高，手机放会卡，不作为首选） */
+    private fun pickDefaultQuality(list: List<LiveQuality>): LiveQuality =
+        list.firstOrNull { it.label == "高清" }
+            ?: list.firstOrNull { it.label == "标清" }
+            ?: list.firstOrNull { it.label == "超高清" }
+            ?: list.firstOrNull { it.label == "原画" }
+            ?: list.first()
 
     /**
      * 还原 SSR 里的 JS 字符串转义：`\"` → `"`、`\u0026` → `&`。

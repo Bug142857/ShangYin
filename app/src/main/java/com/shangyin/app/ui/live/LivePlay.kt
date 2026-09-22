@@ -50,6 +50,10 @@ suspend fun openLiveAndPlay(
         Toast.makeText(context, result.error ?: "获取直播地址失败，请重试", Toast.LENGTH_LONG).show()
         return false
     }
+    // 可选清晰度（虎牙/斗鱼只有一档；抖音多档、B站登录后多档）——播放器用它做「画质」菜单
+    val qualities = result.qualities.ifEmpty {
+        listOf(com.shangyin.app.data.live.LiveQuality("默认", info.url, info.isHls))
+    }
 
     // 主播 + 平台信息（清单里收藏时用的是同一口径）
     val subTitle = buildString {
@@ -73,6 +77,7 @@ suspend fun openLiveAndPlay(
     PlayerSession.startIndex = 0
     PlayerSession.startPosMs = 0L
     PlayerSession.isLive = true
+    PlayerSession.liveQualities = qualities
     // 防盗链：三个平台都校验 Referer（虎牙/斗鱼/B站实测必须带），UA 与站点脚本保持一致
     PlayerSession.streamHeaders = buildMap {
         put("User-Agent", VodClient.UA)

@@ -130,6 +130,11 @@ object HuyaClient {
      * 解析播放地址，两级策略：
      *  1) 移动端 JSON 接口 mp.huya.com/.../profileRoom：结构稳定，直接取 baseSteamInfoList[0]；
      *  2) 接口拿不到 / 结构对不上时，兜底用桌面 UA 抓房间页 HTML 的内联 gameStreamInfoList。
+     *
+     * 清晰度**只有一档（超清）**，实测依据：虎牙 HLS 一律 403（带 Referer 也一样，加 ratio 也一样）
+     * → 只能用 FLV；FLV 只有 ratio=2000（超清）返回 200，ratio=500/4000/8000 全部 403，
+     * 不写 ratio 也 200。profileRoom 里虽有 data.stream.rateArray（蓝光8M 8000 / 蓝光4M 4000 /
+     * 超清 2000 / 流畅 500）与 flv.multiLine[]，但只有超清档能播，所以不据此生成多档，只补一项「超清」。
      */
     suspend fun resolve(roomId: String): LiveResolveResult = withContext(Dispatchers.IO) {
         val id = roomId.trim()
@@ -138,13 +143,14 @@ object HuyaClient {
         val body = httpGet(URL_PROFILE_ROOM + id)
         if (body != null) {
             // 非 null = 明确结论（成功 / 未开播）；只有 null（结构对不上）才继续走兜底
-            runCatching { parseProfileRoom(body) }.getOrNull()?.let { return@withContext it }
+            runCatching { parseProfileRoom(body) }.getOrNull()
+                ?.let { return@withContext it.withFallbackQuality("超清") }
         }
 
         val html = httpGet(URL_ROOM_PAGE + id)
         val info = html?.let { parseStream(it) }
         return@withContext when {
-            info != null -> LiveResolveResult(info = info)
+            info != null -> LiveResolveResult(info = info).withFallbackQuality("超清")
             body == null && html == null -> LiveResolveResult(error = "网络请求失败，请重试")
             else -> LiveResolveResult(error = "该房间未开播或暂时拿不到直播地址")
         }

@@ -174,10 +174,10 @@ fun PlayerScreen(nav: NavHostController) {
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms
         val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 30000,
-                /* maxBufferMs = */ 60000,
-                /* bufferForPlaybackMs = */ 1200,
-                /* bufferForRebufferMs = */ 3000
+                /* minBufferMs = */ if (isLive) 2500 else 30000,
+                /* maxBufferMs = */ if (isLive) 10000 else 60000,
+                /* bufferForPlaybackMs = */ if (isLive) 800 else 1200,
+                /* bufferForRebufferMs = */ if (isLive) 1500 else 3000
             )
             .build()
         ExoPlayer.Builder(context)
@@ -190,6 +190,16 @@ fun PlayerScreen(nav: NavHostController) {
     var panelOpen by remember { mutableStateOf(false) }      // 选集面板（控制条右下角按钮触发）
     var speedMenuOpen by remember { mutableStateOf(false) }  // 倍速菜单
     var speed by remember { mutableFloatStateOf(1f) }        // 当前倍速
+
+    // 直播画质（虎牙/斗鱼只有一档 → 不显示菜单；抖音多档、B站登录后多档）
+    val liveQualities = remember { PlayerSession.liveQualities }
+    var qualityIdx by remember {
+        mutableIntStateOf(
+            liveQualities.indexOfFirst { it.url == PlayerSession.groups.firstOrNull()?.episodes?.firstOrNull()?.url }
+                .coerceAtLeast(0)
+        )
+    }
+    var qualityMenuOpen by remember { mutableStateOf(false) }
     var scrubbingMs by remember { mutableStateOf<Long?>(null) } // 拖动进度时的时间气泡
     val barBound = remember { mutableStateOf(false) }        // TimeBar listener 只绑一次
 
@@ -217,6 +227,18 @@ fun PlayerScreen(nav: NavHostController) {
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         else
             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    }
+
+    /** 切清晰度：直播直接换流地址重开，不需要重新解析（地址由平台一次性给全） */
+    fun switchQuality(idx: Int) {
+        val q = liveQualities.getOrNull(idx) ?: return
+        if (idx == qualityIdx) return
+        qualityIdx = idx
+        val b = MediaItem.Builder().setUri(q.url)
+        if (q.isHls || q.url.substringBefore('?').endsWith(".m3u8")) b.setMimeType(MimeTypes.APPLICATION_M3U8)
+        player.setMediaItem(b.build(), 0L)
+        player.prepare()
+        player.playWhenReady = true
     }
 
     val playerView = remember {
@@ -545,6 +567,16 @@ fun PlayerScreen(nav: NavHostController) {
                                     Text("选集", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
                             }
+                            // 直播画质（多档才显示；虎牙/斗鱼实测只有一档）
+                            if (isLive && liveQualities.size > 1) {
+                                TextButton(onClick = { qualityMenuOpen = true }) {
+                                    Text(
+                                        "画质·" + liveQualities.getOrNull(qualityIdx)?.label.orEmpty(),
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                }
+                            }
                             // 直播不提供倍速（直播流倍速没有意义）
                             if (!isLive) {
                                 IconButton(
@@ -582,6 +614,29 @@ fun PlayerScreen(nav: NavHostController) {
                                 onClick = {
                                     speed = sp
                                     speedMenuOpen = false
+                                }
+                            )
+                        }
+                    }
+
+                    // 画质菜单（直播多档清晰度时；锚在右下角与倍速菜单一致）
+                    DropdownMenu(
+                        expanded = qualityMenuOpen,
+                        onDismissRequest = { qualityMenuOpen = false },
+                        modifier = Modifier.align(Alignment.BottomEnd)
+                    ) {
+                        liveQualities.forEachIndexed { i, q ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        q.label,
+                                        color = if (i == qualityIdx) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                },
+                                onClick = {
+                                    qualityMenuOpen = false
+                                    switchQuality(i)
                                 }
                             )
                         }
@@ -769,8 +824,23 @@ fun PlayerScreen(nav: NavHostController) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(10.dp))
+                        // 直播画质切换（多档才显示；卡顿时切「标清/流畅」最有效）
+                        if (liveQualities.size > 1) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "画质",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                TextButton(onClick = { qualityMenuOpen = true }) {
+                                    Text("当前：" + liveQualities.getOrNull(qualityIdx)?.label.orEmpty())
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                        }
                         Text(
-                            "直播不支持拖动进度；若一直缓冲，返回列表换一个房间即可",
+                            "直播不支持拖动进度；若一直缓冲，切到「标清 / 流畅」或返回列表换一个房间",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )

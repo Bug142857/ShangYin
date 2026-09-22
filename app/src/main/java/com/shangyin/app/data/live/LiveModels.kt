@@ -66,11 +66,28 @@ data class LivePlayInfo(
 )
 
 /**
+ * 一档清晰度（播放器的「画质」菜单用它）：
+ * label 给用户看（原画 / 超高清 / 高清 / 标清 / 流畅…），url 是可直接播放的地址。
+ * 一个平台拿不到多档时只有一项，播放器就不显示画质菜单。
+ */
+data class LiveQuality(val label: String, val url: String, val isHls: Boolean)
+
+/**
  * 直播地址解析结果：
  * - info 非空 = 成功
  * - error 非空 = 失败原因（要给用户看：未开播 / 需要登录 / 网络失败…）——不许把失败说成"没有内容"
+ * - qualities = 可选清晰度（含 info 对应的那一档；<=1 项时播放器不显示画质菜单）
  */
-data class LiveResolveResult(val info: LivePlayInfo? = null, val error: String? = null)
+data class LiveResolveResult(
+    val info: LivePlayInfo? = null,
+    val error: String? = null,
+    val qualities: List<LiveQuality> = emptyList()
+) {
+    /** 把单档地址补成清晰度列表（老调用方只给 info 时用） */
+    fun withFallbackQuality(label: String = "默认"): LiveResolveResult =
+        if (info == null || qualities.isNotEmpty()) this
+        else copy(qualities = listOf(LiveQuality(label, info.url, info.isHls)))
+}
 
 /** 人气数值格式化：1984762 → "198.5万"；拿不到就空串 */
 fun formatLiveHot(raw: String?): String {
