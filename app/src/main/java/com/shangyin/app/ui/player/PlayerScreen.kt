@@ -184,6 +184,16 @@ fun PlayerScreen(nav: NavHostController) {
             )
             .build()
         ExoPlayer.Builder(context)
+            // FFmpeg 软解兜底：电视源里常见的 MP2（audio/mpeg-L2）多数手机没有系统解码器
+            // （音轨会被静默丢掉 → 有画面没声音）。EXTENSION_RENDERER_MODE_ON = 只在平台
+            // 渲染器不支持时才用 FFmpeg，AAC/MP3 等照旧走硬件/平台解码，不影响性能。
+            .setRenderersFactory(
+                io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory(context)
+                    .setEnableDecoderFallback(true)
+                    .setExtensionRendererMode(
+                        androidx.media3.exoplayer.DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                    )
+            )
             .setLoadControl(loadControl)
             .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
             .build()

@@ -17,8 +17,13 @@ android {
         // 版本号规则（2026-09-22 用户指定）：versionName = 上一版 + 1（不补零），从 0.190 起
         // （不再读 git 提交次数——那条规则会因"每轮 2 个提交"而每次 +2）
         // ⚠️ versionCode 固定取 1000 + N（0.190 → 1190）：必须单调递增，否则系统拒绝覆盖安装
-        versionCode = 1199
-        versionName = "0.199"
+        versionCode = 1200
+        versionName = "0.200"
+
+        // FFmpeg 解码扩展（NextLib）带了 4 个 ABI 的原生库：只保留真机在用的两个，控制体积
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
     }
 
     // 正式版签名（为便于用户在手机上直接安装，使用稳定的 release 签名）
@@ -106,10 +111,15 @@ dependencies {
     implementation(libs.jsoup)
     implementation("androidx.documentfile:documentfile:1.0.1")
 
-    // 在线观影：ExoPlayer + HLS 流媒体播放（media3 1.5.1，兼容 compileSdk 35）
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
-    implementation("androidx.media3:media3-ui:1.5.1")
+    // 在线观影 / 电视：ExoPlayer + HLS 流媒体播放（media3 1.7.1）
+    // 1.7.1 是 NextLib 预编译 FFmpeg 扩展（nextlib-media3ext:1.7.1-0.9.0）所对应的 media3 版本，两者必须配套
+    implementation("androidx.media3:media3-exoplayer:1.7.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.7.1")
+    implementation("androidx.media3:media3-ui:1.7.1")
+
+    // FFmpeg 软件解码扩展（NextLib，预编译 AAR）：系统没有 MP2（audio/mpeg-L2）等解码器的机型靠它出声
+    // ⚠️ 该库是 GPL-3.0（FFmpeg 系许可），随 App 一起分发时整个 App 需 GPL 兼容
+    implementation("io.github.anilbeesetti:nextlib-media3ext:1.7.1-0.9.0")
 
     debugImplementation(libs.androidx.ui.tooling)
 }
