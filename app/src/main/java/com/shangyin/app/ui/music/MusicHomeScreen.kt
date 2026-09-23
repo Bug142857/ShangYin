@@ -97,7 +97,7 @@ private const val MAX_PAGE = 20
 @Composable
 fun MusicHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
-    val searchState = remember { SearchTabState() }
+    val searchState = MusicSearchSession.state
 
     // 进音乐模块：连接播放服务 + 初始化音源（幂等）
     LaunchedEffect(Unit) {
@@ -225,6 +225,14 @@ private class SearchTabState {
     var endReached by mutableStateOf(false)
     var searched by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
+}
+
+/**
+ * 会话级搜索结果缓存：`remember { }` 在导航回本页时会重建（进播放页/音源页再返回搜索就没了），
+ * 与漫画/游戏模块同一口径——把状态挂在单例上，返回时结果还在。
+ */
+private object MusicSearchSession {
+    val state = SearchTabState()
 }
 
 @Composable

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -44,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -51,6 +53,7 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.music.MusicPlatform
 import com.shangyin.app.data.music.MusicSourceScript
 import com.shangyin.app.data.music.MusicSourceStore
+import com.shangyin.app.data.music.SourceProbe
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -73,6 +76,12 @@ fun MusicSourceScreen(nav: NavHostController) {
     var importing by remember { mutableStateOf<String?>(null) }
     var urlInput by remember { mutableStateOf("") }
     var deleting by remember { mutableStateOf<MusicSourceScript?>(null) }
+    /** 推荐音源试跑结果（key = 原始地址）；没测过的源不在表里，行上就不显示结果 */
+    var probeResults by remember { mutableStateOf<Map<String, SourceProbe>>(emptyMap()) }
+    /** 非空 = 正在测试，文案形如「正在测试 3/10 · 幻音音源」 */
+    var probeProgress by remember { mutableStateOf<String?>(null) }
+    /** 非空 = 正在导入可用音源 */
+    var importProgress by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) { MusicSourceStore.ensureInitialized() }
 
@@ -94,6 +103,64 @@ fun MusicSourceScreen(nav: NavHostController) {
                     onSuccess = { "已导入：$it" },
                     onFailure = { "导入异常：${it.message ?: "未知错误"}（可在列表里重新初始化）" }
                 )
+            )
+        }
+    }
+
+    /** 逐个试跑推荐音源，边测边把结果回填到行上（只试跑不落库） */
+    fun testRecommended() {
+        if (probeProgress != null || importProgress != null) return
+        val list = MusicSourceStore.RECOMMENDED
+        probeResults = emptyMap() // 重新测试：先清掉上一轮结果
+        probeProgress = "正在测试 0/${list.size}"
+        scope.launch {
+            val acc = mutableMapOf<String, SourceProbe>()
+            var aborted: String? = null
+            try {
+                list.forEachIndexed { index, rec ->
+                    probeProgress = "正在测试 ${index + 1}/${list.size} · ${rec.name}"
+                    acc[rec.rawUrl] = MusicSourceStore.probe(rec)
+                    probeResults = acc.toMap()
+                }
+            } catch (e: Exception) {
+                aborted = e.message ?: "未知错误"
+            }
+            probeProgress = null
+            val okCount = acc.values.count { it.ok }
+            toast(
+                when {
+                    aborted != null -> "测试中断：$aborted（已测的源结果已保留）"
+                    okCount == 0 -> "测试完成：当前网络下没有可用音源"
+                    else -> "测试完成：$okCount/${list.size} 个音源可用，可点下方按钮导入"
+                }
+            )
+        }
+    }
+
+    /** 试跑通过、且还没导入过的推荐音源（决定「导入可用音源」按钮是否出现） */
+    val availableToImport = MusicSourceStore.RECOMMENDED.filter { rec ->
+        probeResults[rec.rawUrl]?.ok == true && !isImported(scripts, rec)
+    }
+
+    /** 逐个导入可用音源（复用试跑时下载到的原文）；失败原因照样报出来，不静默 */
+    fun importAvailable() {
+        val targets = availableToImport
+        if (targets.isEmpty() || importProgress != null || probeProgress != null) return
+        scope.launch {
+            var okCount = 0
+            val failures = mutableListOf<String>()
+            targets.forEachIndexed { index, rec ->
+                importProgress = "正在导入 ${index + 1}/${targets.size} · ${rec.name}"
+                val probe = probeResults[rec.rawUrl] ?: return@forEachIndexed
+                MusicSourceStore.importProbed(probe).fold(
+                    onSuccess = { okCount++ },
+                    onFailure = { failures += "${rec.name}：${it.message ?: "未知错误"}" }
+                )
+            }
+            importProgress = null
+            toast(
+                if (failures.isEmpty()) "已导入 $okCount 个可用音源"
+                else "已导入 $okCount 个，失败 ${failures.size} 个（${failures.joinToString("；")}）"
             )
         }
     }
@@ -161,8 +228,58 @@ fun MusicSourceScreen(nav: NavHostController) {
             item(key = "h_rec") {
                 MusicSectionTitle("一键导入推荐音源")
             }
+            // 测试推荐音源：逐个试跑，标出当前网络下哪些源真的能用
+            item(key = "probe_bar") {
+                Column(Modifier.padding(horizontal = 16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(
+                            onClick = { testRecommended() },
+                            enabled = probeProgress == null &&
+                                importProgress == null &&
+                                importing == null
+                        ) {
+                            Text(if (probeProgress == null) "测试推荐音源" else "测试中…")
+                        }
+                        probeProgress?.let { label ->
+                            Spacer(Modifier.size(10.dp))
+                            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.size(8.dp))
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    // 只在「有试跑通过且尚未导入的源」时出现
+                    if (availableToImport.isNotEmpty()) {
+                        Spacer(Modifier.size(8.dp))
+                        Button(
+                            onClick = { importAvailable() },
+                            enabled = importProgress == null && probeProgress == null
+                        ) {
+                            Text("导入可用音源（${availableToImport.size} 个）")
+                        }
+                    }
+                    importProgress?.let { label ->
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            item(key = "probe_hint") {
+                MusicHint("点上面按钮逐个试跑：结果里「可用 · 网易云/QQ音乐」就是这个源在你当前网络能解析的平台，不可用会带出具体原因。试跑不会自动导入。")
+            }
             items(MusicSourceStore.RECOMMENDED, key = { "rec_" + it.rawUrl }) { rec ->
                 val imported = isImported(scripts, rec)
+                // 没测过的源为 null，行上就不显示结果；测过的一直显示（重新测试才会清空）
+                val probe = probeResults[rec.rawUrl]
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -179,23 +296,38 @@ fun MusicSourceScreen(nav: NavHostController) {
                             overflow = TextOverflow.Ellipsis
                         )
                     }
-                    when {
-                        imported -> Text(
-                            "已导入",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
+                    Column(
+                        horizontalAlignment = Alignment.End,
+                        modifier = Modifier.widthIn(max = 168.dp)
+                    ) {
+                        when {
+                            // 已导入：不再给导入按钮
+                            imported -> Text(
+                                "已导入",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp)
+                            )
 
-                        importing == rec.name -> CircularProgressIndicator(
-                            Modifier
-                                .padding(horizontal = 16.dp)
-                                .size(18.dp),
-                            strokeWidth = 2.dp
-                        )
+                            importing == rec.name -> CircularProgressIndicator(
+                                Modifier
+                                    .padding(horizontal = 16.dp)
+                                    .size(18.dp),
+                                strokeWidth = 2.dp
+                            )
 
-                        else -> TextButton(onClick = { importRemote(rec.name, rec.rawUrl) }) {
-                            Text("导入")
+                            else -> TextButton(onClick = { importRemote(rec.name, rec.rawUrl) }) {
+                                Text("导入")
+                            }
+                        }
+                        if (probe != null) {
+                            Text(
+                                probeText(probe),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (probe.ok) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.End
+                            )
                         }
                     }
                 }
@@ -395,6 +527,18 @@ private fun supportText(script: MusicSourceScript): String =
         if (qualities.isEmpty()) null
         else "${platform.label} ${qualities.joinToString("/") { it.label }}"
     }.joinToString(" · ")
+
+/**
+ * 试跑结果文案。
+ * 可用 → 「可用 · 网易云/QQ音乐」（平台 key 转中文标签，顺带兼容未知 key）；
+ * 不可用 → 原样带出原因（下载/脚本给的原因必须让用户看到，不能被"失败"两字吞掉）。
+ */
+private fun probeText(probe: SourceProbe): String {
+    val support = probe.support ?: return "不可用：${probe.error ?: "未知原因"}"
+    val platforms = support.keys.map { MusicPlatform.of(it)?.label ?: it }
+    return if (platforms.isEmpty()) "可用（未声明支持平台）"
+    else "可用 · ${platforms.joinToString("/")}"
+}
 
 /** 该推荐音源是否已导入（按来源地址或名称粗略匹配） */
 private fun isImported(

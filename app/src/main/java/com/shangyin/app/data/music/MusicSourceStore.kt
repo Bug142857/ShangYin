@@ -85,7 +85,7 @@ object MusicSourceStore {
                 homepage = meta["homepage"].orEmpty(),
                 description = meta["description"].orEmpty(),
                 url = sourceUrl,
-                content = text,
+                content = content,
                 enabled = true
             )
             val existing = all()
@@ -103,14 +103,23 @@ object MusicSourceStore {
         }
 
     /** 从网络地址导入（GitHub 原始地址失败时自动换加速镜像重试） */
-    suspend fun importFromUrl(url: String): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun importFromUrl(url: String): Result<String> {
         val trimmed = url.trim()
-        if (trimmed.isBlank()) return@withContext Result.failure(Exception("地址为空"))
+        if (trimmed.isBlank()) return Result.failure(Exception("地址为空"))
+        val text = downloadScript(trimmed).getOrElse { return Result.failure(it) }
+        // 内容拿到了就定结果：初始化失败也不再换镜像重试（那是脚本问题，不是网络问题）
+        return import(text, sourceUrl = trimmed)
+    }
+
+    /**
+     * 下载脚本原文（GitHub 原始地址会依次尝试加速镜像）。
+     * 注意：**返回的是未做 trim 的原文** —— 个别音源会按脚本原文做完整性自校验，
+     * trim 掉首尾空白会让它的校验对不上。
+     */
+    private suspend fun downloadScript(url: String): Result<String> = withContext(Dispatchers.IO) {
         val candidates = buildList {
-            add(trimmed)
-            if (trimmed.contains("raw.githubusercontent.com")) {
-                MIRRORS.forEach { add(it + trimmed) }
-            }
+            add(url)
+            if (url.contains("raw.githubusercontent.com")) MIRRORS.forEach { add(it + url) }
         }
         var lastError: Exception? = null
         for (candidate in candidates) {
@@ -123,12 +132,42 @@ object MusicSourceStore {
             if (text.isBlank()) {
                 if (lastError == null) lastError = Exception("下载内容为空")
             } else {
-                // 内容拿到了就定结果：初始化失败也不再换镜像重试（那是脚本问题，不是网络问题）
-                return@withContext import(text, sourceUrl = trimmed)
+                return@withContext Result.success(text)
             }
         }
         Result.failure(lastError ?: Exception("下载失败"))
     }
+
+    /**
+     * 试跑单个推荐音源（不落库）：下载 → 初始化 → 报回它支持的平台与音质。
+     * 用于「测试推荐音源」——各音源后端可用性差异极大，让用户在自己网络上一次测出哪个能用。
+     */
+    suspend fun probe(rec: Recommended): SourceProbe {
+        val text = downloadScript(rec.rawUrl).getOrElse {
+            return SourceProbe(rec.name, rec.rawUrl, error = "下载失败：${it.message ?: "网络异常"}")
+        }
+        if (text.length < 50) return SourceProbe(rec.name, rec.rawUrl, error = "下载内容异常（过短）")
+        val temp = MusicSourceScript(
+            id = "probe_${rec.name}",
+            name = rec.name,
+            content = text,
+            url = rec.rawUrl
+        )
+        val result = LxSourceEngine.initScript(temp)
+        LxSourceEngine.release(temp.id)
+        return SourceProbe(
+            name = rec.name,
+            url = rec.rawUrl,
+            support = result.support,
+            error = result.error,
+            content = text
+        )
+    }
+
+    /** 导入已经试跑通过的推荐音源（直接用试跑时下载到的原文，不再重复下载） */
+    suspend fun importProbed(probe: SourceProbe): Result<String> =
+        if (probe.content.isBlank()) importFromUrl(probe.url)
+        else import(probe.content, sourceUrl = probe.url)
 
     /** 从本地文件导入（[fileName] 仅用于失败时提示） */
     suspend fun importFromFile(fileName: String, content: String): Result<String> =

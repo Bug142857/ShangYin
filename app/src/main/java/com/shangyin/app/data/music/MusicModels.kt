@@ -142,3 +142,18 @@ data class MusicSourceScript(
         const val LOCAL_PREFIX = "local://"
     }
 }
+
+/**
+ * 推荐音源的试跑结果（「测试推荐音源」用）：
+ * [support] 非空 = 这个源在你当前网络下可用；否则 [error] 是失败原因。
+ */
+data class SourceProbe(
+    val name: String,
+    val url: String,
+    val support: Map<String, List<String>>? = null,
+    val error: String? = null,
+    /** 下载到的脚本原文（可用时直接用它导入，省一次下载） */
+    val content: String = ""
+) {
+    val ok: Boolean get() = support != null
+}
