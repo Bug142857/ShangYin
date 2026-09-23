@@ -315,18 +315,20 @@
     globalThis.__lxLoadScript = function (id, code, infoJson, timeoutMs) {
         scriptId = id;
         lx.currentScriptInfo = safeJsonParse(infoJson, {}) || {};
-        try {
-            // 间接 eval：在全局作用域执行脚本（脚本自身是 IIFE）
-            (0, eval)(code);
-        } catch (e) {
-            LxNative.onInited(scriptId, JSON.stringify({ status: false, error: String((e && e.message) || e) }));
-            return;
-        }
+        // 先装超时定时器再执行脚本：部分音源（幻音/全豆要等）在**加载过程中同步**发 inited，
+        // 若定时器后装，send 清理不到它，稍后会多发一次"初始化超时"的假失败回调。
         if (initTimer) clearTimeout(initTimer);
         initTimer = setTimeout(function () {
             initTimer = null;
             LxNative.onInited(scriptId, JSON.stringify({ status: false, error: '脚本初始化超时：未收到 inited 事件' }));
         }, timeoutMs || 20000);
+        try {
+            // 间接 eval：在全局作用域执行脚本（脚本自身是 IIFE）
+            (0, eval)(code);
+        } catch (e) {
+            if (initTimer) { clearTimeout(initTimer); initTimer = null; }
+            LxNative.onInited(scriptId, JSON.stringify({ status: false, error: String((e && e.message) || e) }));
+        }
     };
 
     globalThis.__lxRequest = function (id, reqId, payloadJson) {

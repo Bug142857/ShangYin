@@ -35,11 +35,6 @@ object MusicRepo {
     suspend fun search(platform: MusicPlatform, keyword: String, page: Int = 1): List<MusicSong> =
         MusicApis.search(platform, keyword, page)
 
-    suspend fun boards(platform: MusicPlatform): List<MusicBoard> = MusicApis.boards(platform)
-
-    suspend fun boardSongs(board: MusicBoard, page: Int = 1): List<MusicSong> =
-        MusicApis.boardSongs(board, page)
-
     suspend fun lyric(song: MusicSong): MusicLyric = MusicApis.lyric(song)
 
     /** 收藏/清空直链缓存（换音源后强制重解析） */

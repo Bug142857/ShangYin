@@ -2,7 +2,6 @@ package com.shangyin.app.ui.music
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -24,8 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -37,12 +33,10 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
-import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -52,8 +46,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -77,8 +69,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import com.shangyin.app.data.Repo
-import com.shangyin.app.data.music.MusicBoard
 import com.shangyin.app.data.music.MusicPlatform
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.data.music.MusicSong
@@ -91,9 +81,9 @@ import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
 /**
- * 音乐模块主页：顶部标题栏 + 底部三标签（搜索 / 排行榜 / 我的）+ 底部迷你播放条。
+ * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 数据来源：搜索/榜单/歌词走 App 内置接口（[MusicRepo]），播放直链由 LX 音源脚本解析
+ * 数据来源：搜索/歌词走 App 内置接口（[MusicRepo]），播放直链由 LX 音源脚本解析
  * （音源在「音源管理」页导入，右上角入口）。
  */
 
@@ -107,10 +97,7 @@ private const val MAX_PAGE = 20
 @Composable
 fun MusicHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
-    var tab by remember { mutableStateOf(0) }
-    // 三个标签的状态提到这里：切标签回来时搜索结果/榜单不丢
     val searchState = remember { SearchTabState() }
-    val boardState = remember { BoardTabState() }
 
     // 进音乐模块：连接播放服务 + 初始化音源（幂等）
     LaunchedEffect(Unit) {
@@ -140,7 +127,7 @@ fun MusicHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 没有可用音源时的引导：搜索/榜单走内置接口能出数据，但播放要靠音源脚本换直链
+            // 没有可用音源时的引导：搜索走内置接口能出数据，但播放要靠音源脚本换直链
             val scripts by MusicSourceStore.scripts.collectAsStateWithLifecycle()
             if (scripts.none { it.enabled && it.support.isNotEmpty() }) {
                 Surface(
@@ -157,20 +144,7 @@ fun MusicHomeScreen(nav: NavHostController) {
                 }
             }
             Box(Modifier.weight(1f)) {
-                when (tab) {
-                    0 -> SearchTab(searchState)
-                    1 -> BoardTab(nav, boardState)
-                    else -> MineTab(nav)
-                }
-            }
-            TabRow(selectedTabIndex = tab) {
-                listOf("搜索", "排行榜", "我的").forEachIndexed { index, label ->
-                    Tab(
-                        selected = tab == index,
-                        onClick = { tab = index },
-                        text = { Text(label) }
-                    )
-                }
+                SearchTab(searchState)
             }
             MusicMiniPlayer(nav)
         }
@@ -424,153 +398,6 @@ private fun SearchTab(st: SearchTabState) {
     }
 }
 
-// ==================== 排行榜 ====================
-
-private class BoardTabState {
-    var platform by mutableStateOf(MusicPlatform.WY)
-    var boards by mutableStateOf<List<MusicBoard>>(emptyList())
-    var loading by mutableStateOf(false)
-    var error by mutableStateOf<String?>(null)
-}
-
-@Composable
-private fun BoardTab(nav: NavHostController, st: BoardTabState) {
-    val scope = rememberCoroutineScope()
-
-    fun load() {
-        if (st.loading) return
-        st.loading = true
-        st.error = null
-        val platform = st.platform
-        scope.launch {
-            runCatching { MusicRepo.boards(platform) }
-                .onSuccess { if (platform == st.platform) st.boards = it }
-                .onFailure { if (platform == st.platform) st.error = it.message ?: "榜单加载失败" }
-            st.loading = false
-        }
-    }
-
-    LaunchedEffect(st.platform) { load() }
-
-    Column(Modifier.fillMaxSize()) {
-        PlatformChips(st.platform) { p ->
-            st.platform = p
-            st.boards = emptyList()
-            st.error = null
-        }
-        when {
-            st.loading && st.boards.isEmpty() -> MusicLoadingBox()
-            st.error != null && st.boards.isEmpty() -> MusicErrorBox(st.error!!, onRetry = { load() })
-            st.boards.isEmpty() -> EmptyView("这个平台暂时没有榜单")
-            else -> LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                contentPadding = PaddingValues(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(
-                    count = st.boards.size,
-                    key = { i -> st.boards[i].platform.key + st.boards[i].id }
-                ) { i ->
-                    val board = st.boards[i]
-                    Card(onClick = {
-                        nav.safeNavigate(
-                            "musicBoard/${board.platform.key}/${board.id}/${Uri.encode(board.name)}"
-                        )
-                    }) {
-                        Column {
-                            CoverImage(
-                                url = board.cover,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .aspectRatio(1f),
-                                corner = 8.dp,
-                                placeholderText = board.name
-                            )
-                            Text(
-                                board.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 6.dp)
-                            )
-                            Text(
-                                board.updateTime.ifBlank { board.platform.label },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.padding(start = 8.dp, end = 8.dp, top = 2.dp, bottom = 8.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ==================== 我的 ====================
-
-@Composable
-private fun MineTab(nav: NavHostController) {
-    val play = rememberMusicPlay()
-    val songsFlow = remember { MusicRepo.observeAllSongs() }
-    val listsFlow = remember { Repo.observeRootListsWithMeta(1) }
-    val songs by songsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-    val lists by listsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-
-    LazyColumn(
-        contentPadding = PaddingValues(bottom = 16.dp),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        item(key = "h_songs") { MusicSectionTitle("我的收藏 · ${songs.size}") }
-        if (songs.isEmpty()) {
-            item(key = "e_songs") { MusicHint("还没有收藏的歌曲，去搜索页点收藏") }
-        } else {
-            itemsIndexed(songs, key = { _, s -> "s_" + s.key }) { index, song ->
-                // 点即播（不做移除，保持简单）
-                MusicSongRow(song = song, onClick = { play(songs, index) })
-            }
-        }
-
-        item(key = "h_lists") { MusicSectionTitle("里世界清单") }
-        if (lists.isEmpty()) {
-            item(key = "e_lists") { MusicHint("还没有里世界清单") }
-        } else {
-            items(lists, key = { "l_" + it.list.id }) { meta ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { nav.safeNavigate("list/${meta.list.id}") }
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            meta.list.name,
-                            style = MaterialTheme.typography.bodyLarge,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            "${meta.itemCount} 件",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Icon(
-                        Icons.Rounded.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                }
-            }
-        }
-    }
-}
-
 // ==================== 音乐模块公共 UI ====================
 
 /** 起播前申请通知权限（Android 13+）：拒绝也照常播放，只是没有通知栏控制 */
@@ -598,7 +425,7 @@ internal fun rememberCollectedKeys(): Set<String> {
     return remember(songs) { songs.map { it.key }.toSet() }
 }
 
-/** 平台选择 chips（搜索页与排行榜页共用） */
+/** 平台选择 chips */
 @Composable
 internal fun PlatformChips(selected: MusicPlatform, onSelect: (MusicPlatform) -> Unit) {
     LazyRow(
@@ -682,7 +509,7 @@ internal fun MusicHint(text: String) {
     )
 }
 
-/** 列表页脚：加载下一页中 / 没有更多了（搜索页与榜单页共用） */
+/** 列表页脚：加载下一页中 / 没有更多了 */
 @Composable
 internal fun MusicListFooter(loadingMore: Boolean, endReached: Boolean) {
     if (loadingMore) {

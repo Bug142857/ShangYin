@@ -225,21 +225,6 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("musicPlayer") { com.shangyin.app.ui.music.MusicPlayerScreen(nav) }
             composable("musicSources") { com.shangyin.app.ui.music.MusicSourceScreen(nav) }
             composable(
-                route = "musicBoard/{platformKey}/{boardId}/{boardName}",
-                arguments = listOf(
-                    navArgument("platformKey") { type = NavType.StringType },
-                    navArgument("boardId") { type = NavType.StringType },
-                    navArgument("boardName") { type = NavType.StringType; defaultValue = "" }
-                )
-            ) { entry ->
-                com.shangyin.app.ui.music.MusicBoardScreen(
-                    nav,
-                    platformKey = entry.arguments?.getString("platformKey").orEmpty(),
-                    boardId = entry.arguments?.getString("boardId").orEmpty(),
-                    boardName = entry.arguments?.getString("boardName").orEmpty()
-                )
-            }
-            composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })
             ) { entry ->

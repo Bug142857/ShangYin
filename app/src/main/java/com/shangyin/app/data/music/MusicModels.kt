@@ -65,15 +65,6 @@ data class MusicSong(
     val subtitle: String get() = listOf(artists, album).filter { it.isNotBlank() }.joinToString(" · ")
 }
 
-/** 榜单 / 歌单摘要（排行榜入口用） */
-data class MusicBoard(
-    val platform: MusicPlatform,
-    val id: String,
-    val name: String,
-    val cover: String = "",
-    val updateTime: String = ""
-)
-
 /** 歌词（[translated] 为翻译歌词，没有则空串） */
 data class MusicLyric(val lrc: String = "", val translated: String = "")
 

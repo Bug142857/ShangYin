@@ -69,8 +69,12 @@ object MusicSourceStore {
         withContext(Dispatchers.IO) {
             val text = content.trim()
             if (text.length < 50) return@withContext Result.failure(Exception("脚本内容为空或过短"))
-            if (!text.contains("globalThis.lx") && !text.contains("lx.")) {
-                return@withContext Result.failure(Exception("不是有效的洛雪音源脚本（未发现 lx API）"))
+            // ⚠️ 不能用关键字判断脚本有效性：混淆过的音源（六音等）连 `globalThis.lx` 都是加密字符串，
+            // 早期版本按关键字校验会把好脚本误判成"不是有效的音源脚本"。这里只拦明显不是脚本的内容
+            // （比如下载到网页/404 页面），真正的有效性交给下面的脚本初始化来判定。
+            val head = text.take(300).lowercase()
+            if (head.contains("<!doctype") || head.contains("<html")) {
+                return@withContext Result.failure(Exception("下载到的是网页而不是脚本，导入地址可能已失效"))
             }
             val meta = parseMeta(text)
             val script = MusicSourceScript(

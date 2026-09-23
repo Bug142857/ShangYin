@@ -13,19 +13,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
-import java.text.SimpleDateFormat
 import java.util.Base64
-import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * 五大平台的原生数据接口：搜索 / 榜单列表 / 榜单歌曲 / 歌词。
+ * 五大平台的原生数据接口：搜索 / 歌词。
  *
  * 全部接口在 2026-09-23 用 curl 实测通过，接口来源与坑写在对应函数上方；
  * 少数接口确实不可用（需要签名等）的地方，函数返回空并在注释里写明原因。
  *
- * 这里只负责"给数据"：播放直链由 LX 音源脚本解析，所以搜索/榜单出来的每首歌
+ * 这里只负责"给数据"：播放直链由 LX 音源脚本解析，所以搜索出来的每首歌
  * 必须把平台自己的 ID 字段塞进 [MusicSong.raw]（脚本里字段名是写死的），
  * 否则脚本取不到 ID 就解析不出版本直链。
  */
@@ -56,30 +54,6 @@ object MusicApis {
                 MusicPlatform.KW -> kwSearch(keyword, page, limit)
                 MusicPlatform.KG -> kgSearch(keyword, page, limit)
                 MusicPlatform.MG -> mgSearch(keyword, page, limit)
-            }
-        }
-
-    /** 平台排行榜/榜单列表 */
-    suspend fun boards(platform: MusicPlatform): List<MusicBoard> = guard(platform, "榜单") {
-        when (platform) {
-            // 网易云/酷狗/咪咕有原生榜单列表接口；QQ 与酷我没有免签名列表接口，用实测好的官方榜单固定表
-            MusicPlatform.WY -> wyBoards()
-            MusicPlatform.TX -> TX_BOARDS.map { (id, name, cover) -> MusicBoard(platform, id, name, cover) }
-            MusicPlatform.KW -> KW_BOARDS.map { (id, name, cover) -> MusicBoard(platform, id, name, cover) }
-            MusicPlatform.KG -> kgBoards()
-            MusicPlatform.MG -> mgBoards()
-        }
-    }
-
-    /** 某个榜单/歌单里的歌曲 */
-    suspend fun boardSongs(board: MusicBoard, page: Int = 1, limit: Int = 30): List<MusicSong> =
-        guard(board.platform, "榜单歌曲") {
-            when (board.platform) {
-                MusicPlatform.WY -> wyBoardSongs(board.id, page, limit, board.name)
-                MusicPlatform.TX -> txBoardSongs(board.id, page, limit, board.name)
-                MusicPlatform.KW -> kwBoardSongs(board.id, page, limit, board.name)
-                MusicPlatform.KG -> kgBoardSongs(board.id, page, limit, board.name)
-                MusicPlatform.MG -> mgBoardSongs(board.id, limit, board.name)
             }
         }
 
@@ -118,27 +92,6 @@ object MusicApis {
         val songs = root(text).obj("result").arr("songs")
         if (songs.isEmpty()) throw IllegalStateException("接口返回空")
         return songs.mapNotNull { e -> wySong(e.asObject(), null) }
-    }
-
-    /** 榜单歌曲：老歌单接口 /api/playlist/detail（只支持整单返回，分页在这里切片） */
-    private suspend fun wyBoardSongs(playlistId: String, page: Int, limit: Int, from: String): List<MusicSong> {
-        val text = getText(url("https://music.163.com/api/playlist/detail", "id" to playlistId), WY_HEADERS)
-        val tracks = root(text).obj("result").arr("tracks")
-        if (tracks.isEmpty()) throw IllegalStateException("接口返回空")
-        return tracks.drop((page - 1) * limit).take(limit).mapNotNull { e -> wySong(e.asObject(), from) }
-    }
-
-    /** 网易云榜单列表：/api/toplist/detail 一次返回 60+ 个榜（含封面与更新时间） */
-    private suspend fun wyBoards(): List<MusicBoard> {
-        val text = getText("https://music.163.com/api/toplist/detail", WY_HEADERS)
-        val list = root(text).arr("list")
-        if (list.isEmpty()) throw IllegalStateException("接口返回空")
-        return list.mapNotNull { e ->
-            val o = e.asObject() ?: return@mapNotNull null
-            val id = o.str("id")
-            if (id.isBlank()) return@mapNotNull null
-            MusicBoard(MusicPlatform.WY, id, o.str("name"), https(o.str("coverImgUrl")), fmtDate(o.long("updateTime")))
-        }
     }
 
     /** 歌词：/api/song/lyric 一次拿原词 + 翻译（tlyric） */
@@ -192,22 +145,9 @@ object MusicApis {
     // ==================== QQ音乐 tx ====================
     // 搜索：c.y.qq.com/soso/fcgi-bin/client_search_cp（new_json=1 才有 singer/album 结构化字段）
     // 歌词：c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg（nobase64=1 直接返回明文 LRC，必须换 player.html 当 Referer）
-    // 榜单歌曲：c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg（song_begin 是"偏移条数"，不是页码）
-    // 榜单列表：官方 fcg_v8_toplist_opt.fcg 实测空响应（HTTP 200 但 body 为空），改用下面实测过的固定榜单 id
 
     private val TX_HEADERS = mapOf("Referer" to "https://y.qq.com/")
     private val TX_LYRIC_HEADERS = mapOf("Referer" to "https://y.qq.com/portal/player.html")
-
-    /** (榜单 id, 名称, 封面) 三名元组，name/cover 都是 2026-09-23 实测值 */
-    private val TX_BOARDS: List<Triple<String, String, String>> = listOf(
-        Triple("26", "巅峰榜·热歌", "https://y.gtimg.cn/music/photo_new/T003R300x300M000004FjfV70J23Gm.jpg"),
-        Triple("4", "巅峰榜·流行指数", "https://y.gtimg.cn/music/photo_new/T003R300x300M0000044W96a0sqZg4.jpg"),
-        Triple("27", "巅峰榜·新歌", "https://y.gtimg.cn/music/photo_new/T003R300x300M000001b70702Yp7rc.jpg"),
-        Triple("62", "飙升榜", "https://y.gtimg.cn/music/photo_new/T003R300x300M000002MS3rr4Xz9Ad.jpg"),
-        Triple("58", "说唱榜", "https://y.gtimg.cn/music/photo_new/T003R300x300M000000RgoVp4O7Oc5.jpg"),
-        Triple("57", "电音榜", "https://y.gtimg.cn/music/photo_new/T003R300x300M000002i4HEm4UesTl.jpg"),
-        Triple("28", "巅峰榜·网络歌曲", "https://y.gtimg.cn/music/photo_new/T003R300x300M000000AI6SA2TamFS.jpg")
-    )
 
     private suspend fun txSearch(keyword: String, page: Int, limit: Int): List<MusicSong> {
         val text = getText(
@@ -227,26 +167,6 @@ object MusicApis {
         val list = root(text).obj("data").obj("song").arr("list")
         if (list.isEmpty()) throw IllegalStateException("接口返回空")
         return list.mapNotNull { e -> txSong(e.asObject(), null) }
-    }
-
-    private suspend fun txBoardSongs(topId: String, page: Int, limit: Int, from: String): List<MusicSong> {
-        val text = getText(
-            url(
-                "https://c.y.qq.com/v8/fcg-bin/fcg_v8_toplist_cp.fcg",
-                "topid" to topId,
-                "format" to "json",
-                "song_begin" to ((page - 1) * limit).toString(),
-                "song_num" to limit.toString(),
-                "tpl" to "3",
-                "page" to "detail",
-                "type" to "top",
-                "platform" to "yqq"
-            ),
-            TX_HEADERS
-        )
-        val list = root(text).arr("songlist")
-        if (list.isEmpty()) throw IllegalStateException("接口返回空")
-        return list.mapNotNull { e -> txSong(e.asObject()?.obj("data"), from) }
     }
 
     private suspend fun txLyric(songMid: String): MusicLyric {
@@ -310,23 +230,9 @@ object MusicApis {
     //       "The request is illegal!"），故退回老 PC 接口 search.kuwo.cn/r.s（实测可用）
     //       坑：老接口返回的是单引号 JS 对象字面量，不是合法 JSON，得先替换引号；歌名里还有 &nbsp; 实体
     // 歌词：m.kuwo.cn/newh5/singles/songinfoandlrc（返回逐行 lrclist，需要自己拼成 LRC）
-    // 榜单列表：官方 /api/www/bang/bang/bangList 同样要 Secret（不可用），kbangserver 也没有列表接口，用实测固定表
-    // 榜单歌曲：kbangserver.kuwo.cn/ksong.s（免签名，pn 是页码）
 
     private val KW_HEADERS = mapOf("Referer" to "https://www.kuwo.cn/")
     private val KW_M_HEADERS = mapOf("Referer" to "https://m.kuwo.cn/")
-
-    /** (榜单 id, 名称, 封面) 三名元组；id=93 飙升榜官方返回的封面地址是坏的（实测 404），故留空 */
-    private val KW_BOARDS: List<Triple<String, String, String>> = listOf(
-        Triple("16", "酷我热歌榜", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_16_30.jpg"),
-        Triple("17", "酷我新歌榜", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_17_30.jpg"),
-        Triple("93", "酷我飙升榜", ""),
-        Triple("22", "酷我欧美榜", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_22_30.jpg"),
-        Triple("26", "酷我经典榜", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_26_30.jpg"),
-        Triple("12", "美国The Billboard Hot 100", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_12_30.jpg"),
-        Triple("13", "英国UK Official", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_13_30.jpg"),
-        Triple("15", "日本ORICON STYLE", "https://img1.kuwo.cn/star/mboxAlbum/BangPic/small/au_15_30.jpg")
-    )
 
     private suspend fun kwSearch(keyword: String, page: Int, limit: Int): List<MusicSong> {
         val text = getText(
@@ -347,29 +253,6 @@ object MusicApis {
         val list = root(text.replace("'", "\"")).arr("abslist")
         if (list.isEmpty()) throw IllegalStateException("接口返回空")
         return list.mapNotNull { e -> kwSong(e.asObject(), null) }
-    }
-
-    private suspend fun kwBoardSongs(bangId: String, page: Int, limit: Int, from: String): List<MusicSong> {
-        val text = getText(
-            url(
-                "https://kbangserver.kuwo.cn/ksong.s",
-                "from" to "pc",
-                "fmt" to "json",
-                "pn" to (page - 1).toString(),
-                "rn" to limit.toString(),
-                "type" to "bang",
-                "data" to "content",
-                "id" to bangId,
-                "isbang" to "1"
-            ),
-            KW_HEADERS
-        )
-        val body = root(text)
-        // 接口自己会回榜单名，优先用它的（比调用方传进来的固定表更新）
-        val bangName = body.str("name").ifBlank { from }
-        val list = body.arr("musiclist")
-        if (list.isEmpty()) throw IllegalStateException("接口返回空")
-        return list.mapNotNull { e -> kwSong(e.asObject(), bangName) }
     }
 
     private suspend fun kwLyric(rid: String): MusicLyric {
@@ -446,8 +329,8 @@ object MusicApis {
         .replace("&amp;", "&")
 
     // ==================== 酷狗 kg ====================
-    // 搜索/榜单：mobilecdn.kugou.com 的 api/v3 接口。⚠️ 该域名证书与主机名不匹配（curl 报 SEC_E_WRONG_PRINCIPAL），
-    //           https 会校验失败，只能走 http（App 的 Manifest 已开 usesCleartextTraffic）
+    // 搜索：mobilecdn.kugou.com 的 api/v3 接口。⚠️ 该域名证书与主机名不匹配（curl 报 SEC_E_WRONG_PRINCIPAL），
+    //       https 会校验失败，只能走 http（App 的 Manifest 已开 usesCleartextTraffic）
     // 歌词：krcs.kugou.com/search 拿 id+accesskey，再 lyrics.kugou.com/download?fmt=lrc 取 base64 明文 LRC
     //       （fmt=krc 是加密二进制，翻译歌词在里面，解析成本高，这里不接，故 translated 恒为空）
 
@@ -469,38 +352,6 @@ object MusicApis {
         val list = root(text).obj("data").arr("info")
         if (list.isEmpty()) throw IllegalStateException("接口返回空")
         return list.mapNotNull { e -> kgSong(e.asObject(), null) }
-    }
-
-    private suspend fun kgBoards(): List<MusicBoard> {
-        val text = getText(
-            url("$KG_API/rank/list", "format" to "json", "page" to "1", "pagesize" to "30"),
-            KG_HEADERS
-        )
-        val list = root(text).obj("data").arr("info")
-        if (list.isEmpty()) throw IllegalStateException("接口返回空")
-        return list.mapNotNull { e ->
-            val o = e.asObject() ?: return@mapNotNull null
-            val rankId = o.str("rankid")
-            if (rankId.isBlank()) return@mapNotNull null
-            val pic = o.str("imgurl").ifBlank { o.str("img_cover") }.replace("{size}", "300")
-            MusicBoard(MusicPlatform.KG, rankId, o.str("rankname"), https(pic), o.str("rank_id_publish_date"))
-        }
-    }
-
-    private suspend fun kgBoardSongs(rankId: String, page: Int, limit: Int, from: String): List<MusicSong> {
-        val text = getText(
-            url(
-                "$KG_API/rank/song",
-                "format" to "json",
-                "rankid" to rankId,
-                "page" to page.toString(),
-                "pagesize" to limit.toString()
-            ),
-            KG_HEADERS
-        )
-        val list = root(text).obj("data").arr("info")
-        if (list.isEmpty()) throw IllegalStateException("接口返回空")
-        return list.mapNotNull { e -> kgSong(e.asObject(), from) }
     }
 
     private suspend fun kgLyric(song: MusicSong): MusicLyric {
@@ -589,16 +440,12 @@ object MusicApis {
     // ==================== 咪咕 mg ====================
     // 搜索：app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do（返回 copyrightId + contentId + lyricUrl）
     //       ⚠️ pageSize 实测无效（恒定 20 条/页），只有 pageNo 生效，所以这里取一页后再截断到 limit
-    // 歌词：搜索接口直接给了 lyricUrl / trcUrl（纯文本 LRC）；榜单歌曲没有，用 contentId 调
+    // 歌词：搜索接口直接给了 lyricUrl / trcUrl（纯文本 LRC）；raw 里没有歌词地址时，用 contentId 调
     //       MIGUM3.0/resource/song/by-contentids/v2.0 回查 lrcUrl
-    // 榜单列表：pc/bmw/rank/rank-index/v1.0（分组返回）
-    // 榜单歌曲：pc/bmw/rank/rank-info/v1.0（固定 50 条，pageNo 无效；每条的 songData 字段是内嵌的 JSON 字符串）
     // 已废弃：m.music.migu.cn/migu/remoting/* 与 music.migu.cn/v3/api/* 现在一律返回 v5 的 HTML 页面
 
     private val MG_HEADERS = mapOf("Referer" to "https://music.migu.cn/v5/")
     private const val MG_SEARCH = "https://app.c.nf.migu.cn/MIGUM2.0/v1.0/content/search_all.do"
-    private const val MG_RANK_INDEX = "https://app.c.nf.migu.cn/pc/bmw/rank/rank-index/v1.0"
-    private const val MG_RANK_INFO = "https://app.c.nf.migu.cn/pc/bmw/rank/rank-info/v1.0"
     private const val MG_SONG_BY_CONTENT = "https://app.c.nf.migu.cn/MIGUM3.0/resource/song/by-contentids/v2.0"
     private const val MG_SEARCH_SWITCH = "{\"song\":1}"
 
@@ -618,31 +465,6 @@ object MusicApis {
         val list = root(text).obj("songResultData").arr("result")
         if (list.isEmpty()) throw IllegalStateException("接口返回空")
         return list.take(limit).mapNotNull { e -> mgSearchSong(e.asObject()) }
-    }
-
-    private suspend fun mgBoards(): List<MusicBoard> {
-        val text = getText(MG_RANK_INDEX, MG_HEADERS)
-        val groups = root(text).obj("data").arr("contents")
-        if (groups.isEmpty()) throw IllegalStateException("接口返回空")
-        // 结构是 data.contents[]（分组）→ 每组再有 contents[]（榜单）
-        return groups.flatMap { g ->
-            g.asObject().arr("contents").mapNotNull { e ->
-                val o = e.asObject() ?: return@mapNotNull null
-                val rankId = o.str("rankId")
-                if (rankId.isBlank()) return@mapNotNull null
-                MusicBoard(MusicPlatform.MG, rankId, o.str("rankName"), https(o.str("imageUrl")))
-            }
-        }
-    }
-
-    private suspend fun mgBoardSongs(rankId: String, limit: Int, from: String): List<MusicSong> {
-        val text = getText(
-            url(MG_RANK_INFO, "rankType" to "1", "rankId" to rankId, "period" to ""),
-            MG_HEADERS
-        )
-        val list = root(text).obj("data").arr("contents")
-        if (list.isEmpty()) throw IllegalStateException("接口返回空")
-        return list.take(limit).mapNotNull { e -> mgRankSong(e.asObject(), from) }
     }
 
     private suspend fun mgLyric(song: MusicSong): MusicLyric {
@@ -707,47 +529,6 @@ object MusicApis {
         )
     }
 
-    /** 榜单歌曲：榜单接口给的是 contentId（resId），时长藏在 songData 这个内嵌 JSON 字符串里 */
-    private fun mgRankSong(o: JsonObject?, from: String?): MusicSong? {
-        val obj = o ?: return null
-        val contentId = obj.str("resId")
-        if (contentId.isBlank()) return null
-        // 榜单条目自身就带 copyrightId；songData 里还有 albumId / duration / 歌手
-        val songData = if (obj.str("songData").isBlank()) null else root(obj.str("songData"))
-        val copyrightId = obj.str("copyrightId").ifBlank { songData.str("copyrightId") }
-        val albumId = songData.str("albumId")
-        val duration = (songData.long("duration") ?: 0L) * 1000
-        val artists = obj.str("txt2").ifBlank {
-            songData.arr("singerList").joinToString("/") { it.asObject().str("name") }
-        }
-        val name = obj.str("txt").ifBlank { songData.str("songName") }
-        val cover = https(obj.str("img"))
-        return MusicSong(
-            platform = MusicPlatform.MG,
-            id = copyrightId.ifBlank { contentId },
-            name = name,
-            artists = artists,
-            album = obj.str("txt3").ifBlank { songData.str("album") },
-            cover = cover,
-            durationMs = duration,
-            from = from.orEmpty(),
-            raw = mapOf(
-                "source" to "mg",
-                "copyrightId" to copyrightId,
-                "id" to copyrightId.ifBlank { contentId },
-                "songmid" to copyrightId.ifBlank { contentId },
-                "contentId" to contentId,
-                "songId" to obj.str("songId").ifBlank { songData.str("songId") },
-                "albumId" to albumId,
-                "name" to name,
-                "singer" to artists,
-                "albumName" to obj.str("txt3").ifBlank { songData.str("album") },
-                "picUrl" to cover,
-                "duration" to if (duration > 0) duration.toString() else ""
-            )
-        )
-    }
-
     // ==================== 底层网络与 JSON 工具 ====================
 
     private suspend fun getText(url: String, headers: Map<String, String> = emptyMap()): String =
@@ -801,9 +582,6 @@ object MusicApis {
     /** 封面统一走 https（多数平台返回 http 链接） */
     private fun https(url: String): String =
         if (url.startsWith("http://")) "https://" + url.substring(7) else url
-
-    private fun fmtDate(ms: Long?): String =
-        if (ms == null || ms <= 0L) "" else SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(ms))
 
     /** 把底层异常（超时/HTTP 码/JSON 解析失败）包成能直接展示给用户的提示 */
     private inline fun <T> guard(platform: MusicPlatform, what: String, block: () -> T): T =
