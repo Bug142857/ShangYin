@@ -2,7 +2,6 @@ package com.shangyin.app.data.music
 
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.CollectionItemEntity
-import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
@@ -40,27 +39,23 @@ object MusicRepo {
     /** 收藏/清空直链缓存（换音源后强制重解析） */
     fun clearUrlCache() = urlCache.clear()
 
-    // ---------------- 播放直链（LX 音源） ----------------
-
-    /** 当前默认音质（设置里选，音源不支持时自动降级） */
-    fun preferredQuality(): MusicQuality = MusicQuality.of(SettingsStore.musicQuality)
+    // ---------------- 播放直链 ----------------
 
     /**
-     * 解析播放直链：走平台内置直连（[MusicNativeResolve]）。
-     * 24bit 的直链带时效签名，所以**每次播放时实时解析**（配合播放数据源的惰性解析，不会拿到过期链接）。
+     * 解析播放直链（24bit 的直链带时效签名，所以每次播放时实时解析，配合播放数据源的惰性解析）。
      * 失败抛 [MusicResolveException]，消息直接展示给用户。
      */
-    suspend fun resolvePlay(song: MusicSong, quality: MusicQuality = preferredQuality()): MusicPlayInfo {
+    suspend fun resolvePlay(song: MusicSong): MusicPlayInfo {
         val cached = urlCache[song.key]
         if (cached != null && System.currentTimeMillis() - cached.second < URL_TTL_MS) {
-            return MusicPlayInfo(cached.first, MusicPlayHeaders.forPlatform(song.platform))
+            return MusicPlayInfo(cached.first, MusicNativeResolve.PLAY_HEADERS)
         }
         val native = MusicNativeResolve.resolve(song)
         if (native.url == null) {
             throw MusicResolveException(native.error ?: "没有可用的播放直连")
         }
         urlCache[song.key] = native.url to System.currentTimeMillis()
-        return MusicPlayInfo(native.url, MusicPlayHeaders.forPlatform(song.platform))
+        return MusicPlayInfo(native.url, MusicNativeResolve.PLAY_HEADERS)
     }
 
     // ---------------- 收藏（进里世界清单） ----------------

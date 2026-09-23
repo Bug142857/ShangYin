@@ -233,15 +233,6 @@ object SettingsStore {
         }
     }
 
-    // ---------- 音乐 ----------
-
-    private const val KEY_MUSIC_QUALITY = "music_quality"
-
-    /** 默认音质（128k/320k/flac/flac24bit） */
-    var musicQuality: String
-        get() = sp.getString(KEY_MUSIC_QUALITY, "320k").orEmpty().ifBlank { "320k" }
-        set(v) = sp.edit().putString(KEY_MUSIC_QUALITY, v).apply()
-
     // ---------- 在线观影（片源管理 + 播放进度） ----------
 
     private const val KEY_VOD_SOURCES = "vod_sources_json"

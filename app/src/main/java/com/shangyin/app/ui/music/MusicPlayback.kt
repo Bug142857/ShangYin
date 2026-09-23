@@ -12,7 +12,6 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.shangyin.app.data.music.MusicQueueRegistry
-import com.shangyin.app.data.music.MusicQuality
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.data.music.MusicSong
 import kotlinx.coroutines.CoroutineScope
@@ -47,8 +46,7 @@ object MusicPlayback {
         val index: Int = 0,
         val repeatMode: RepeatMode = RepeatMode.LIST,
         val shuffle: Boolean = false,
-        val quality: MusicQuality = MusicQuality.Q320,
-        /** 播放失败原因（音源解析失败等），展示一次后由 [consumeError] 清掉 */
+        /** 播放失败原因（直连解析失败等），展示一次后由 [consumeError] 清掉 */
         val error: String? = null
     ) {
         val hasSong: Boolean get() = song != null
@@ -75,7 +73,6 @@ object MusicPlayback {
             c.addListener(playerListener)
             _state.update {
                 it.copy(
-                    quality = MusicRepo.preferredQuality(),
                     repeatMode = repeatModeOf(c.repeatMode),
                     shuffle = c.shuffleModeEnabled
                 )
@@ -83,11 +80,10 @@ object MusicPlayback {
             syncFromController()
             startProgressLoop()
         }, MoreExecutors.directExecutor())
-        _state.update { it.copy(quality = MusicRepo.preferredQuality()) }
     }
 
     /** 用整份列表起播（[startIndex] 为起始位置） */
-    fun play(context: Context, songs: List<MusicSong>, startIndex: Int = 0, quality: MusicQuality = MusicRepo.preferredQuality()) {
+    fun play(context: Context, songs: List<MusicSong>, startIndex: Int = 0) {
         if (songs.isEmpty()) return
         init(context)
         val index = startIndex.coerceIn(0, songs.lastIndex)
@@ -101,7 +97,7 @@ object MusicPlayback {
         // 先把状态改成"这首歌正在起播"，界面立刻有反馈（真实状态随后由监听器刷新）
         _state.update {
             it.copy(
-                song = songs[index], index = index, queue = songs, quality = quality,
+                song = songs[index], index = index, queue = songs,
                 positionMs = 0L, durationMs = songs[index].durationMs,
                 buffering = true, error = null
             )
@@ -109,8 +105,7 @@ object MusicPlayback {
         MusicRepo.clearUrlCache()
     }
 
-    fun playSingle(context: Context, song: MusicSong, quality: MusicQuality = MusicRepo.preferredQuality()) =
-        play(context, listOf(song), 0, quality)
+    fun playSingle(context: Context, song: MusicSong) = play(context, listOf(song), 0)
 
     fun toggle(context: Context) {
         init(context)
@@ -134,7 +129,7 @@ object MusicPlayback {
 
     fun stop() {
         runWhenConnected { stop(); clearMediaItems() }
-        _state.update { State(quality = it.quality) }
+        _state.update { State() }
     }
 
     fun setRepeatMode(mode: RepeatMode) {
