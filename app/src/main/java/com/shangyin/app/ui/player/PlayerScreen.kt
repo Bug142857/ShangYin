@@ -184,9 +184,6 @@ fun PlayerScreen(nav: NavHostController) {
             )
             .build()
         ExoPlayer.Builder(context)
-            // 电视源里 MP2（MPEG-1/2 Layer II）音频的解码器兼容处理：
-            // 平台多数只有 audio/mpeg(MP3) 解码器，按原样(audio/mpeg-L2)会被判「不支持」丢掉音轨 → 有画面没声音
-            .setRenderersFactory(MpegAudioCompatRenderersFactory(context))
             .setLoadControl(loadControl)
             .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
             .build()
@@ -211,6 +208,8 @@ fun PlayerScreen(nav: NavHostController) {
     val liveRoom = remember { PlayerSession.liveRoom }
     var reconnecting by remember { mutableStateOf(false) }
     var liveHint by remember { mutableStateOf<String?>(null) }
+    // 音频编码本机不支持（电视源里常见的 MP2）只提示一次，别反复弹
+    var unsupportedAudioHinted by remember { mutableStateOf(false) }
     var reconnectAttempts by remember { mutableIntStateOf(0) }
     // 视频真实比例（竖屏直播流 h>w → 按比例撑满纵向屏幕，就是用户要的"纵向全屏"）
     var videoAspect by remember { mutableFloatStateOf(0f) }
@@ -446,6 +445,30 @@ fun PlayerScreen(nav: NavHostController) {
                 currentEp = player.currentMediaItemIndex
             }
 
+            /**
+             * 音频编码本机不支持时（典型：IPTV 里的 MP2 = `audio/mpeg-L2`），
+             * 系统会把整条音轨**静默丢掉** → 画面正常、完全没声音、也不报错。
+             * 这里把它明说出来，别让用户以为"这频道本来就这样"。
+             */
+            override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                if (released || unsupportedAudioHinted) return
+                val dropped = tracks.groups.any { g ->
+                    g.type == C.TRACK_TYPE_AUDIO && !g.isSelected &&
+                        (0 until g.length).any { i ->
+                            val mime = g.getTrackFormat(i).sampleMimeType
+                            mime == MimeTypes.AUDIO_MPEG_L1 || mime == MimeTypes.AUDIO_MPEG_L2
+                        }
+                }
+                if (dropped) {
+                    unsupportedAudioHinted = true
+                    Toast.makeText(
+                        context,
+                        "该频道音频是 MP2，本机解码器不支持：会有画面没声音，建议换线路或换源",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 if (released) return
                 val reason = when (error.errorCode) {
@@ -458,7 +481,14 @@ fun PlayerScreen(nav: NavHostController) {
                     androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
                     androidx.media3.common.PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED ->
                         "格式不支持"
-                    else -> "播放出错"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ->
+                        "本机解不了这个编码"
+                    androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED,
+                    androidx.media3.common.PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ->
+                        "音频输出失败"
+                    // 兜底带上错误码，方便定位（别只说"播放出错"）
+                    else -> "播放出错（${error.errorCodeName}）"
                 }
                 Toast.makeText(context, "该线路 $reason，可切其他线路/集数", Toast.LENGTH_LONG).show()
             }
