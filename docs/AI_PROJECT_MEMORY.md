@@ -247,7 +247,22 @@
     `searchPlayer` / `findAllPlayer`（同样 Bad Request）、`POST /api/music/findListMusicOfHome`（`{"result":{"items":[]}}` 空）、`findRecommend`（无响应）。
     → **播放直链只有详情页 HTML 里有，而详情页就是被限额卡住的那一环**；站点自己写着"登录后访问"可提升额度，
     所以唯一正路是**登录 24bit**（抓到 Cookie/Token 后请求带上）或**换 IP**（限额按 IP 计）。
-- **真机未验证项**（下次可先问用户）：24bit 直链在实际网络/手机上能否出声、通知栏/锁屏控制、锁屏后台播放。
+- **v0.210（换主来源：33ve 闪闪音乐网 —— 无限额、免登录、免验证）**：
+  用户给了两个站让我试：`http://www.mvmp3.com/`（无名音乐网）与 `https://www.33ve.com/`（闪闪音乐网）。
+  **两站是同一套 CMS + 同一份曲库的镜像**（mvmps 的 play.php 返回的歌词里甚至写着「无名音乐网 www.mvmp3.com」，hash id 完全一致），接一个就够了；
+  选 **33ve**（全站 HTTPS、更稳）。它取代 24bit 成为音乐模块主来源（`MusicPlatform.S33VE("33ve","音乐")`，新文件 `Site33.kt`）：
+  - 搜索：`GET /so.php?wd={词}&page={n}`（服务端渲染 HTML，解析 `<li>` 块取 `/mp3/{32位hash}.html`、封面 `<img src>`、
+    `class="url"` 里的「歌手 - 歌名」、`class="stime"` 时长）
+  - 直链：`POST /style/js/play.php`，表单 `id={hash}&type=dance` → JSON `{url,lrc,pic,name,singer}`
+    （**只有 `type=dance` 有 url**，`music`/`mp3`/`song` 都是 null；url 是酷狗/酷我 CDN 的**时效签名**链接，必须现取）
+  - 实测：搜索 200、5/5 首取到直链（含原唱「周杰伦-晴天」，24bit 拿不到）、直链 `206 audio/mpeg` 可下、
+    **连打 15 次 play.php 15/15 成功（无限频）**、**三个接口全部免验证免登录**（站点的 HTML 页面才有人机验证墙）
+  - ⚠️⚠️ **必须带 `Accept` + `Accept-Language` 请求头**：只带 UA 的"裸请求"会被拒（返回 **2 字节空响应**），
+    这个坑让我第一轮 curl 全部失败；已在 `Site33` 的 `getText` 里把「响应过短」当失败抛出来，避免静默显示"无结果"。
+  - 24bit 保留为**旧来源**（`MusicPlatform.BIT24`），只用于兼容旧收藏；`MusicRepo` 按 `song.platform` 分派 search/resolve/lyric/fillCovers。
+  - ⚠️ 又一次踩到 Kotlin 限制：`runCatching{}.getOrElse{ continue }` 在内联 lambda 里**不能 `continue`**（编译失败），
+    必须写成 `val r = runCatching{...}; val v = r.getOrNull(); if (v == null) { ...; continue }`（Bit24/Site33 都改成这种写法了）。
+- **真机未验证项**（下次可先问用户）：33ve 直链在实际网络/手机上能否出声、通知栏/锁屏控制、锁屏后台播放。
 - **v0.202（用户装机反馈后的两处修复）**：
   ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
   而混淆过的音源（六音等）连这些字符串都是加密的 → 好脚本被拒。**已删掉关键字校验**，只拦明显不是脚本的内容（`<!doctype`/`<html`，

@@ -1,12 +1,16 @@
 package com.shangyin.app.data.music
 
 /**
- * 音乐来源。目前只有 [BIT24]（24bit 无损，https://www.24bit.net）：
- * 搜索、播放直链、歌词全部由内置接口提供（免登录、不需要任何插件）。
+ * 音乐来源。
  *
- * 历史说明：v0.206 之前还支持"洛雪音源脚本"与网易云/QQ/酷我/酷狗/咪咕五个平台，按用户要求已全部移除。
+ * 主来源是 [S33VE]（闪闪音乐网 https://www.33ve.com）：搜索、播放直链、歌词、封面全都免登录免验证，
+ * 实测没有任何每日限额（详见 [Site33] 的注释）。
+ *
+ * [BIT24] 是上一版用的来源（www.24bit.net），它的详情页有**每日访问限额**，现在只用于兼容旧收藏
+ * （旧条目的 doubanId 前缀是 `bit24|…`，删掉会导致这些条目打不开）。
  */
 enum class MusicPlatform(val key: String, val label: String) {
+    S33VE("33ve", "音乐"),
     BIT24("bit24", "24bit无损");
 
     companion object {

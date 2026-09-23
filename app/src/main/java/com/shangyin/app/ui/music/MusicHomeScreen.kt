@@ -86,8 +86,8 @@ import kotlinx.coroutines.launch
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 数据来源：只有 24bit 无损（www.24bit.net）一个来源，搜索/歌词走 App 内置接口（[MusicRepo]），
- * 播放直链由 [com.shangyin.app.data.music.Bit24] 从 24bit 详情页现取。
+ * 数据来源：音乐来源（闪闪音乐网 https://www.33ve.com），搜索/歌词/封面都由内置接口提供；
+ * 播放直链由 [com.shangyin.app.data.music.Site33] 在播放时现取（直链带时效签名）。
  */
 
 /** 翻页步长：接口每页返回 30 条，用来判断"是否还有下一页" */
@@ -124,7 +124,7 @@ fun MusicHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 24bit 详情页有每日访问限额：命中后播放/下载都会失败，这里提前说清楚，别让用户一脸问号
+            // 24bit（旧来源）的详情页有每日限额：只有播旧收藏时才会命中，命中后提前说清楚
             if (com.shangyin.app.data.music.Bit24.quotaExceeded()) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -413,7 +413,7 @@ private fun SearchTab(st: SearchTabState) {
         OutlinedTextField(
             value = st.input,
             onValueChange = { st.input = it },
-            placeholder = { Text("搜索歌曲（24bit 无损）") },
+            placeholder = { Text("搜索歌曲 / 歌手") },
             singleLine = true,
             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),

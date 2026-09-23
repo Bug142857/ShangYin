@@ -31,35 +31,58 @@ object MusicRepo {
 
     // ---------------- 搜索 / 歌词 ----------------
 
-    /** 搜索（24bit 两个曲库合并） */
-    suspend fun search(keyword: String, page: Int = 1): List<MusicSong> = Bit24.search(keyword, page)
+    /** 搜索（主来源：33ve，搜索页 HTML 里自带封面，不用额外抓） */
+    suspend fun search(keyword: String, page: Int = 1): List<MusicSong> = Site33.search(keyword, page)
 
-    suspend fun lyric(song: MusicSong): MusicLyric = Bit24.lyric(song)
+    suspend fun lyric(song: MusicSong): MusicLyric = when (song.platform) {
+        MusicPlatform.S33VE -> Site33.lyric(song)
+        MusicPlatform.BIT24 -> Bit24.lyric(song)
+    }
 
-    /** 给搜索结果补封面（只补前几首未缓存的，24bit 详情页有每日限额，不能整页抓） */
-    suspend fun fillCovers(songs: List<MusicSong>, max: Int = 5): List<MusicSong> =
-        Bit24.fillCovers(songs, max)
+    /**
+     * 补封面：33ve 的搜索结果自带封面（不需要补）；只有旧收藏里的 24bit 条目才需要抓详情页。
+     * 24bit 详情页有每日限额，所以只补前几首。
+     */
+    suspend fun fillCovers(songs: List<MusicSong>, max: Int = 3): List<MusicSong> {
+        val legacy = songs.filter { it.platform == MusicPlatform.BIT24 }
+        if (legacy.isEmpty()) return songs
+        val filled = Bit24.fillCovers(legacy, max).associateBy { it.key }
+        return songs.map { filled[it.key] ?: it }
+    }
 
-    /** 收藏/清空直链缓存（换音源后强制重解析） */
+    /** 清空直链缓存（直链带时效签名，需要强制换新时用） */
     fun clearUrlCache() = urlCache.clear()
 
     // ---------------- 播放直链 ----------------
 
     /**
-     * 解析播放直链（24bit 的直链带时效签名，所以每次播放时实时解析，配合播放数据源的惰性解析）。
+     * 解析播放直链（两种来源的直链都带时效签名，所以播放时实时解析 + 4 分钟短缓存）。
      * 失败抛 [MusicResolveException]，消息直接展示给用户。
      */
     suspend fun resolvePlay(song: MusicSong): MusicPlayInfo {
         val cached = urlCache[song.key]
         if (cached != null && System.currentTimeMillis() - cached.second < URL_TTL_MS) {
-            return MusicPlayInfo(cached.first, Bit24.PLAY_HEADERS)
+            return MusicPlayInfo(cached.first, headersOf(song.platform))
         }
-        val result = Bit24.resolve(song)
-        val detail = result.detail ?: throw MusicResolveException(result.error ?: "没有可用的播放直连")
-        val url = detail.freshUrl(System.currentTimeMillis())
-            ?: detail.url ?: throw MusicResolveException("24bit 没给这首歌直链（可能已下架）")
+        val (url, error) = when (song.platform) {
+            MusicPlatform.S33VE -> {
+                val r = Site33.resolve(song)
+                r.url to r.error
+            }
+            MusicPlatform.BIT24 -> {
+                val r = Bit24.resolve(song)
+                val u = r.detail?.let { it.freshUrl(System.currentTimeMillis()) ?: it.url }
+                u to r.error
+            }
+        }
+        if (url.isNullOrBlank()) throw MusicResolveException(error ?: "没有可用的播放直连")
         urlCache[song.key] = url to System.currentTimeMillis()
-        return MusicPlayInfo(url, Bit24.PLAY_HEADERS)
+        return MusicPlayInfo(url, headersOf(song.platform))
+    }
+
+    private fun headersOf(platform: MusicPlatform): Map<String, String> = when (platform) {
+        MusicPlatform.S33VE -> Site33.PLAY_HEADERS
+        MusicPlatform.BIT24 -> Bit24.PLAY_HEADERS
     }
 
     // ---------------- 收藏（进里世界清单） ----------------
