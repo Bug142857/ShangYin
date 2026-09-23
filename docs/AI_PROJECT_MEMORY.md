@@ -198,6 +198,24 @@
   解析顺序改为：**内置直连（快且稳）→ LX 音源（高音质 & 其余平台的唯一通道）**，两边原因合并进报错文案。
   同时把播放失败的提示从 Toast（会截断，用户看不到原因）改为**可滚动的对话框**（`SelectionContainer`，方便截图回报）。
   ⚠️ 教训：**不要把可用性押在第三方聚合源上**——插件式音源只适合"锦上添花"，主链路要么自己实现（内置直连），要么对失败有兜底。
+- **v0.205（用户指定"换路子"：参考 24bit.net / 1music.cc）**：
+  用户放弃 LX 音源路线，指定参考 `https://www.24bit.net/` 与 `https://1music.cc/zh-CN`。抓包+curl 实测结论：
+  - **24bit.net（已接入，作为新的内置直连平台 `MusicPlatform.BIT24`）**：
+    - 搜索：`POST https://www.24bit.net/api/player/searchOnlineMusicOne`，`Content-Type: application/json`、
+      `Token: `（空即可）**免登录**，体为 `{"keyword":"<URL 编码后的词>","page":1}`，返回 `{status,result:[{id,name,player,album,cover}]}`
+    - ⚠️ **只有 searchOnlineMusicOne 的 id 能在详情页对上歌**；`searchOnlineMusicTwo` 的 id 打开详情页会**串成别的歌**
+      （实测 Two 搜"晴天/周杰伦"的 id → 详情页是"人面桃花/邓丽君"）→ 已弃用 Two（宁可结果少，不可放错歌）
+    - 播放直链：详情页 `https://www.24bit.net/music/a/{id}` 是 SSR，HTML 的 RSC 数据里内嵌
+      `itemMusic{url,size,quality,format,lrc}`；`url` 是网易云 CDN 直链（**带时效签名，每次打开都不同 → 只能播放时现取**，
+      我们的 `ResolvingDataSource` 惰性解析正好契合），实测 `206 audio/mpeg`、**不带 Referer 也能下**
+    - 歌词：同一份 `itemMusic.lrc` 直接可用（省了外部歌词接口）
+    - ⚠️ RSC 里的 JSON 被 `<script>` 又转义一层（反斜杠是**两层**）→ 还原要用"任意层反斜杠"正则：`\\+n`→换行、`\\+"`→引号、`\\+/`→斜杠
+  - **1music.cc（暂未接入）**：搜索 `GET https://api.1music.cc/search?songs=xx&token=yy` **强制要 Cloudflare Turnstile 令牌**
+    （无 token 400「缺少验证码令牌」；令牌没法用原生代码伪造）；`POST https://backend.1music.cc/preview|download/` 反而**免登录**，
+    返回带 salt 签名的 OSS 直链（**audio/webm/Opus**，站点自己用 ffmpeg.wasm 在前端转 mp3/flac）。
+    → 要用它只能"内嵌它的网页过 Turnstile 再取令牌/或直接在网页里搜索"，属于脆弱方案，未做。
+  - 界面：平台 chips 自动多出「24bit无损」；首页顶部提示改为**只在"当前平台无内置直连且没装音源"时**出现
+    （网易云/酷我/24bit 都能直接听，不给用户制造多余焦虑）。
 - **真机未验证项**（下次可先问用户）：音源直链实际能否出声（依赖用户网络与音源后端）、通知栏/锁屏控制、锁屏后台播放。
 - **v0.202（用户装机反馈后的两处修复）**：
   ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
