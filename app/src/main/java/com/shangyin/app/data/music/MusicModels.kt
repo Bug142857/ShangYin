@@ -1,11 +1,11 @@
 package com.shangyin.app.data.music
 
-import kotlinx.serialization.Serializable
-
 /**
- * 音乐平台。key 与 LX 自定义源（洛雪音源脚本）里的源 key 完全一致：
- * kw=酷我 / kg=酷狗 / tx=QQ音乐 / wy=网易云 / mg=咪咕。
- * 音源脚本初始化时返回的 sources 就是这个 key 的集合，两边必须对得上才能取到播放直链。
+ * 音乐来源。
+ *
+ * 现在只有 [BIT24]（用户指定：只保留 24bit 无损，其它来源不再使用）。
+ * 其余 5 个"平台"取值仅为**兼容旧收藏**而保留：老收藏的 doubanId 里写着 `wy|xxx` 这类前缀，
+ * 删掉枚举值会让这些条目解析不出歌曲（点开变砖），所以保留其取值 + 内置直连（见 [MusicNativeResolve]）。
  */
 enum class MusicPlatform(val key: String, val label: String) {
     WY("wy", "网易云"),
@@ -14,10 +14,7 @@ enum class MusicPlatform(val key: String, val label: String) {
     KG("kg", "酷狗"),
     MG("mg", "咪咕"),
 
-    /**
-     * 24bit 无损（https://www.24bit.net，聚合站，非"平台"但走同一套搜索/播放流程）。
-     * 它的搜索与播放直链都免登录、由 [MusicNativeResolve] 直接取，不依赖音源脚本。
-     */
+    /** 24bit 无损（https://www.24bit.net）：搜索、播放直链、歌词全部由内置接口提供 */
     BIT24("bit24", "24bit无损");
 
     companion object {
@@ -83,10 +80,13 @@ data class MusicPlayInfo(
     val headers: Map<String, String> = emptyMap()
 )
 
-/** 解析失败原因（区分"音源没装/没启用"与"音源返回失败"，界面照实提示，不静默吞） */
+/** 解析失败原因（消息直接展示给用户，不静默吞） */
 class MusicResolveException(message: String) : Exception(message)
 
-/** 各平台播放直链的默认请求头（音源脚本只返回 URL，防盗链头由 App 按平台补） */
+/**
+ * 播放请求头：[BIT24] 的直链来自网易云 CDN，站点自己用 referrerpolicy=no-referrer，实测不带 Referer 可下。
+ * 其余取值只为兼容旧收藏（旧的网易云/酷我歌仍能播）。
+ */
 object MusicPlayHeaders {
     fun forPlatform(platform: MusicPlatform): Map<String, String> {
         val ua = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 " +
@@ -95,73 +95,11 @@ object MusicPlayHeaders {
             MusicPlatform.WY -> mapOf(
                 "User-Agent" to ua, "Referer" to "https://music.163.com/"
             )
-            MusicPlatform.TX -> mapOf(
-                "User-Agent" to ua, "Referer" to "https://y.qq.com/"
-            )
             MusicPlatform.KW -> mapOf(
                 "User-Agent" to ua, "Referer" to "http://www.kuwo.cn/"
             )
-            MusicPlatform.KG -> mapOf(
-                "User-Agent" to ua, "Referer" to "https://www.kugou.com/"
-            )
-            MusicPlatform.MG -> mapOf(
-                "User-Agent" to ua, "Referer" to "https://music.migu.cn/"
-            )
-            // 24bit 的直链来自网易云 CDN，站点自己用 referrerpolicy=no-referrer，实测不带 Referer 可下
             MusicPlatform.BIT24 -> mapOf("User-Agent" to ua)
+            else -> mapOf("User-Agent" to ua)
         }
     }
-}
-
-/**
- * 已导入的 LX 自定义音源脚本（洛雪音源，见 https://github.com/pdone/lx-music-source）。
- * 脚本只负责解析播放直链（action=musicUrl），搜索/歌单/歌词数据由 App 内置接口提供。
- */
-@Serializable
-data class MusicSourceScript(
-    val id: String,
-    /** 脚本头部 @name */
-    val name: String,
-    val version: String = "",
-    val author: String = "",
-    val homepage: String = "",
-    val description: String = "",
-    /** 网络导入地址；本地导入时为 "local://文件名"（内容在 content 里） */
-    val url: String = "",
-    /** 脚本源码（导入时抓取并落盘，避免每次启动重新下载） */
-    val content: String = "",
-    val enabled: Boolean = true,
-    /** 初始化后拿到的平台 key → 支持的音质列表（UI 展示 + 选源用） */
-    val support: Map<String, List<String>> = emptyMap(),
-    /** 最近一次初始化失败原因（非空时 UI 显示"脚本异常"） */
-    val lastError: String? = null
-) {
-    val isLocal: Boolean get() = url.startsWith(LOCAL_PREFIX)
-
-    /** 是否声明支持某平台 */
-    fun supports(platform: MusicPlatform): Boolean =
-        support.containsKey(platform.key) && support[platform.key]?.isNotEmpty() == true
-
-    /** 某平台支持的音质档位（按高→低） */
-    fun qualitiesOf(platform: MusicPlatform): List<MusicQuality> =
-        support[platform.key].orEmpty().map { MusicQuality.of(it) }.sortedByDescending { it.level }
-
-    companion object {
-        const val LOCAL_PREFIX = "local://"
-    }
-}
-
-/**
- * 推荐音源的试跑结果（「测试推荐音源」用）：
- * [support] 非空 = 这个源在你当前网络下可用；否则 [error] 是失败原因。
- */
-data class SourceProbe(
-    val name: String,
-    val url: String,
-    val support: Map<String, List<String>>? = null,
-    val error: String? = null,
-    /** 下载到的脚本原文（可用时直接用它导入，省一次下载） */
-    val content: String = ""
-) {
-    val ok: Boolean get() = support != null
 }

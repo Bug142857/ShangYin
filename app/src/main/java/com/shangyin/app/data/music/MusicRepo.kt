@@ -46,63 +46,21 @@ object MusicRepo {
     fun preferredQuality(): MusicQuality = MusicQuality.of(SettingsStore.musicQuality)
 
     /**
-     * 解析播放直链。顺序：
-     * 1. **平台内置直连**（网易云/酷我，实测最稳最快，音源后端挂了也还能听）
-     * 2. **LX 音源脚本**（按已启用音源顺序尝试，音质从高到低降级）——能拿到更高音质，也是 QQ/酷狗/咪咕的唯一通道
-     * 全部失败抛 [MusicResolveException]，消息里带上两边的失败原因（给用户看，不静默吞）。
+     * 解析播放直链：走平台内置直连（[MusicNativeResolve]）。
+     * 24bit 的直链带时效签名，所以**每次播放时实时解析**（配合播放数据源的惰性解析，不会拿到过期链接）。
+     * 失败抛 [MusicResolveException]，消息直接展示给用户。
      */
     suspend fun resolvePlay(song: MusicSong, quality: MusicQuality = preferredQuality()): MusicPlayInfo {
         val cached = urlCache[song.key]
         if (cached != null && System.currentTimeMillis() - cached.second < URL_TTL_MS) {
             return MusicPlayInfo(cached.first, MusicPlayHeaders.forPlatform(song.platform))
         }
-
-        // 1) 内置直连
         val native = MusicNativeResolve.resolve(song)
-        if (native.url != null) {
-            urlCache[song.key] = native.url to System.currentTimeMillis()
-            return MusicPlayInfo(native.url, MusicPlayHeaders.forPlatform(song.platform))
+        if (native.url == null) {
+            throw MusicResolveException(native.error ?: "没有可用的播放直连")
         }
-
-        // 2) LX 音源
-        MusicSourceStore.ensureInitialized()
-        val scripts = MusicSourceStore.enabledFor(song.platform)
-        val errors = mutableListOf<String>()
-        for (script in scripts) {
-            val qualities = script.qualitiesOf(song.platform)
-                .filter { it.level <= quality.level }
-                .ifEmpty { script.qualitiesOf(song.platform) }
-            for (q in qualities) {
-                val url = try {
-                    LxSourceEngine.resolveUrl(script, song.platform, q, song)
-                } catch (e: Exception) {
-                    errors += "${script.name}（${q.label}）：${e.message ?: "解析失败"}"
-                    continue
-                }
-                urlCache[song.key] = url to System.currentTimeMillis()
-                return MusicPlayInfo(url, MusicPlayHeaders.forPlatform(song.platform))
-            }
-        }
-
-        // 3) 都失败：把原因说清楚（内置直连为什么不行 + 音源为什么不行）
-        throw MusicResolveException(buildString {
-            append(native.error ?: "内置直连不可用")
-            when {
-                errors.isNotEmpty() -> append("；音源：").append(errors.take(2).joinToString("；"))
-                scripts.isEmpty() -> append("；").append(noSourceMessage(song.platform))
-                else -> append("；音源未返回有效链接")
-            }
-        })
-    }
-
-    /** 没有音源可用时的提示（区分"没导入音源"与"导入了但不支持该平台"） */
-    fun noSourceMessage(platform: MusicPlatform): String {
-        val enabled = MusicSourceStore.all().filter { it.enabled }
-        return when {
-            enabled.isEmpty() -> "还没有可用的音乐音源，请到「音源管理」导入（推荐六音音源）"
-            enabled.any { it.support.isEmpty() } -> "音源尚未就绪，请到「音源管理」检查音源状态"
-            else -> "已启用的音源不支持「${platform.label}」，请到「音源管理」导入支持该平台的音源"
-        }
+        urlCache[song.key] = native.url to System.currentTimeMillis()
+        return MusicPlayInfo(native.url, MusicPlayHeaders.forPlatform(song.platform))
     }
 
     // ---------------- 收藏（进里世界清单） ----------------

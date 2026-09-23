@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Pause
@@ -36,7 +35,6 @@ import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -62,16 +60,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.music.MusicLyric
 import com.shangyin.app.data.music.MusicRepo
-import com.shangyin.app.data.music.MusicSourceStore
 import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
-import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
 /**
- * 完整播放页：大封面 / 歌词（点击封面切换）、可拖动进度条、播放控制、循环/随机/音质/收藏。
+ * 完整播放页：大封面 / 歌词（点击封面切换）、可拖动进度条、播放控制、循环/随机/收藏。
  * 离开页面不停播（播放器在 [MusicPlaybackService] 里，页面只是遥控器）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -83,7 +79,6 @@ fun MusicPlayerScreen(nav: NavHostController) {
     val song = state.song
 
     var showLyric by remember { mutableStateOf(false) }
-    var showQuality by remember { mutableStateOf(false) }
     var showCollect by remember { mutableStateOf(false) }
     var collected by remember { mutableStateOf(false) }
     var lyric by remember { mutableStateOf(MusicLyric()) }
@@ -319,7 +314,7 @@ fun MusicPlayerScreen(nav: NavHostController) {
                 }
             }
 
-            // 循环模式 / 随机 / 音质 / 收藏
+            // 循环模式 / 随机 / 收藏
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
@@ -342,9 +337,6 @@ fun MusicPlayerScreen(nav: NavHostController) {
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                TextButton(onClick = { showQuality = true }) {
-                    Text(state.quality.label)
-                }
                 IconButton(onClick = {
                     if (collected) {
                         Toast.makeText(context, "已在清单中", Toast.LENGTH_SHORT).show()
@@ -364,64 +356,6 @@ fun MusicPlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 音质选择：只列当前平台音源实际支持的档位
-    if (showQuality) {
-        val scripts by MusicSourceStore.scripts.collectAsStateWithLifecycle()
-        val platform = song.platform
-        val qualities = remember(scripts, platform) {
-            scripts.filter { it.enabled && it.supports(platform) }
-                .flatMap { it.qualitiesOf(platform) }
-                .distinct()
-                .sortedByDescending { it.level }
-        }
-        AlertDialog(
-            onDismissRequest = { showQuality = false },
-            title = { Text("选择音质") },
-            text = {
-                Column {
-                    if (qualities.isEmpty()) {
-                        Text(
-                            "当前没有支持「${platform.label}」的可用音源，请到「音源管理」导入",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        qualities.forEach { quality ->
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        MusicPlayback.setQuality(quality)
-                                        showQuality = false
-                                    }
-                                    .padding(vertical = 2.dp)
-                            ) {
-                                RadioButton(
-                                    selected = quality == state.quality,
-                                    onClick = {
-                                        MusicPlayback.setQuality(quality)
-                                        showQuality = false
-                                    }
-                                )
-                                Text("${quality.label}（${quality.key}）")
-                            }
-                        }
-                        Text(
-                            "换音质会重新解析播放直链，本首重播后生效",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.padding(top = 6.dp)
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showQuality = false }) { Text("关闭") }
-            }
-        )
-    }
-
     // 收藏到里世界清单
     if (showCollect) {
         CollectDialog(
@@ -436,7 +370,7 @@ fun MusicPlayerScreen(nav: NavHostController) {
     }
 }
 
-/** 播放页顶部栏（返回 + 音源入口） */
+/** 播放页顶部栏（返回） */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MusicTopBar(nav: NavHostController) {
@@ -445,11 +379,6 @@ private fun MusicTopBar(nav: NavHostController) {
         navigationIcon = {
             IconButton(onClick = { nav.safePopBackStack() }) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
-            }
-        },
-        actions = {
-            IconButton(onClick = { nav.safeNavigate("musicSources") }) {
-                Icon(Icons.Rounded.CloudDownload, contentDescription = "音源")
             }
         }
     )

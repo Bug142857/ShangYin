@@ -88,18 +88,6 @@ fun SourceHubScreen(nav: NavHostController) {
                 },
                 onClick = { nav.safeNavigate("liveSources") }
             )
-
-            // 音乐源配置（LX 自定义音源，洛雪音源脚本）
-            SourceHubCard(
-                icon = Icons.Rounded.MusicNote,
-                title = "音乐源配置",
-                subtitle = SettingsStore.getMusicSources().let { list ->
-                    val n = list.count { it.enabled }
-                    if (n > 0) "已启用 $n 个音源 · 里世界「音乐」搜索试听"
-                    else "导入洛雪音源脚本，解锁里世界「音乐」的在线试听"
-                },
-                onClick = { nav.safeNavigate("musicSources") }
-            )
         }
     }
 }

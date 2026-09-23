@@ -152,12 +152,6 @@ object MusicPlayback {
         runWhenConnected { shuffleModeEnabled = !shuffleModeEnabled }
     }
 
-    /** 切换音质：清掉已解析的直链缓存，下一首（或本首重播）按新音质解析 */
-    fun setQuality(quality: MusicQuality) {
-        MusicRepo.clearUrlCache()
-        _state.update { it.copy(quality = quality) }
-    }
-
     fun consumeError() {
         _state.update { it.copy(error = null) }
     }

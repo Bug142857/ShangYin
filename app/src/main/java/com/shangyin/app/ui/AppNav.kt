@@ -220,10 +220,9 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             // 电视 = 自定义 M3U / M3U8 源（里世界第六入口；页内搜索，返回键逐级返回）
             composable("tvHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
             composable("liveSources") { com.shangyin.app.ui.live.LiveSourcesScreen(nav) }
-            // 音乐 = LX 自定义音源 + 内置五平台接口（里世界第七入口）
+            // 音乐 = 24bit 无损（里世界第七入口；搜索/直链/歌词均由内置接口提供）
             composable("musicHome") { com.shangyin.app.ui.music.MusicHomeScreen(nav) }
             composable("musicPlayer") { com.shangyin.app.ui.music.MusicPlayerScreen(nav) }
-            composable("musicSources") { com.shangyin.app.ui.music.MusicSourceScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

@@ -21,8 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
@@ -30,7 +28,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Pause
@@ -39,7 +36,6 @@ import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,7 +68,6 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.music.MusicPlatform
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.data.music.MusicSong
-import com.shangyin.app.data.music.MusicSourceStore
 import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
@@ -83,8 +78,8 @@ import kotlinx.coroutines.launch
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 数据来源：搜索/歌词走 App 内置接口（[MusicRepo]），播放直链由 LX 音源脚本解析
- * （音源在「音源管理」页导入，右上角入口）。
+ * 数据来源：只有 24bit 无损（www.24bit.net）一个来源，搜索/歌词走 App 内置接口（[MusicRepo]），
+ * 播放直链由 [MusicNativeResolve] 从详情页现取。
  */
 
 /** 翻页步长（与 MusicApis 默认 limit 一致，用来判断"是否还有下一页"） */
@@ -93,19 +88,15 @@ private const val PAGE_SIZE = 30
 /** 翻页上限：接口不支持翻页时靠"本页没有新增"提前结束，这里再兜一层防死循环 */
 private const val MAX_PAGE = 20
 
-/** 有内置直连（不装音源也能播）的平台 */
-private val NATIVE_PLATFORMS = setOf(MusicPlatform.WY, MusicPlatform.KW, MusicPlatform.BIT24)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MusicHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
     val searchState = MusicSearchSession.state
 
-    // 进音乐模块：连接播放服务 + 初始化音源（幂等）
+    // 进音乐模块：连接播放服务（幂等）
     LaunchedEffect(Unit) {
         MusicPlayback.init(context)
-        MusicSourceStore.ensureInitialized()
     }
 
     Scaffold(
@@ -116,11 +107,6 @@ fun MusicHomeScreen(nav: NavHostController) {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
-                },
-                actions = {
-                    IconButton(onClick = { nav.safeNavigate("musicSources") }) {
-                        Icon(Icons.Rounded.CloudDownload, contentDescription = "音源")
-                    }
                 }
             )
         }
@@ -130,23 +116,6 @@ fun MusicHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 只有"当前选的平台没有内置直连、又没装音源"时才提示——网易云/酷我/24bit 都能直接听
-            val scripts by MusicSourceStore.scripts.collectAsStateWithLifecycle()
-            val platformNeedsSource = searchState.platform !in NATIVE_PLATFORMS
-            if (platformNeedsSource && scripts.none { it.enabled && it.support.isNotEmpty() }) {
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { nav.safeNavigate("musicSources") }
-                ) {
-                    Text(
-                        "「${searchState.platform.label}」需要音源才能播放：点这里导入（推荐 LX / 幻音 / 长青）",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
-            }
             Box(Modifier.weight(1f)) {
                 SearchTab(searchState)
             }
@@ -219,7 +188,6 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
 // ==================== 搜索 ====================
 
 private class SearchTabState {
-    var platform by mutableStateOf(MusicPlatform.WY)
     var input by mutableStateOf("")
     var keyword by mutableStateOf("")
     var results by mutableStateOf<List<MusicSong>>(emptyList())
@@ -232,7 +200,7 @@ private class SearchTabState {
 }
 
 /**
- * 会话级搜索结果缓存：`remember { }` 在导航回本页时会重建（进播放页/音源页再返回搜索就没了），
+ * 会话级搜索结果缓存：`remember { }` 在导航回本页时会重建（进播放页再返回搜索就没了），
  * 与漫画/游戏模块同一口径——把状态挂在单例上，返回时结果还在。
  */
 private object MusicSearchSession {
@@ -264,7 +232,7 @@ private fun SearchTab(st: SearchTabState) {
         }
         st.error = null
         scope.launch {
-            runCatching { MusicRepo.search(st.platform, kw, page) }
+            runCatching { MusicRepo.search(MusicPlatform.BIT24, kw, page) }
                 .onSuccess { list ->
                     if (kw != st.keyword) return@onSuccess // 关键词已变，丢弃旧响应
                     val oldSize = st.results.size
@@ -301,15 +269,6 @@ private fun SearchTab(st: SearchTabState) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        PlatformChips(st.platform) { p ->
-            st.platform = p
-            st.results = emptyList()
-            st.searched = false
-            st.endReached = false
-            st.page = 1
-            st.error = null
-        }
-
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -319,7 +278,7 @@ private fun SearchTab(st: SearchTabState) {
             OutlinedTextField(
                 value = st.input,
                 onValueChange = { st.input = it },
-                placeholder = { Text("搜索歌曲 / 歌手") },
+                placeholder = { Text("搜索歌曲（24bit 无损）") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                 keyboardActions = KeyboardActions(onSearch = {
@@ -363,7 +322,7 @@ private fun SearchTab(st: SearchTabState) {
                 MusicErrorBox(st.error!!, onRetry = { load(1) })
 
             st.results.isEmpty() ->
-                if (st.searched) EmptyView("没有找到相关歌曲，换个关键词或平台试试")
+                if (st.searched) EmptyView("没有找到相关歌曲，换个关键词试试")
                 else EmptyView("输入关键词搜索，或长按结果收藏到清单")
 
             else -> LazyColumn(
@@ -435,23 +394,6 @@ internal fun rememberCollectedKeys(): Set<String> {
     val flow = remember { MusicRepo.observeAllSongs() }
     val songs by flow.collectAsStateWithLifecycle(initialValue = emptyList())
     return remember(songs) { songs.map { it.key }.toSet() }
-}
-
-/** 平台选择 chips */
-@Composable
-internal fun PlatformChips(selected: MusicPlatform, onSelect: (MusicPlatform) -> Unit) {
-    LazyRow(
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(MusicPlatform.entries, key = { it.key }) { platform ->
-            FilterChip(
-                selected = platform == selected,
-                onClick = { onSelect(platform) },
-                label = { Text(platform.label) }
-            )
-        }
-    }
 }
 
 /**
