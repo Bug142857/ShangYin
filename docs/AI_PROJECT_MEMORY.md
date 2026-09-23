@@ -156,12 +156,27 @@
 - **⚠️ 必删的旧逻辑**：v2.9.0 移除音乐功能时留了「每次启动清理音乐数据」的代码（`Repo.purgeMusicData` + `ItemDao.deleteMusicItems` +
   `ListDao.musicListTreeIds` + MainActivity 调用）——不删的话新收藏**每次冷启动都会被清空**。本次已整体移除。
 - **实测取证方法（可复用）**：`$env:TEMP\lx_test` 下有离线验证工具——`harness.js`（Node vm 模拟宿主）、
-  `gen_matrix.js` + `server.js`（本地静态服务 + `/proxy` 服务端转发，把 10 个推荐音源各放一个 iframe 跑，浏览器里看 `#out` 矩阵）。
-  **结论**：引擎链路（注入脚本 → inited 事件 → lx.request 桥 → musicUrl 派发）在真实浏览器里验证通过（ikun/huibq/lx 都能正确上报平台与音质）；
-  但**各音源后端可用性差异极大**（sixyin 依赖自家站点、huibq 的 onrender 503、ikun/88.lxmusic 国内不可达），
+  `gen_matrix.js` + `server.js`（本地静态服务 + `/proxy` 服务端转发，把 10 个推荐音源各放一个 iframe 跑，浏览器里看 `#out` 矩阵）、
+  `gen_probe.js`（**宿主能力探针**：Proxy 记录脚本访问了哪些 `lx.utils.*` 及返回值，用于定位"脚本要的宿主 API 我方没给"）。
+  **结论**：引擎链路（注入脚本 → inited 事件 → lx.request 桥 → musicUrl 派发）在真实浏览器里验证通过；
+  **10 个推荐音源里 8 个能初始化成功**（ikun / huibq / lx / flower / grass / changqing / huanyin / qdy，
+  实测分别打印"正常初始化/就绪/已加载"），只有 **sixyin**（初始化必须访问自家 www.sixyin.com）与 **juhe**（取完 init.conf 后仍失败）不通。
+  但**各音源后端可用性差异极大**（huibq 的 onrender 503、ikun/88.lxmusic 本机不可达），
   所以**不自动播种默认音源**，改为音源管理页一键导入 + 主页顶部引导条；解析失败一律把原因说给用户（不静默）。
-  ⚠️ 坑：Node 的 `vm` 环境里，混淆脚本（六音）会因反 Node 自检直接退出且无输出——**验证混淆脚本必须用真实浏览器**，别在 Node 里下"脚本坏了"的结论。
+  ⚠️ 坑 1：Node 的 `vm` 环境里，混淆脚本（六音）会因反 Node 自检直接退出且无输出——**验证混淆脚本必须用真实浏览器**。
+  ⚠️ 坑 2：**inited 事件的 `status` 字段是可选的**（多数音源只发 `sources`/`openDevTools`）——判成功要看 `sources` 非空，
+  不能按 `status` 判；我最初的矩阵/探针页按 `status` 判，把 changqing/huanyin/qdy 等**误报成"初始化失败"**，
+  差点据此去改本来没坏的 shim（App 侧 `LxSourceEngine.onInited` 从一开始就是"缺失 status 视为成功"，没踩这个坑）。
+  ⚠️ 坑 3：shim 里**超时定时器必须先于 `eval(script)` 安装**——幻音/全豆要等音源在**加载过程中同步**发 inited，
+  定时器后装会导致它清理不到、20 秒后多发一次假"初始化超时"回调（v0.202 已修）。
 - **真机未验证项**（下次可先问用户）：音源直链实际能否出声（依赖用户网络与音源后端）、通知栏/锁屏控制、锁屏后台播放。
+- **v0.202（用户装机反馈后的两处修复）**：
+  ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
+  而混淆过的音源（六音等）连这些字符串都是加密的 → 好脚本被拒。**已删掉关键字校验**，只拦明显不是脚本的内容（`<!doctype`/`<html`，
+  即下载到了 404 网页），真正的有效性交给脚本初始化结果判定（失败原因原样显示给用户）。教训：**不要在宿主侧用关键字猜脚本有效性**。
+  ② **音乐页按用户要求去掉「排行榜」「我的」两个 Tab**，只留搜索：删掉 `MusicBoardScreen.kt`、`musicBoard` 路由、
+  `MusicRepo.boards/boardSongs`、`MusicBoard` 模型以及 MusicApis 里 8 个平台榜单实现 + `TX_BOARDS`/`KW_BOARDS`/`MG_RANK_*`/`mgRankSong`/`fmtDate`
+  （搜索与歌词代码未动）。收藏的歌曲仍可在里世界清单里看到（收藏口径没变）。
 
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
