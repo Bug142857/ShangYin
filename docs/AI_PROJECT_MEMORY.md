@@ -137,3 +137,34 @@
 
 ## Lessons Learned
 - koa-connect wrapper caused subtle ctx.state data loss; native Koa rewrite is required instead of wrapping Express middleware
+
+## 音乐模块（v0.201，里世界「音乐」，commit c0fa8d1 / tag v0.201）
+- **架构**：`data/music`（模型 + 五平台接口 + LX 音源引擎 + 音源管理 + 仓库）、`ui/music`（主页/榜单/播放页/音源管理/迷你播放条/后台播放服务）。
+  数据（搜索/歌词/排行榜）走 **App 内置接口**，播放直链由 **LX 自定义音源脚本**解析——脚本只支持 musicUrl（+local 的 pic/lyric），这是洛雪官方协议，别指望它给搜索。
+- **音源引擎**：`LxSourceEngine` 用隐藏 WebView 承载脚本（`assets/lx/host.html` + `lx_shim.js` + vendor：crypto-js / jsencrypt / pako），
+  `lx.request` 经 `addJavascriptInterface` 转原生 OkHttp（绕 CORS，带内存 CookieJar），`lx.utils` 提供 buffer/crypto(md5,aes,rsa)/zlib。
+  一个脚本一个 WebView（独立全局环境），`settings.blockNetworkLoads=true`（脚本只能走 lx.request）。
+  ⚠️ 坑：① `LxSourceEngine` 是 object，内部桥接类不能用 `inner`（要 `LxSourceEngine.xxx` 限定）；
+  ② `JsonObjectBuilder` 无 `containsKey`，需要判断键存在就先用 `LinkedHashMap` 再 `JsonObject(map)`；
+  ③ 全数字的 musicInfo 字段下发成 JSON number，脚本里常做数值比较；缺 ID 字段会让脚本请求 `songId=undefined`。
+- **播放**：`MusicPlaybackService`（media3 `MediaSessionService`，通知栏/锁屏）+ `MusicPlayback`（全局 `MediaController` 单例，UI 只观察 `state`）。
+  列表里每首歌 URI 是 `lxmusic://song/{songKey}` 占位，**真正直链在数据源层解析**（`LxAudioDataSourceFactory` = `ResolvingDataSource` + `runBlocking`），
+  这样不用点开列表就把整页歌都解析一遍、直链也不会提前失效；`MusicQueueRegistry` 存歌曲原始字段供解析取用。
+  需 Manifest：`FOREGROUND_SERVICE`(+`_MEDIA_PLAYBACK`)、`POST_NOTIFICATIONS`、`WAKE_LOCK` + `<service ... foregroundServiceType="mediaPlayback">`；gradle 加 `androidx.media3:media3-session:1.7.1`。
+- **收藏**（用户指定复用里世界清单）：`category="音乐"`、`doubanId="{平台}|{歌曲ID}"`、`title`=歌名、`subTitle`=歌手、`coverUrl`=封面、
+  `info`=JSON{album,dur,raw}（raw 是音源解析必需的平台原始字段，`MusicRepo.songOf/encodeInfo` 负责互转）。
+- **⚠️ 必删的旧逻辑**：v2.9.0 移除音乐功能时留了「每次启动清理音乐数据」的代码（`Repo.purgeMusicData` + `ItemDao.deleteMusicItems` +
+  `ListDao.musicListTreeIds` + MainActivity 调用）——不删的话新收藏**每次冷启动都会被清空**。本次已整体移除。
+- **实测取证方法（可复用）**：`$env:TEMP\lx_test` 下有离线验证工具——`harness.js`（Node vm 模拟宿主）、
+  `gen_matrix.js` + `server.js`（本地静态服务 + `/proxy` 服务端转发，把 10 个推荐音源各放一个 iframe 跑，浏览器里看 `#out` 矩阵）。
+  **结论**：引擎链路（注入脚本 → inited 事件 → lx.request 桥 → musicUrl 派发）在真实浏览器里验证通过（ikun/huibq/lx 都能正确上报平台与音质）；
+  但**各音源后端可用性差异极大**（sixyin 依赖自家站点、huibq 的 onrender 503、ikun/88.lxmusic 国内不可达），
+  所以**不自动播种默认音源**，改为音源管理页一键导入 + 主页顶部引导条；解析失败一律把原因说给用户（不静默）。
+  ⚠️ 坑：Node 的 `vm` 环境里，混淆脚本（六音）会因反 Node 自检直接退出且无输出——**验证混淆脚本必须用真实浏览器**，别在 Node 里下"脚本坏了"的结论。
+- **真机未验证项**（下次可先问用户）：音源直链实际能否出声（依赖用户网络与音源后端）、通知栏/锁屏控制、锁屏后台播放。
+
+## 构建/发版备忘（2026-09-23 复核）
+- 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
+- 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
+  （本机**没有 gh CLI**，asset 名沿用拼音 `LaoZhengFenXiang-X.YYY.apk`）。
+- ⚠️ 沙箱**禁止写 `C:\Users\zsy\Desktop`**（把 APK 拷到桌面会报 restricted，需用户自行配置权限或从 Release 页下载）。
