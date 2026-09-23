@@ -169,6 +169,21 @@
   差点据此去改本来没坏的 shim（App 侧 `LxSourceEngine.onInited` 从一开始就是"缺失 status 视为成功"，没踩这个坑）。
   ⚠️ 坑 3：shim 里**超时定时器必须先于 `eval(script)` 安装**——幻音/全豆要等音源在**加载过程中同步**发 inited，
   定时器后装会导致它清理不到、20 秒后多发一次假"初始化超时"回调（v0.202 已修）。
+- **排查经验（v0.203 补）**：
+  - 初始化失败的两条超时文案来源不同，可据此判断"脚本到底跑没跑"：**JS 侧定时器**是 `脚本初始化超时：未收到 inited 事件`（中文冒号），
+    **Kotlin 兜底**是 `脚本初始化超时（未收到 inited 事件）`（括号）。看到冒号版 = WebView 页面与 `__lxLoadScript` 都正常执行了，
+    问题在脚本自身；看到括号版 = 注入/环境没起来。
+  - **六音音源的失败原因（实测结论）**：它**一个网络请求都不发**，只访问 `utils.buffer.from`/`bufToString`/`crypto.aesEncrypt`/`md5`/`randomBytes`/`rsaEncrypt`
+    之后就走失败分支（`脚本错误，加载音源信息失败`）；补齐 `rawScript` 也一样 → 是它自己的自校验/内嵌配置解密没通过（对宿主 crypto 语义有额外要求），**本机/浏览器均无法复现可用**。
+  - **shim 的 crypto/buffer 与 Node 原生对拍**（`$env:TEMP\lx_test\crypto_conformance.js`）：24 项里 20 项完全一致；
+    4 项"字符串 key 的 AES"不一致是**测试脚本跨 vm realm 传 string**（host TextEncoder 产的 Uint8Array 不被沙箱内 crypto-js 识别）造成的假差异，
+    App 里同一 realm 不存在该问题 → **不要据此改 shim**。要测字符串入参，得在沙箱内部构造 TextEncoder。
+- **v0.203（用户真机第二轮反馈）**：
+  ① **搜索结果返回后丢失**：`SearchTabState` 原来挂 `remember{}`，从音乐页进播放页/音源页再返回时 destination 重建 → 结果清空。
+  改为挂在单例 `MusicSearchSession.state` 上（与漫画/游戏模块"会话级缓存"同一口径）。
+  ② 新增 **「测试推荐音源」+「导入可用音源（N 个）」**（`MusicSourceStore.probe/importProbed` + 音源页 UI）：
+  各音源后端可用性差异极大，让用户在自己网络上**一键测出哪个能用**并批量导入（试跑不落库，可用源的原文直接复用、不重复下载）。
+  ③ 下载脚本**不再 trim 原文**（`downloadScript`）——个别音源按 rawScript 做完整性自校验，trim 首尾空白会让它校验对不上。
 - **真机未验证项**（下次可先问用户）：音源直链实际能否出声（依赖用户网络与音源后端）、通知栏/锁屏控制、锁屏后台播放。
 - **v0.202（用户装机反馈后的两处修复）**：
   ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
