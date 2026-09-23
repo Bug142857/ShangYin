@@ -9,8 +9,10 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.util.Base64
@@ -54,6 +56,7 @@ object MusicApis {
                 MusicPlatform.KW -> kwSearch(keyword, page, limit)
                 MusicPlatform.KG -> kgSearch(keyword, page, limit)
                 MusicPlatform.MG -> mgSearch(keyword, page, limit)
+                MusicPlatform.BIT24 -> bit24Search(keyword, page, limit)
             }
         }
 
@@ -65,11 +68,63 @@ object MusicApis {
             MusicPlatform.KW -> kwLyric(song.id)
             MusicPlatform.KG -> kgLyric(song)
             MusicPlatform.MG -> mgLyric(song)
+            MusicPlatform.BIT24 -> bit24Lyric(song.id)
         }
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Exception) {
         MusicLyric()
+    }
+
+    // ==================== 24bit 无损（https://www.24bit.net） ====================
+    // 接口实测（2026-09-23，curl 免登录 200）：
+    // - 搜索：POST /api/player/searchOnlineMusicOne，JSON 体且值要 URL 编码（{"keyword":"%E6%99%B4%E5%A4%A9","page":1}）
+    //   ⚠️ 只有 searchOnlineMusicOne 的 id 能在详情页对上歌；searchOnlineMusicTwo 的 id 会串成**别的歌**（已弃用，
+    //      "放错歌"比"搜不到"更糟，宁可结果少也不串）。
+    // - 详情页 /music/a/{id} 是 SSR，HTML 的 RSC 数据里内嵌
+    //   itemMusic{url(带时效签名的网易云 CDN 直链), size, quality, format, lrc(歌词)} —— 直链与歌词都从这来。
+
+    private val BIT24_HEADERS = mapOf("Referer" to "https://www.24bit.net/")
+
+    private suspend fun bit24Search(keyword: String, page: Int, limit: Int): List<MusicSong> {
+        val encoded = java.net.URLEncoder.encode(keyword, "UTF-8").replace("+", "%20")
+        val body = """{"keyword":"$encoded","page":$page}"""
+        val text = postJson("https://www.24bit.net/api/player/searchOnlineMusicOne", body, BIT24_HEADERS)
+        val arr = root(text).arr("result")
+        if (arr.isEmpty()) throw IllegalStateException("接口返回空")
+        return arr.mapNotNull { e -> bit24Song(e.asObject()) }.take(limit)
+    }
+
+    /** 歌词：详情页的 itemMusic.lrc（24bit 自带歌词，比外部歌词接口更贴合它自己的曲库） */
+    private suspend fun bit24Lyric(songId: String): MusicLyric {
+        val html = getText("https://www.24bit.net/music/a/$songId", BIT24_HEADERS)
+        return MusicLyric(lrc = bit24Lrc(html))
+    }
+
+    private fun bit24Song(o: JsonObject?): MusicSong? {
+        val id = o.str("id").takeIf { it.isNotBlank() } ?: return null
+        val name = o.str("name").takeIf { it.isNotBlank() } ?: return null
+        val player = o.str("player")
+        val album = o.str("album")
+        return MusicSong(
+            platform = MusicPlatform.BIT24,
+            id = id,
+            name = name,
+            artists = player,
+            album = album,
+            cover = o.str("cover"),
+            raw = mapOf("id" to id, "name" to name, "player" to player, "album" to album)
+        )
+    }
+
+    /** 从 SSR 的 RSC 数据里取出 itemMusic.lrc（JSON 在 <script> 里又被 JS 转义了一层，反斜杠数量不定） */
+    private fun bit24Lrc(html: String): String {
+        val raw = Regex("""\\+"lrc\\+":\\+"(.*?)\\+"\s*[},]""", RegexOption.DOT_MATCHES_ALL)
+            .find(html)?.groupValues?.getOrNull(1) ?: return ""
+        // 反斜杠层数不固定（实测是两层），统一按"任意层"还原
+        return raw.replace(Regex("\\\\+n"), "\n")
+            .replace(Regex("\\\\+\""), "\"")
+            .replace(Regex("\\\\+/"), "/")
     }
 
     // ==================== 网易云 wy ====================
@@ -547,6 +602,21 @@ object MusicApis {
         headers: Map<String, String> = emptyMap()
     ): String = withContext(Dispatchers.IO) {
         val body = FormBody.Builder().apply { form.forEach { (k, v) -> add(k, v) } }.build()
+        val builder = Request.Builder().url(url).post(body).header("User-Agent", UA)
+        headers.forEach { (k, v) -> builder.header(k, v) }
+        client.newCall(builder.build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
+            resp.body?.string() ?: throw IllegalStateException("响应为空")
+        }
+    }
+
+    /** POST JSON 体（24bit 的接口要求 Content-Type: application/json，值内部自行 URL 编码） */
+    private suspend fun postJson(
+        url: String,
+        jsonBody: String,
+        headers: Map<String, String> = emptyMap()
+    ): String = withContext(Dispatchers.IO) {
+        val body = jsonBody.toRequestBody("application/json; charset=utf-8".toMediaType())
         val builder = Request.Builder().url(url).post(body).header("User-Agent", UA)
         headers.forEach { (k, v) -> builder.header(k, v) }
         client.newCall(builder.build()).execute().use { resp ->

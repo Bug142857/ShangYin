@@ -93,6 +93,9 @@ private const val PAGE_SIZE = 30
 /** 翻页上限：接口不支持翻页时靠"本页没有新增"提前结束，这里再兜一层防死循环 */
 private const val MAX_PAGE = 20
 
+/** 有内置直连（不装音源也能播）的平台 */
+private val NATIVE_PLATFORMS = setOf(MusicPlatform.WY, MusicPlatform.KW, MusicPlatform.BIT24)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MusicHomeScreen(nav: NavHostController) {
@@ -127,9 +130,10 @@ fun MusicHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 没有可用音源时的引导：搜索走内置接口能出数据，但播放要靠音源脚本换直链
+            // 只有"当前选的平台没有内置直连、又没装音源"时才提示——网易云/酷我/24bit 都能直接听
             val scripts by MusicSourceStore.scripts.collectAsStateWithLifecycle()
-            if (scripts.none { it.enabled && it.support.isNotEmpty() }) {
+            val platformNeedsSource = searchState.platform !in NATIVE_PLATFORMS
+            if (platformNeedsSource && scripts.none { it.enabled && it.support.isNotEmpty() }) {
                 Surface(
                     color = MaterialTheme.colorScheme.tertiaryContainer,
                     modifier = Modifier
@@ -137,7 +141,7 @@ fun MusicHomeScreen(nav: NavHostController) {
                         .clickable { nav.safeNavigate("musicSources") }
                 ) {
                     Text(
-                        "还没有可用音源，点这里导入（推荐六音 / LX 音源）——搜索能出歌，播放需要音源解析直链",
+                        "「${searchState.platform.label}」需要音源才能播放：点这里导入（推荐 LX / 幻音 / 长青）",
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )

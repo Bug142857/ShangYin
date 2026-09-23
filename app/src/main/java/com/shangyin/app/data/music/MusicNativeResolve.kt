@@ -41,9 +41,31 @@ object MusicNativeResolve {
             when (song.platform) {
                 MusicPlatform.WY -> wy(song)
                 MusicPlatform.KW -> kw(song)
+                MusicPlatform.BIT24 -> bit24(song)
                 else -> NativeResult(error = "${song.platform.label}没有内置直连")
             }
         }.getOrElse { NativeResult(error = "内置直连请求失败：${it.message ?: it.javaClass.simpleName}") }
+    }
+
+    /**
+     * 24bit 无损：详情页是 SSR，HTML 的 RSC 数据里内嵌 `itemMusic{url,...}`。
+     * 直链带**时效签名**（同一个 id 每次打开 url 都不同），所以只能播放时现取（正合我们的惰性解析）。
+     * 实测：返回的 mp3/flac 直链不带 Referer 也能下（站点自己用 referrerpolicy=no-referrer）。
+     */
+    private fun bit24(song: MusicSong): NativeResult {
+        val request = Request.Builder()
+            .url("https://www.24bit.net/music/a/${song.id}")
+            .header("User-Agent", UA)
+            .header("Referer", "https://www.24bit.net/")
+            .build()
+        client.newCall(request).execute().use { resp ->
+            val html = resp.body?.string().orEmpty()
+            // RSC 里 JSON 被转义：\"url\":\"https://...\"
+            val url = Regex("""\\+"url\\+":\\+"(https?://[^"\\]+)""")
+                .find(html)?.groupValues?.getOrNull(1)
+            return if (!url.isNullOrBlank()) NativeResult(url = url)
+            else NativeResult(error = "24bit 页面里没取到直链（歌曲可能已下架）")
+        }
     }
 
     private fun wy(song: MusicSong): NativeResult {

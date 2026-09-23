@@ -12,7 +12,13 @@ enum class MusicPlatform(val key: String, val label: String) {
     TX("tx", "QQ音乐"),
     KW("kw", "酷我"),
     KG("kg", "酷狗"),
-    MG("mg", "咪咕");
+    MG("mg", "咪咕"),
+
+    /**
+     * 24bit 无损（https://www.24bit.net，聚合站，非"平台"但走同一套搜索/播放流程）。
+     * 它的搜索与播放直链都免登录、由 [MusicNativeResolve] 直接取，不依赖音源脚本。
+     */
+    BIT24("bit24", "24bit无损");
 
     companion object {
         fun of(key: String): MusicPlatform? = entries.firstOrNull { it.key == key }
@@ -101,6 +107,8 @@ object MusicPlayHeaders {
             MusicPlatform.MG -> mapOf(
                 "User-Agent" to ua, "Referer" to "https://music.migu.cn/"
             )
+            // 24bit 的直链来自网易云 CDN，站点自己用 referrerpolicy=no-referrer，实测不带 Referer 可下
+            MusicPlatform.BIT24 -> mapOf("User-Agent" to ua)
         }
     }
 }
