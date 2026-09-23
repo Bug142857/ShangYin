@@ -92,11 +92,24 @@ fun MusicPlayerScreen(nav: NavHostController) {
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
 
-    // 播放错误提示一次后清掉
+    // 播放错误：用对话框展示完整原因（Toast 会截断，用户看不到到底是哪个环节失败）
+    var errorText by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(state.error) {
         val err = state.error ?: return@LaunchedEffect
-        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+        errorText = err
         MusicPlayback.consumeError()
+    }
+    errorText?.let { text ->
+        AlertDialog(
+            onDismissRequest = { errorText = null },
+            title = { Text("播放失败") },
+            text = {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(text, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { errorText = null }) { Text("知道了") } }
+        )
     }
 
     // 换歌：重置进度拖动、拉歌词、查收藏状态

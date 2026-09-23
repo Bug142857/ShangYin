@@ -46,19 +46,27 @@ object MusicRepo {
     fun preferredQuality(): MusicQuality = MusicQuality.of(SettingsStore.musicQuality)
 
     /**
-     * 解析播放直链：按已启用音源顺序尝试，音源不支持的音质自动往下降级。
-     * 全部失败抛 [MusicResolveException]（消息直接展示给用户，不静默吞）。
+     * 解析播放直链。顺序：
+     * 1. **平台内置直连**（网易云/酷我，实测最稳最快，音源后端挂了也还能听）
+     * 2. **LX 音源脚本**（按已启用音源顺序尝试，音质从高到低降级）——能拿到更高音质，也是 QQ/酷狗/咪咕的唯一通道
+     * 全部失败抛 [MusicResolveException]，消息里带上两边的失败原因（给用户看，不静默吞）。
      */
     suspend fun resolvePlay(song: MusicSong, quality: MusicQuality = preferredQuality()): MusicPlayInfo {
         val cached = urlCache[song.key]
         if (cached != null && System.currentTimeMillis() - cached.second < URL_TTL_MS) {
             return MusicPlayInfo(cached.first, MusicPlayHeaders.forPlatform(song.platform))
         }
+
+        // 1) 内置直连
+        val native = MusicNativeResolve.resolve(song)
+        if (native.url != null) {
+            urlCache[song.key] = native.url to System.currentTimeMillis()
+            return MusicPlayInfo(native.url, MusicPlayHeaders.forPlatform(song.platform))
+        }
+
+        // 2) LX 音源
         MusicSourceStore.ensureInitialized()
         val scripts = MusicSourceStore.enabledFor(song.platform)
-        if (scripts.isEmpty()) {
-            throw MusicResolveException(noSourceMessage(song.platform))
-        }
         val errors = mutableListOf<String>()
         for (script in scripts) {
             val qualities = script.qualitiesOf(song.platform)
@@ -75,10 +83,16 @@ object MusicRepo {
                 return MusicPlayInfo(url, MusicPlayHeaders.forPlatform(song.platform))
             }
         }
-        throw MusicResolveException(
-            "音源解析失败：" + (errors.firstOrNull() ?: "没有可用音源") +
-                if (errors.size > 1) "（共 ${errors.size} 个音源尝试失败）" else ""
-        )
+
+        // 3) 都失败：把原因说清楚（内置直连为什么不行 + 音源为什么不行）
+        throw MusicResolveException(buildString {
+            append(native.error ?: "内置直连不可用")
+            when {
+                errors.isNotEmpty() -> append("；音源：").append(errors.take(2).joinToString("；"))
+                scripts.isEmpty() -> append("；").append(noSourceMessage(song.platform))
+                else -> append("；音源未返回有效链接")
+            }
+        })
     }
 
     /** 没有音源可用时的提示（区分"没导入音源"与"导入了但不支持该平台"） */
