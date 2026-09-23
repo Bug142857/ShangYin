@@ -167,4 +167,7 @@
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
   （本机**没有 gh CLI**，asset 名沿用拼音 `LaoZhengFenXiang-X.YYY.apk`）。
-- ⚠️ 沙箱**禁止写 `C:\Users\zsy\Desktop`**（把 APK 拷到桌面会报 restricted，需用户自行配置权限或从 Release 页下载）。
+- APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\zsy\Desktop\老郑分享-X.YYY.apk`。
+  ⚠️ 桌面写入需要沙箱白名单：`C:\Users\zsy\.trae-cn\permission\global.json` 的
+  `resourceAuthorization.filesystem.readWrite` —— 2026-09-23 已把 `C:\\Users\\zsy\\Desktop` 整目录加入，
+  **改完立即生效、不用重启**（仅对单文件授权时每个新版本号都要重新批准，所以按目录授权更省事）。
