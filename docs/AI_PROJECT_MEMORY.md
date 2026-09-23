@@ -184,6 +184,20 @@
   ② 新增 **「测试推荐音源」+「导入可用音源（N 个）」**（`MusicSourceStore.probe/importProbed` + 音源页 UI）：
   各音源后端可用性差异极大，让用户在自己网络上**一键测出哪个能用**并批量导入（试跑不落库，可用源的原文直接复用、不重复下载）。
   ③ 下载脚本**不再 trim 原文**（`downloadScript`）——个别音源按 rawScript 做完整性自校验，trim 首尾空白会让它校验对不上。
+- **v0.204（真机第三轮：终于能出声）**：
+  用户实测：10 个推荐音源里 8 个"可用"且都已导入，但**播放仍失败**（`音源解析失败：Huibq_lxmusic 源（…）`）。
+  取证：**聚合音源的后端服务器极不稳定**——Huibq 的 `lxmusicapi.onrender.com` 返回 **503**、`api.ikunshare.com` 不可达
+  （作者自己的服务，说挂就挂，且多为境外主机）。
+  **正解：加平台内置直连兜底 `MusicNativeResolve`**（实测可用的公开通道）：
+  - 网易云 `https://music.163.com/song/media/outer/url?id={id}.mp3` → 302 跳 `m70x.music.126.net`，
+    带 `Referer: https://music.163.com/` 下载得到 **200 audio/mpeg**（4 分钟约 3.8MB）✓
+  - 酷我 `http://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3&response=url&rid=MUSIC_{rid}` → 返回直链文本，
+    下载 **206 audio/mpeg** ✓（必须带 `Referer: http://www.kuwo.cn/`）
+  - 酷狗 `trackercdn`（key=md5(hash+"kgcloudv2")）返回 `status:2` 无 url、咪咕 `listenSong.do` 参数校验苛刻、
+    QQ 需 vkey 签名 → **这三家仍只能靠音源脚本**
+  解析顺序改为：**内置直连（快且稳）→ LX 音源（高音质 & 其余平台的唯一通道）**，两边原因合并进报错文案。
+  同时把播放失败的提示从 Toast（会截断，用户看不到原因）改为**可滚动的对话框**（`SelectionContainer`，方便截图回报）。
+  ⚠️ 教训：**不要把可用性押在第三方聚合源上**——插件式音源只适合"锦上添花"，主链路要么自己实现（内置直连），要么对失败有兜底。
 - **真机未验证项**（下次可先问用户）：音源直链实际能否出声（依赖用户网络与音源后端）、通知栏/锁屏控制、锁屏后台播放。
 - **v0.202（用户装机反馈后的两处修复）**：
   ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
