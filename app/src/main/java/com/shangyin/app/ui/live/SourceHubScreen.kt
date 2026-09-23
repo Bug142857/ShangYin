@@ -15,6 +15,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.LiveTv
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -86,6 +87,18 @@ fun SourceHubScreen(nav: NavHostController) {
                     else "导入 M3U / M3U8 电视源（网络地址或本地文件）"
                 },
                 onClick = { nav.safeNavigate("liveSources") }
+            )
+
+            // 音乐源配置（LX 自定义音源，洛雪音源脚本）
+            SourceHubCard(
+                icon = Icons.Rounded.MusicNote,
+                title = "音乐源配置",
+                subtitle = SettingsStore.getMusicSources().let { list ->
+                    val n = list.count { it.enabled }
+                    if (n > 0) "已启用 $n 个音源 · 里世界「音乐」搜索试听"
+                    else "导入洛雪音源脚本，解锁里世界「音乐」的在线试听"
+                },
+                onClick = { nav.safeNavigate("musicSources") }
             )
         }
     }

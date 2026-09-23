@@ -160,6 +160,36 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     // 全部清单名映射（搜索结果显示"来自哪个子清单"）
     val allLists by Repo.observeAllLists().collectAsStateWithLifecycle(initialValue = emptyList())
     val listNameById = remember(allLists) { allLists.associate { it.id to it.name } }
+
+    // ---- 音乐条目：点歌直接播（整份清单当播放队列），不进条目详情页 ----
+    val context = LocalContext.current
+    // Android 13+ 通知需运行时授权：从清单里直接起播也要申请，否则通知栏没有播放控制
+    val notifPermission = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { }
+    fun ensureNotifPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    val musicSongs = remember(items) {
+        items.mapNotNull { com.shangyin.app.data.music.MusicRepo.songOf(it) }
+    }
+    fun openEntity(entity: CollectionItemEntity) {
+        val song = com.shangyin.app.data.music.MusicRepo.songOf(entity)
+        if (song != null && musicSongs.isNotEmpty()) {
+            val idx = musicSongs.indexOfFirst { it.key == song.key }.coerceAtLeast(0)
+            ensureNotifPermission()
+            com.shangyin.app.ui.music.MusicPlayback.play(context, musicSongs, idx)
+            nav.safeNavigate("musicPlayer")
+        } else {
+            nav.safeNavigate("item/${entity.id}")
+        }
+    }
     // 数据变化时若正在搜索则重查（避免结果过期）
     LaunchedEffect(isSearching, searchQuery, items.size, childLists.size) {
         if (!isSearching || searchQuery.isBlank()) {
@@ -267,7 +297,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                 }
             )
         },
-        bottomBar = {}
+        // 音乐清单里点歌后，页面底部常驻迷你播放条（没在播时不渲染）
+        bottomBar = { com.shangyin.app.ui.music.MusicMiniPlayer(nav) }
     ) { pad ->
         // 搜索模式：显示本清单 + 所有子清单的匹配条目
         if (isSearching) {
@@ -297,7 +328,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
                                 .combinedClickable(
-                                    onClick = { nav.safeNavigate("item/${r.item.id}") },
+                                    onClick = { openEntity(r.item) },
                                     // 长按 → 从所属清单移除（有时就是搜出来删的）
                                     onLongClick = { deleteSearchTarget = r }
                                 )
@@ -388,7 +419,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
                                 onTap = {},
                                 onLongPress = {}
-                            ) else Modifier.fillMaxWidth().clickable { nav.safeNavigate("item/${item.id}") })
+                            ) else Modifier.fillMaxWidth().clickable { openEntity(item) })
                                 .graphicsLayer {
                                     scaleX = scale; scaleY = scale
                                     shadowElevation = if (isDragging) 24f else 0f
@@ -443,7 +474,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 onTap = {},
                                 onLongPress = {}
                             ) else Modifier.fillMaxWidth().clickable {
-                                nav.safeNavigate("item/${item.id}")
+                                openEntity(item)
                             })
                                 .graphicsLayer {
                                     scaleX = scale; scaleY = scale

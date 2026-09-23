@@ -233,6 +233,35 @@ object SettingsStore {
         }
     }
 
+    // ---------- 音乐（LX 自定义音源 + 音质） ----------
+
+    private const val KEY_MUSIC_SOURCES = "music_sources_json"
+    private const val KEY_MUSIC_QUALITY = "music_quality"
+
+    /** 已导入的 LX 自定义音源脚本（JSON 持久化） */
+    var musicSourcesJson: String
+        get() = sp.getString(KEY_MUSIC_SOURCES, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_MUSIC_SOURCES, v).apply()
+
+    fun getMusicSources(): List<com.shangyin.app.data.music.MusicSourceScript> = runCatching {
+        if (musicSourcesJson.isBlank()) emptyList()
+        else vodJson.decodeFromString<List<com.shangyin.app.data.music.MusicSourceScript>>(musicSourcesJson)
+    }.getOrDefault(emptyList())
+
+    fun setMusicSources(list: List<com.shangyin.app.data.music.MusicSourceScript>) {
+        musicSourcesJson = vodJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(
+                com.shangyin.app.data.music.MusicSourceScript.serializer()
+            ),
+            list
+        )
+    }
+
+    /** 默认音质（128k/320k/flac/flac24bit）；音源不支持时自动降级 */
+    var musicQuality: String
+        get() = sp.getString(KEY_MUSIC_QUALITY, "320k").orEmpty().ifBlank { "320k" }
+        set(v) = sp.edit().putString(KEY_MUSIC_QUALITY, v).apply()
+
     // ---------- 在线观影（片源管理 + 播放进度） ----------
 
     private const val KEY_VOD_SOURCES = "vod_sources_json"

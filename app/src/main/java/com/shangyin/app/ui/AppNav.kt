@@ -220,6 +220,25 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             // 电视 = 自定义 M3U / M3U8 源（里世界第六入口；页内搜索，返回键逐级返回）
             composable("tvHome") { com.shangyin.app.ui.live.LiveHomeScreen(nav) }
             composable("liveSources") { com.shangyin.app.ui.live.LiveSourcesScreen(nav) }
+            // 音乐 = LX 自定义音源 + 内置五平台接口（里世界第七入口）
+            composable("musicHome") { com.shangyin.app.ui.music.MusicHomeScreen(nav) }
+            composable("musicPlayer") { com.shangyin.app.ui.music.MusicPlayerScreen(nav) }
+            composable("musicSources") { com.shangyin.app.ui.music.MusicSourceScreen(nav) }
+            composable(
+                route = "musicBoard/{platformKey}/{boardId}/{boardName}",
+                arguments = listOf(
+                    navArgument("platformKey") { type = NavType.StringType },
+                    navArgument("boardId") { type = NavType.StringType },
+                    navArgument("boardName") { type = NavType.StringType; defaultValue = "" }
+                )
+            ) { entry ->
+                com.shangyin.app.ui.music.MusicBoardScreen(
+                    nav,
+                    platformKey = entry.arguments?.getString("platformKey").orEmpty(),
+                    boardId = entry.arguments?.getString("boardId").orEmpty(),
+                    boardName = entry.arguments?.getString("boardName").orEmpty()
+                )
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -245,6 +246,12 @@ private fun InnerWorld(
                 modifier = Modifier.weight(1f),
                 onClick = { nav.safeNavigate("comicHome") }
             )
+            InnerWorldEntry(
+                icon = Icons.Rounded.SportsEsports,
+                title = "游戏",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("gameHome") }
+            )
         }
         Row(
             modifier = Modifier
@@ -252,12 +259,6 @@ private fun InnerWorld(
                 .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            InnerWorldEntry(
-                icon = Icons.Rounded.SportsEsports,
-                title = "游戏",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("gameHome") }
-            )
             InnerWorldEntry(
                 icon = Icons.Rounded.Book,
                 title = "图书",
@@ -269,6 +270,12 @@ private fun InnerWorld(
                 title = "电视",
                 modifier = Modifier.weight(1f),
                 onClick = { nav.safeNavigate("tvHome") }
+            )
+            InnerWorldEntry(
+                icon = Icons.Rounded.MusicNote,
+                title = "音乐",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("musicHome") }
             )
         }
         WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))

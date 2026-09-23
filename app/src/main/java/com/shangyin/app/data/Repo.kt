@@ -326,6 +326,36 @@ object Repo {
         return if (id > 0) id else itemDao.findByDouban(category, doubanId)?.id ?: -1L
     }
 
+    /**
+     * 保存音乐条目：与 [saveCustomItem] 同口径，额外把音源解析需要的元数据（原平台字段）
+     * 存进 info 字段 —— 收藏的歌下次播放时要用它去音源脚本换直链。
+     */
+    suspend fun saveMusicItem(
+        doubanId: String,
+        title: String,
+        subTitle: String,
+        coverUrl: String?,
+        info: String
+    ): Long {
+        itemDao.findByDouban("音乐", doubanId)?.let { existing ->
+            if (existing.info.isBlank()) itemDao.update(existing.copy(info = info))
+            return existing.id
+        }
+        val id = itemDao.insert(
+            CollectionItemEntity(
+                category = "音乐", doubanId = doubanId, title = title,
+                coverUrl = coverUrl, subTitle = subTitle, info = info
+            )
+        )
+        return if (id > 0) id else itemDao.findByDouban("音乐", doubanId)?.id ?: -1L
+    }
+
+    /** 某条目是否已收藏（存在于任意清单） */
+    suspend fun isCollected(category: String, doubanId: String): Boolean {
+        val item = itemDao.findByDouban(category, doubanId) ?: return false
+        return listDao.countMemberships(item.id) > 0
+    }
+
     /** 加入清单：若已在清单内则忽略；同时用清单首图做清单封面 */
     suspend fun addItemToList(listId: Long, itemId: Long) {
         db.withTransaction {
@@ -388,23 +418,6 @@ object Repo {
         listItems = listDao.getAllListItemsSync(),
         vodSources = SettingsStore.getVodSources()
     )
-
-    /**
-     * 音乐功能已整体移除（v2.9.0，用户要求）：
-     * 启动时清理音乐条目、音乐清单及其子清单树（幂等，清理后无音乐数据残留）。
-     * 注意：非音乐条目即使挂在音乐清单下也保留（只解除清单归属，可在"清理孤立收藏"中处理）。
-     */
-    suspend fun purgeMusicData() {
-        db.withTransaction {
-            val musicListIds = listDao.musicListTreeIds()
-            if (musicListIds.isNotEmpty()) {
-                listDao.deleteLinksInLists(musicListIds)
-                listDao.deleteListsIn(musicListIds)
-            }
-            itemDao.deleteMusicItemLinks()
-            itemDao.deleteMusicItems()
-        }
-    }
 
     /**
      * 一次性数据迁移：收藏分类「直播」→「电视」。

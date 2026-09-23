@@ -17,8 +17,8 @@ android {
         // 版本号规则（2026-09-22 用户指定）：versionName = 上一版 + 1（不补零），从 0.190 起
         // （不再读 git 提交次数——那条规则会因"每轮 2 个提交"而每次 +2）
         // ⚠️ versionCode 固定取 1000 + N（0.190 → 1190）：必须单调递增，否则系统拒绝覆盖安装
-        versionCode = 1200
-        versionName = "0.200"
+        versionCode = 1201
+        versionName = "0.201"
 
         // FFmpeg 解码扩展（NextLib）带了 4 个 ABI 的原生库：只保留真机在用的两个，控制体积
         ndk {
@@ -120,6 +120,9 @@ dependencies {
     // FFmpeg 软件解码扩展（NextLib，预编译 AAR）：系统没有 MP2（audio/mpeg-L2）等解码器的机型靠它出声
     // ⚠️ 该库是 GPL-3.0（FFmpeg 系许可），随 App 一起分发时整个 App 需 GPL 兼容
     implementation("io.github.anilbeesetti:nextlib-media3ext:1.7.1-0.9.0")
+
+    // 音乐模块：MediaSessionService 提供后台播放 + 通知栏/锁屏控制（版本必须与上面 media3 一致）
+    implementation("androidx.media3:media3-session:1.7.1")
 
     debugImplementation(libs.androidx.ui.tooling)
 }
