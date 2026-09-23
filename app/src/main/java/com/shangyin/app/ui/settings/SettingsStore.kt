@@ -99,6 +99,28 @@ object SettingsStore {
         get() = sp.getBoolean(KEY_READER_VERTICAL, false)
         set(v) = sp.edit().putBoolean(KEY_READER_VERTICAL, v).apply()
 
+    // ---------- 清单详情页：布局 / 音乐排序（按清单 ID 分别记忆，跨重启保留） ----------
+
+    const val LAYOUT_GRID = "grid"
+    const val LAYOUT_LIST = "list"
+    const val SORT_ADDED = "added"
+    const val SORT_ARTIST = "artist"
+
+    /** 某清单的内容布局（key: list_layout_<id>）；从未设置过返回空串，由页面决定默认值 */
+    fun listLayout(listId: Long): String = sp.getString("list_layout_$listId", "").orEmpty()
+
+    fun setListLayout(listId: Long, value: String) {
+        sp.edit().putString("list_layout_$listId", value).apply()
+    }
+
+    /** 某清单音乐条目的排序（key: list_sort_<id>）：added=按添加时间（默认）/ artist=按歌手名称 */
+    fun listSort(listId: Long): String =
+        sp.getString("list_sort_$listId", "").orEmpty().ifBlank { SORT_ADDED }
+
+    fun setListSort(listId: Long, value: String) {
+        sp.edit().putString("list_sort_$listId", value).apply()
+    }
+
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 
     /** 导出关键配置快照（key 与 SP key 一致） */

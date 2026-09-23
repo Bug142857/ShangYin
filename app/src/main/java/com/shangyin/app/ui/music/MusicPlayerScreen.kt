@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,11 +15,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Pause
@@ -44,6 +47,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -58,6 +62,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.music.MusicDownloader
 import com.shangyin.app.data.music.MusicLyric
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.ui.common.CollectDialog
@@ -107,6 +112,40 @@ fun MusicPlayerScreen(nav: NavHostController) {
         )
     }
 
+    // 下载状态：downloading 为真时顶部按钮显示进度并禁止重复点击
+    var downloading by remember { mutableStateOf(false) }
+    var downloadPercent by remember { mutableIntStateOf(0) }
+    // 下载失败原因（原文展示，不静默）
+    var downloadError by remember { mutableStateOf<String?>(null) }
+    downloadError?.let { text ->
+        AlertDialog(
+            onDismissRequest = { downloadError = null },
+            title = { Text("下载失败") },
+            text = {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(text, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { downloadError = null }) { Text("知道了") } }
+        )
+    }
+
+    // 下载当前歌曲，进度回传到按钮；下载中忽略重复点击
+    fun startDownload() {
+        if (downloading) return
+        val target = song ?: return
+        downloading = true
+        downloadPercent = 0
+        scope.launch {
+            runCatching { MusicDownloader.download(context, target) { downloadPercent = it } }
+                .onSuccess { path ->
+                    Toast.makeText(context, "已保存到 $path", Toast.LENGTH_LONG).show()
+                }
+                .onFailure { e -> downloadError = e.message ?: "下载失败" }
+            downloading = false
+        }
+    }
+
     // 换歌：重置进度拖动、拉歌词、查收藏状态
     LaunchedEffect(song?.key) {
         dragging = false
@@ -146,7 +185,27 @@ fun MusicPlayerScreen(nav: NavHostController) {
         lyricState.animateScrollToItem(currentLine, -half.coerceAtLeast(0))
     }
 
-    Scaffold(topBar = { MusicTopBar(nav) }) { pad ->
+    Scaffold(topBar = {
+        MusicTopBar(nav) {
+            if (downloading) {
+                // 下载中：转圈 + 进度文字（拿不到总长时不显示百分比）
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(end = 12.dp)
+                ) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                    if (downloadPercent > 0) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("$downloadPercent%", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            } else {
+                IconButton(onClick = { startDownload() }) {
+                    Icon(Icons.Rounded.Download, contentDescription = "下载")
+                }
+            }
+        }
+    }) { pad ->
         Column(
             Modifier
                 .padding(pad)
@@ -370,17 +429,21 @@ fun MusicPlayerScreen(nav: NavHostController) {
     }
 }
 
-/** 播放页顶部栏（返回） */
+/** 播放页顶部栏（返回 + 可选的右侧动作，如下载） */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MusicTopBar(nav: NavHostController) {
+private fun MusicTopBar(
+    nav: NavHostController,
+    actions: @Composable RowScope.() -> Unit = {}
+) {
     TopAppBar(
         title = { Text("正在播放") },
         navigationIcon = {
             IconButton(onClick = { nav.safePopBackStack() }) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
             }
-        }
+        },
+        actions = actions
     )
 }
 

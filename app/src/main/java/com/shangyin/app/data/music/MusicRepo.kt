@@ -29,12 +29,16 @@ object MusicRepo {
     private val urlCache = ConcurrentHashMap<String, Pair<String, Long>>()
     private const val URL_TTL_MS = 4 * 60 * 1000L
 
-    // ---------------- 搜索 / 榜单 / 歌词（内置平台接口） ----------------
+    // ---------------- 搜索 / 歌词 ----------------
 
-    suspend fun search(platform: MusicPlatform, keyword: String, page: Int = 1): List<MusicSong> =
-        MusicApis.search(platform, keyword, page)
+    /** 搜索（24bit 两个曲库合并） */
+    suspend fun search(keyword: String, page: Int = 1): List<MusicSong> = Bit24.search(keyword, page)
 
-    suspend fun lyric(song: MusicSong): MusicLyric = MusicApis.lyric(song)
+    suspend fun lyric(song: MusicSong): MusicLyric = Bit24.lyric(song)
+
+    /** 给搜索结果补封面（只补前几首未缓存的，24bit 详情页有每日限额，不能整页抓） */
+    suspend fun fillCovers(songs: List<MusicSong>, max: Int = 5): List<MusicSong> =
+        Bit24.fillCovers(songs, max)
 
     /** 收藏/清空直链缓存（换音源后强制重解析） */
     fun clearUrlCache() = urlCache.clear()
@@ -48,14 +52,14 @@ object MusicRepo {
     suspend fun resolvePlay(song: MusicSong): MusicPlayInfo {
         val cached = urlCache[song.key]
         if (cached != null && System.currentTimeMillis() - cached.second < URL_TTL_MS) {
-            return MusicPlayInfo(cached.first, MusicNativeResolve.PLAY_HEADERS)
+            return MusicPlayInfo(cached.first, Bit24.PLAY_HEADERS)
         }
-        val native = MusicNativeResolve.resolve(song)
-        if (native.url == null) {
-            throw MusicResolveException(native.error ?: "没有可用的播放直连")
-        }
-        urlCache[song.key] = native.url to System.currentTimeMillis()
-        return MusicPlayInfo(native.url, MusicNativeResolve.PLAY_HEADERS)
+        val result = Bit24.resolve(song)
+        val detail = result.detail ?: throw MusicResolveException(result.error ?: "没有可用的播放直连")
+        val url = detail.freshUrl(System.currentTimeMillis())
+            ?: detail.url ?: throw MusicResolveException("24bit 没给这首歌直链（可能已下架）")
+        urlCache[song.key] = url to System.currentTimeMillis()
+        return MusicPlayInfo(url, Bit24.PLAY_HEADERS)
     }
 
     // ---------------- 收藏（进里世界清单） ----------------

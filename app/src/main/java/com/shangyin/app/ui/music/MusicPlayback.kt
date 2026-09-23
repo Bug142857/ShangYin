@@ -223,10 +223,10 @@ object MusicPlayback {
     }
 }
 
-/** 歌曲 → media3 播放项（URI 是占位符，真正地址由数据源在播放时向音源解析） */
+/** 歌曲 → media3 播放项（URI 是占位符，真正地址由数据源在播放时向 24bit 现取） */
 internal fun MusicSong.toMediaItem(): MediaItem = MediaItem.Builder()
     .setMediaId(key)
-    .setUri(Uri.parse("lxmusic://song/${Uri.encode(key)}"))
+    .setUri(Uri.parse("music://song/${Uri.encode(key)}"))
     .setMediaMetadata(
         MediaMetadata.Builder()
             .setTitle(name)

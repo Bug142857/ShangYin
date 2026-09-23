@@ -7,6 +7,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -15,8 +16,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -27,13 +30,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -48,6 +52,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.music.MusicDownloader
 import com.shangyin.app.data.music.MusicPlatform
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.data.music.MusicSong
@@ -79,10 +85,10 @@ import kotlinx.coroutines.launch
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
  * 数据来源：只有 24bit 无损（www.24bit.net）一个来源，搜索/歌词走 App 内置接口（[MusicRepo]），
- * 播放直链由 [MusicNativeResolve] 从详情页现取。
+ * 播放直链由 [com.shangyin.app.data.music.Bit24] 从 24bit 详情页现取。
  */
 
-/** 翻页步长（与 MusicApis 默认 limit 一致，用来判断"是否还有下一页"） */
+/** 翻页步长：接口每页返回 30 条，用来判断"是否还有下一页" */
 private const val PAGE_SIZE = 30
 
 /** 翻页上限：接口不支持翻页时靠"本页没有新增"提前结束，这里再兜一层防死循环 */
@@ -116,6 +122,19 @@ fun MusicHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
+            // 24bit 详情页有每日访问限额：命中后播放/下载都会失败，这里提前说清楚，别让用户一脸问号
+            if (com.shangyin.app.data.music.Bit24.quotaExceeded()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "24bit 今日详情页额度已用完（站点限制）：播放与下载请明天再试，或先去 24bit 官网登录以提升额度",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                }
+            }
             Box(Modifier.weight(1f)) {
                 SearchTab(searchState)
             }
@@ -134,52 +153,73 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
     val state by MusicPlayback.state.collectAsStateWithLifecycle()
     val song = state.song ?: return
 
+    // 播放进度：时长未知（<=0）时按 0 处理，避免除零
+    val progress = if (state.durationMs > 0L) {
+        (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f)
+    } else 0f
+
     Surface(tonalElevation = 3.dp, modifier = modifier.fillMaxWidth()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { nav.safeNavigate("musicPlayer") }
-                .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
-        ) {
-            CoverImage(
-                url = song.cover,
-                modifier = Modifier.size(40.dp),
-                corner = 6.dp,
-                placeholderText = song.name
-            )
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    song.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    song.subtitle.ifBlank { song.platform.label },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            if (state.buffering) {
-                CircularProgressIndicator(
+        Column(Modifier.fillMaxWidth()) {
+            // 顶部贴边的细进度条（只展示，不跟手拖动）
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Box(
                     Modifier
-                        .padding(horizontal = 6.dp)
-                        .size(18.dp),
-                    strokeWidth = 2.dp
+                        .fillMaxWidth(progress)
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.primary)
                 )
             }
-            IconButton(onClick = { MusicPlayback.toggle(context) }) {
-                Icon(
-                    if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                    contentDescription = if (state.isPlaying) "暂停" else "播放"
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { nav.safeNavigate("musicPlayer") }
+                    .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
+            ) {
+                CoverImage(
+                    url = song.cover,
+                    modifier = Modifier.size(40.dp),
+                    corner = 6.dp,
+                    placeholderText = song.name
                 )
-            }
-            IconButton(onClick = { MusicPlayback.next() }) {
-                Icon(Icons.Rounded.SkipNext, contentDescription = "下一首")
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        song.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        song.subtitle.ifBlank { song.platform.label },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (state.buffering) {
+                    CircularProgressIndicator(
+                        Modifier
+                            .padding(horizontal = 6.dp)
+                            .size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
+                IconButton(onClick = { MusicPlayback.toggle(context) }) {
+                    Icon(
+                        if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                        contentDescription = if (state.isPlaying) "暂停" else "播放"
+                    )
+                }
+                IconButton(onClick = { MusicPlayback.next() }) {
+                    Icon(Icons.Rounded.SkipNext, contentDescription = "下一首")
+                }
             }
         }
     }
@@ -216,6 +256,28 @@ private fun SearchTab(st: SearchTabState) {
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     var collectSong by remember { mutableStateOf<MusicSong?>(null) }
+    // 长按搜索结果弹出的小菜单（收藏到清单 / 下载）
+    var menuSong by remember { mutableStateOf<MusicSong?>(null) }
+    // 下载状态：downloadingKey 为正在下载的歌（非空即视为下载中，天然防重复点击）
+    var downloadingKey by remember { mutableStateOf<String?>(null) }
+    var downloadPercent by remember { mutableIntStateOf(0) }
+    // 下载失败原因（原文展示，不静默）
+    var downloadError by remember { mutableStateOf<String?>(null) }
+
+    // 下载一首歌：进度显示在页面底部，成功/失败都给提示
+    fun startDownload(song: MusicSong) {
+        if (downloadingKey != null) return
+        downloadingKey = song.key
+        downloadPercent = 0
+        scope.launch {
+            runCatching { MusicDownloader.download(context, song) { downloadPercent = it } }
+                .onSuccess { path ->
+                    Toast.makeText(context, "已保存到 $path", Toast.LENGTH_LONG).show()
+                }
+                .onFailure { e -> downloadError = e.message ?: "下载失败" }
+            downloadingKey = null
+        }
+    }
 
     /** 加载第 [page] 页（page=1 为新搜索） */
     fun load(page: Int) {
@@ -232,7 +294,7 @@ private fun SearchTab(st: SearchTabState) {
         }
         st.error = null
         scope.launch {
-            runCatching { MusicRepo.search(MusicPlatform.BIT24, kw, page) }
+            runCatching { MusicRepo.search(kw, page) }
                 .onSuccess { list ->
                     if (kw != st.keyword) return@onSuccess // 关键词已变，丢弃旧响应
                     val oldSize = st.results.size
@@ -244,6 +306,13 @@ private fun SearchTab(st: SearchTabState) {
                         st.endReached = true
                     }
                     if (page == 1 && st.results.isNotEmpty()) listState.scrollToItem(0)
+                    // 补封面：搜索结果本身不带封面（站点给的是占位图），只能从详情页取；
+                    // 详情页有每日限额，所以这里只补最前面几首（播过/收藏过的歌会自动进缓存，后面越用越全）
+                    if (list.isNotEmpty() && page == 1) {
+                        val filled = runCatching { MusicRepo.fillCovers(st.results, max = 3) }
+                            .getOrDefault(st.results)
+                        if (kw == st.keyword && filled != st.results) st.results = filled
+                    }
                 }
                 .onFailure { e ->
                     if (kw != st.keyword) return@onFailure
@@ -260,6 +329,17 @@ private fun SearchTab(st: SearchTabState) {
         }
     }
 
+    // 回车 / 点右侧箭头 → 用当前关键词搜首页；关键词为空或没变则不搜
+    fun doSearch() {
+        keyboard?.hide()
+        val kw = st.input.trim()
+        if (kw.isNotBlank() && kw != st.keyword) {
+            st.keyword = kw
+            st.page = 1
+            load(1)
+        }
+    }
+
     // 滑到底自动加载下一页
     LaunchedEffect(listState, st.results) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
@@ -269,103 +349,137 @@ private fun SearchTab(st: SearchTabState) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        // 搜索框：样式与表世界（HomeScreen）保持一致
+        OutlinedTextField(
+            value = st.input,
+            onValueChange = { st.input = it },
+            placeholder = { Text("搜索歌曲（24bit 无损）") },
+            singleLine = true,
+            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { doSearch() }),
+            trailingIcon = {
+                IconButton(onClick = { doSearch() }) {
+                    Icon(Icons.Rounded.KeyboardArrowRight, contentDescription = "搜索")
+                }
+            },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-        ) {
-            OutlinedTextField(
-                value = st.input,
-                onValueChange = { st.input = it },
-                placeholder = { Text("搜索歌曲（24bit 无损）") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
-                    keyboard?.hide()
-                    val kw = st.input.trim()
-                    if (kw.isNotBlank() && kw != st.keyword) {
-                        st.keyword = kw
-                        st.page = 1
-                        load(1)
-                    }
-                }),
-                trailingIcon = {
-                    if (st.input.isNotEmpty()) {
-                        IconButton(onClick = { st.input = "" }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "清空")
-                        }
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(
-                onClick = {
-                    keyboard?.hide()
-                    val kw = st.input.trim()
-                    if (kw.isNotBlank() && kw != st.keyword) {
-                        st.keyword = kw
-                        st.page = 1
-                        load(1)
-                    }
-                },
-                enabled = st.input.isNotBlank() && st.input.trim() != st.keyword
-            ) {
-                Icon(Icons.Rounded.Search, contentDescription = "搜索")
-            }
-        }
+                .padding(horizontal = 16.dp, vertical = 4.dp)
+        )
 
-        when {
-            st.loading && st.results.isEmpty() -> MusicLoadingBox()
+        // 列表区占满剩余高度，底部留给下载进度条
+        Box(Modifier.weight(1f)) {
+            when {
+                st.loading && st.results.isEmpty() -> MusicLoadingBox()
 
-            st.error != null && st.results.isEmpty() ->
-                MusicErrorBox(st.error!!, onRetry = { load(1) })
+                st.error != null && st.results.isEmpty() ->
+                    MusicErrorBox(st.error!!, onRetry = { load(1) })
 
-            st.results.isEmpty() ->
-                if (st.searched) EmptyView("没有找到相关歌曲，换个关键词试试")
-                else EmptyView("输入关键词搜索，或长按结果收藏到清单")
+                st.results.isEmpty() ->
+                    if (st.searched) EmptyView("没有找到相关歌曲，换个关键词试试")
+                    else EmptyView("输入关键词搜索，长按结果可收藏或下载")
 
-            else -> LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(bottom = 12.dp)
-            ) {
-                itemsIndexed(st.results, key = { _, s -> s.key }) { index, song ->
-                    MusicSongRow(
-                        song = song,
-                        onClick = { play(st.results, index) },
-                        onLongClick = { collectSong = song },
-                        trailing = {
-                            IconButton(onClick = {
-                                if (song.key in savedKeys) {
-                                    Toast.makeText(context, "已在清单中", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    collectSong = song
+                else -> LazyColumn(
+                    state = listState,
+                    contentPadding = PaddingValues(bottom = 12.dp)
+                ) {
+                    itemsIndexed(st.results, key = { _, s -> s.key }) { index, song ->
+                        MusicSongRow(
+                            song = song,
+                            onClick = { play(st.results, index) },
+                            // 长按改为弹菜单（收藏到清单 / 下载）
+                            onLongClick = { menuSong = song },
+                            trailing = {
+                                IconButton(onClick = {
+                                    if (song.key in savedKeys) {
+                                        Toast.makeText(context, "已在清单中", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        collectSong = song
+                                    }
+                                }) {
+                                    val saved = song.key in savedKeys
+                                    Icon(
+                                        if (saved) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                        contentDescription = "收藏",
+                                        tint = if (saved) Color(0xFFEF5350)
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
-                            }) {
-                                val saved = song.key in savedKeys
-                                Icon(
-                                    if (saved) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                    contentDescription = "收藏",
-                                    tint = if (saved) Color(0xFFEF5350)
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
-                        }
-                    )
-                }
-                item(key = "search_foot") {
-                    MusicListFooter(loadingMore = st.loadingMore, endReached = st.endReached)
+                        )
+                    }
+                    item(key = "search_foot") {
+                        MusicListFooter(loadingMore = st.loadingMore, endReached = st.endReached)
+                    }
                 }
             }
         }
 
-        // 长按行 / 点收藏图标 → 收藏到里世界清单
+        // 下载进度（页面底部，下载中才显示）
+        if (downloadingKey != null) MusicDownloadBar(downloadPercent)
+
+        // 点收藏图标 → 收藏到里世界清单
         collectSong?.let { song ->
             CollectDialog(
                 onDismiss = { collectSong = null },
                 collect = { listId -> MusicRepo.collect(song, listId) }
             )
         }
+    }
+
+    // 长按搜索结果弹出的小菜单：收藏到清单 / 下载
+    menuSong?.let { song ->
+        AlertDialog(
+            onDismissRequest = { menuSong = null },
+            title = { Text(song.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column {
+                    TextButton(onClick = {
+                        menuSong = null
+                        collectSong = song
+                    }) { Text("收藏到清单") }
+                    TextButton(onClick = {
+                        menuSong = null
+                        startDownload(song)
+                    }) { Text("下载") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { menuSong = null }) { Text("取消") } }
+        )
+    }
+
+    // 下载失败：展示原因原文，不静默
+    downloadError?.let { text ->
+        AlertDialog(
+            onDismissRequest = { downloadError = null },
+            title = { Text("下载失败") },
+            text = {
+                androidx.compose.foundation.text.selection.SelectionContainer {
+                    Text(text, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = { TextButton(onClick = { downloadError = null }) { Text("知道了") } }
+        )
+    }
+}
+
+/** 页面底部下载进度条（拿不到总长度时只显示转圈 + 下载中） */
+@Composable
+private fun MusicDownloadBar(percent: Int) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (percent > 0) "下载中 $percent%" else "下载中…",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

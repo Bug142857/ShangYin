@@ -25,9 +25,9 @@ import java.io.IOException
 /**
  * 音乐播放服务：媒体会话 + 后台播放 + 通知栏/锁屏控制。
  *
- * 播放地址不预先解析：播放列表里每首歌的 URI 是 `lxmusic://song/{songKey}` 占位，
- * 真正播放时由 [LxAudioDataSourceFactory] 在数据源层向 LX 音源换直链
- * （音源直链有时效，播放时才解析能拿到最新链接，也避免点开列表就把整页歌都解析一遍）。
+ * 播放地址不预先解析：播放列表里每首歌的 URI 是 `music://song/{songKey}` 占位，
+ * 真正播放时由 [Bit24AudioDataSourceFactory] 在数据源层向 24bit 现取直链
+ * （直链带时效签名，播放时才解析能拿到最新链接，也避免点开列表就把整页歌都解析一遍）。
  */
 @OptIn(UnstableApi::class)
 class MusicPlaybackService : MediaSessionService() {
@@ -38,7 +38,7 @@ class MusicPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        val dataSourceFactory = LxAudioDataSourceFactory()
+        val dataSourceFactory = Bit24AudioDataSourceFactory()
         val exoPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             // 后台播放：熄屏/切后台也继续播；耳机拔出自动暂停
@@ -89,12 +89,12 @@ class MusicPlaybackService : MediaSessionService() {
 }
 
 /**
- * LX 音源直链解析数据源：
- * 把 `lxmusic://song/{songKey}` 占位地址在真正发起请求时换成音源解析出来的 http(s) 直链，
- * 并补上各平台防盗链请求头（Referer / UA）。
+ * 24bit 直链解析数据源：
+ * 把 `music://song/{songKey}` 占位地址在真正发起请求时换成解析出来的 http(s) 直链，
+ * 并带上 UA（24bit 的 CDN 不需要 Referer）。
  */
 @OptIn(UnstableApi::class)
-class LxAudioDataSourceFactory : DataSource.Factory {
+class Bit24AudioDataSourceFactory : DataSource.Factory {
 
     private val upstream = DefaultHttpDataSource.Factory()
         .setUserAgent(
@@ -110,7 +110,7 @@ class LxAudioDataSourceFactory : DataSource.Factory {
             val key = dataSpec.uri.lastPathSegment.orEmpty()
             val song = MusicQueueRegistry.get(key)
                 ?: throw IOException("歌曲信息已失效，请重新播放")
-            // 数据源在播放线程上同步取直链：音源解析本身是挂起的（要过 WebView），这里阻塞等待
+            // 数据源在播放线程上同步取直链：解析本身是挂起的（要发网络请求），这里阻塞等待
             val info = runBlocking(Dispatchers.IO) { MusicRepo.resolvePlay(song) }
             val headers = LinkedHashMap<String, String>()
             headers.putAll(info.headers)

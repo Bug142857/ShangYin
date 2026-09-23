@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
@@ -75,7 +76,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.Alignment
@@ -102,12 +102,14 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.CollectionItemEntity
 import com.shangyin.app.data.db.ListWithMeta
+import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.common.dragReorderModifier
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -117,6 +119,9 @@ import kotlin.math.abs
 
 /** 清单内容布局 */
 private enum class ListLayoutMode { GRID, LIST }
+
+/** 音乐条目的展示顺序：按添加时间（默认）/ 按歌手名称 */
+private enum class MusicSortMode { ADDED, ARTIST }
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -132,7 +137,21 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var showDelete by remember { mutableStateOf(false) }
     var showCreateChild by remember { mutableStateOf(false) }
     var showInnerPicker by remember { mutableStateOf(false) }
-    var layoutMode by rememberSaveable { mutableStateOf(ListLayoutMode.GRID) }
+    // 布局模式按清单 ID 持久化（key: list_layout_<id>）；从未记过时先按平铺，下面按"是否含音乐条目"定默认值
+    val savedLayout = remember(listId) { SettingsStore.listLayout(listId) }
+    var layoutMode by remember(listId) {
+        mutableStateOf(
+            if (savedLayout == SettingsStore.LAYOUT_LIST) ListLayoutMode.LIST else ListLayoutMode.GRID
+        )
+    }
+    var layoutDecided by remember(listId) { mutableStateOf(savedLayout.isNotBlank()) }
+    // 音乐排序按清单 ID 持久化（key: list_sort_<id>），默认按添加时间
+    var sortMode by remember(listId) {
+        mutableStateOf(
+            if (SettingsStore.listSort(listId) == SettingsStore.SORT_ARTIST) MusicSortMode.ARTIST
+            else MusicSortMode.ADDED
+        )
+    }
     var isEditMode by remember { mutableStateOf(false) }
     var draggingItemId by remember { mutableStateOf<Long?>(null) }
     var draggingSubListId by remember { mutableStateOf<Long?>(null) }
@@ -141,6 +160,20 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var deleteSearchTarget by remember { mutableStateOf<com.shangyin.app.data.db.ItemWithOwnerList?>(null) }
     val currentItemIds = rememberUpdatedState(items.map { it.id })
     val currentSubIds = rememberUpdatedState(childLists.map { it.list.id })
+
+    // 清单里是否含音乐条目：决定默认布局 + 排序菜单是否出现
+    val hasMusicItems = remember(items) { items.any { it.category == MusicRepo.CATEGORY } }
+    // 未记过布局的清单：含音乐条目默认用列表（首次拿到条目时判定一次，不回写持久化）
+    LaunchedEffect(listId, items) {
+        if (!layoutDecided && items.isNotEmpty()) {
+            layoutMode = if (hasMusicItems) ListLayoutMode.LIST else ListLayoutMode.GRID
+            layoutDecided = true
+        }
+    }
+    // 展示顺序：按歌手时只重排音乐条目（非音乐条目顺序与位置不变），按添加时间时就是原始顺序
+    val displayItems = remember(items, sortMode) {
+        if (sortMode == MusicSortMode.ADDED) items else sortItemsByArtist(items)
+    }
 
     // ---- 清单内搜索：本清单 + 所有层级子清单 ----
     var isSearching by remember { mutableStateOf(false) }
@@ -258,14 +291,57 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 },
                                 onClick = {
                                     menuOpen = false
-                                    layoutMode =
-                                        if (layoutMode == ListLayoutMode.GRID) ListLayoutMode.LIST else ListLayoutMode.GRID
+                                    val next = if (layoutMode == ListLayoutMode.GRID) ListLayoutMode.LIST
+                                    else ListLayoutMode.GRID
+                                    layoutMode = next
+                                    layoutDecided = true
+                                    SettingsStore.setListLayout(
+                                        listId,
+                                        if (next == ListLayoutMode.LIST) SettingsStore.LAYOUT_LIST
+                                        else SettingsStore.LAYOUT_GRID
+                                    )
                                 }
                             )
+                            // 含音乐条目的清单：可切换音乐条目的展示顺序（当前生效的一项打勾）
+                            if (hasMusicItems) {
+                                DropdownMenuItem(
+                                    text = { Text("按添加时间排序") },
+                                    leadingIcon = {
+                                        if (sortMode == MusicSortMode.ADDED) {
+                                            Icon(Icons.Rounded.Check, contentDescription = "已选")
+                                        }
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        sortMode = MusicSortMode.ADDED
+                                        SettingsStore.setListSort(listId, SettingsStore.SORT_ADDED)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("按歌手名称排序") },
+                                    leadingIcon = {
+                                        if (sortMode == MusicSortMode.ARTIST) {
+                                            Icon(Icons.Rounded.Check, contentDescription = "已选")
+                                        }
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        sortMode = MusicSortMode.ARTIST
+                                        SettingsStore.setListSort(listId, SettingsStore.SORT_ARTIST)
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("编辑") },
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                                onClick = { menuOpen = false; isEditMode = true }
+                                onClick = {
+                                    menuOpen = false
+                                    isEditMode = true
+                                    // 按歌手排序时条目顺序由歌手决定，不参与拖拽，提示一下
+                                    if (sortMode == MusicSortMode.ARTIST && hasMusicItems) {
+                                        Toast.makeText(context, "按歌手排序时条目不支持拖拽排序", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             )
                             DropdownMenuItem(
                                 text = { Text("添加条目") },
@@ -298,7 +374,17 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             )
         },
         // 音乐清单里点歌后，页面底部常驻迷你播放条（没在播时不渲染）
-        bottomBar = { com.shangyin.app.ui.music.MusicMiniPlayer(nav) }
+        // 本页补上系统导航栏内边距，避免被三键导航遮住（组件本身不动，其它页面另处理）
+        bottomBar = {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surface)
+                    .navigationBarsPadding()
+            ) {
+                com.shangyin.app.ui.music.MusicMiniPlayer(nav)
+            }
+        }
     ) { pad ->
         // 搜索模式：显示本清单 + 所有子清单的匹配条目
         if (isSearching) {
@@ -403,14 +489,15 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             onClick = { nav.safeNavigate("list/${meta.list.id}") }
                         )
                     }
-                    gridItemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
+                    gridItemsIndexed(displayItems, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
                         val scale by animateFloatAsState(if (isDragging) 1.08f else 1f, label = "scale")
                         GridItemCard(
                             item = item,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            modifier = (if (isEditMode) dragReorderModifier(
+                            // 按歌手排序时展示顺序与库内顺序不同，不接拖拽排序
+                            modifier = (if (isEditMode && sortMode == MusicSortMode.ADDED) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = false,
                                 gridColumns = 3,
@@ -456,31 +543,41 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             onClick = { nav.safeNavigate("list/${meta.list.id}") }
                         )
                     }
-                    itemsIndexed(items, key = { _, it -> it.id }) { idx, item ->
+                    itemsIndexed(displayItems, key = { _, it -> it.id }) { idx, item ->
                         val isDragging = draggingItemId == item.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "scale")
-                        ItemRowInList(
-                            item = item,
-                            index = idx + 1,
-                            isEditMode = isEditMode,
-                            onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            modifier = (if (isEditMode) dragReorderModifier(
-                                itemId = item.id,
-                                isListMode = true,
-                                gridColumns = 1,
-                                currentIdsState = currentItemIds,
-                                onDragStateChange = { draggingItemId = it },
-                                onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
-                                onTap = {},
-                                onLongPress = {}
-                            ) else Modifier.fillMaxWidth().clickable {
-                                openEntity(item)
-                            })
-                                .graphicsLayer {
-                                    scaleX = scale; scaleY = scale
-                                    shadowElevation = if (isDragging) 24f else 0f
-                                }
-                        )
+                        // 音乐条目用专用行（封面 + 歌名 + 歌手），其余沿用通用行
+                        // 按歌手排序时展示顺序与库内顺序不同，不接拖拽排序
+                        val rowModifier = (if (isEditMode && sortMode == MusicSortMode.ADDED) dragReorderModifier(
+                            itemId = item.id,
+                            isListMode = true,
+                            gridColumns = 1,
+                            currentIdsState = currentItemIds,
+                            onDragStateChange = { draggingItemId = it },
+                            onReorder = { from, to -> Repo.reorderItem(listId, from, to) },
+                            onTap = {},
+                            onLongPress = {}
+                        ) else Modifier.fillMaxWidth().clickable { openEntity(item) })
+                            .graphicsLayer {
+                                scaleX = scale; scaleY = scale
+                                shadowElevation = if (isDragging) 24f else 0f
+                            }
+                        if (item.category == MusicRepo.CATEGORY) {
+                            MusicItemRowInList(
+                                item = item,
+                                modifier = rowModifier,
+                                isEditMode = isEditMode,
+                                onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } }
+                            )
+                        } else {
+                            ItemRowInList(
+                                item = item,
+                                index = idx + 1,
+                                isEditMode = isEditMode,
+                                onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
+                                modifier = rowModifier
+                            )
+                        }
                     }
                 }
             }
@@ -1064,4 +1161,75 @@ private fun ItemRowInList(
             }
         }
     }
+}
+
+/** 音乐条目专用行：52dp 圆角封面 + 歌名 + 歌手（间距/字号沿用通用行风格，整行高度同为 64dp） */
+@Composable
+private fun MusicItemRowInList(
+    item: CollectionItemEntity,
+    modifier: Modifier = Modifier,
+    isEditMode: Boolean = false,
+    onRemove: () -> Unit = {}
+) {
+    Box(modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CoverImage(
+                url = item.coverUrl,
+                placeholderText = item.title,
+                modifier = Modifier.size(52.dp)
+            )
+            Column(
+                Modifier.weight(1f).padding(start = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    // 歌手未知时退化为分类名，避免第二行空着
+                    item.subTitle.ifBlank { MusicRepo.CATEGORY },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (isEditMode) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+                    .size(24.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xCCFF4444))
+                    .clickable { onRemove() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Rounded.Clear,
+                    contentDescription = "移出",
+                    tint = Color.White,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 音乐条目按歌手（subTitle）排序：sortedBy 为稳定排序，歌手相同时保持添加顺序；
+ * 音乐条目填回原来属于音乐条目的位置，非音乐条目的顺序与位置都不变。
+ */
+private fun sortItemsByArtist(items: List<CollectionItemEntity>): List<CollectionItemEntity> {
+    val music = items.filter { it.category == MusicRepo.CATEGORY }.sortedBy { it.subTitle }
+    if (music.isEmpty()) return items
+    var i = 0
+    return items.map { if (it.category == MusicRepo.CATEGORY) music[i++] else it }
 }
