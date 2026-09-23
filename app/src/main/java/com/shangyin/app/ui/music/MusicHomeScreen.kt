@@ -10,13 +10,13 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -52,6 +52,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +62,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
@@ -153,25 +155,83 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
     val state by MusicPlayback.state.collectAsStateWithLifecycle()
     val song = state.song ?: return
 
+    val duration = state.durationMs
+    // 拖动进度条时先跟手，松手才 seek（与播放页一致）
+    var dragging by remember { mutableStateOf(false) }
+    var dragFraction by remember { mutableFloatStateOf(0f) }
+    // 换歌时结束拖动，避免残留的拖动位置串到新歌上
+    LaunchedEffect(song.key) { dragging = false }
+
     // 播放进度：时长未知（<=0）时按 0 处理，避免除零
-    val progress = if (state.durationMs > 0L) {
-        (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f)
+    val playedFraction = if (duration > 0L) {
+        (state.positionMs.toFloat() / duration).coerceIn(0f, 1f)
     } else 0f
+    val fraction = if (dragging) dragFraction else playedFraction
+    // 拖动中左侧时间跟手显示拖动位置
+    val shownPosition = if (dragging && duration > 0L) (dragFraction * duration).toLong() else state.positionMs
+
+    // 细进度条上挂水平拖动手势：只改本地值，松手才 seek；时长未知时不可拖动
+    val dragModifier = if (duration > 0L) {
+        Modifier.pointerInput(duration) {
+            // 触点 x → 0..1 比例（宽度兜底，避免除零）
+            fun fractionAt(x: Float) = (x / size.width.coerceAtLeast(1)).coerceIn(0f, 1f)
+            detectHorizontalDragGestures(
+                onDragStart = {
+                    dragging = true
+                    dragFraction = fractionAt(it.x)
+                },
+                onDragCancel = { dragging = false },
+                onDragEnd = {
+                    if (dragging) MusicPlayback.seekTo((dragFraction * duration).toLong())
+                    dragging = false
+                }
+            ) { change, _ ->
+                dragFraction = fractionAt(change.position.x)
+            }
+        }
+    } else Modifier
 
     Surface(tonalElevation = 3.dp, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth()) {
-            // 顶部贴边的细进度条（只展示，不跟手拖动）
-            Box(
+            // 进度行：左当前时间 / 中间细进度条（可拖动）/ 右总时长
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(2.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .padding(start = 12.dp, end = 12.dp, top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Text(
+                    formatMusicTime(shownPosition),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(8.dp))
+                // 进度条与外层 clickable 行是同级节点，手势不会被抢走；16dp 高只做触摸区，视觉仍是 2dp 细条
                 Box(
                     Modifier
-                        .fillMaxWidth(progress)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.primary)
+                        .weight(1f)
+                        .height(16.dp)
+                        .then(dragModifier),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(MaterialTheme.colorScheme.surfaceVariant)
+                    )
+                    Box(
+                        Modifier
+                            .fillMaxWidth(fraction)
+                            .height(2.dp)
+                            .background(MaterialTheme.colorScheme.primary)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    formatMusicTime(duration),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Row(
