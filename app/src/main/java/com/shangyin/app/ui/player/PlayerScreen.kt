@@ -184,6 +184,9 @@ fun PlayerScreen(nav: NavHostController) {
             )
             .build()
         ExoPlayer.Builder(context)
+            // 电视源里 MP2（MPEG-1/2 Layer II）音频的解码器兼容处理：
+            // 平台多数只有 audio/mpeg(MP3) 解码器，按原样(audio/mpeg-L2)会被判「不支持」丢掉音轨 → 有画面没声音
+            .setRenderersFactory(MpegAudioCompatRenderersFactory(context))
             .setLoadControl(loadControl)
             .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
             .build()
