@@ -407,6 +407,20 @@
   GdStudio.search 分支无 UI 入口属死代码，暂留（以后可清）。
   版本规则提醒：0.217/1217。
 
+- **v0.218（里世界新增「吃瓜」模块，2026-09-24）**：
+  用户提供 `https://www.ipqegzvg.cc/`（51爆料，吃瓜爆料站）。**站点结构**：首页整页 Base64 混淆 +
+  `document.write` 输出，线路链接由浏览器端 JS 随机生成（`{随机英文词}.upsqlhlj.cc` / 备用 `.qbrdgjbyi.cc` /
+  CloudFront）并 ping 测速选线，镜像域名会轮换 → **原生解析不可行，必须 WebView**。
+  ① 新建 `ui/melon/MelonScreen.kt`（route `melonHome`，里世界第八入口）：WebView 开 JS + DOM storage +
+  混合内容 + `mediaPlaybackRequiresUserGesture=false`；http/https 留在应用内，其余 scheme（mailto/tg 等）
+  与下载直链交给系统；返回键逐级返回（WebView 历史 → 退出模块）。
+  ② **会话续看**：`MelonCache.lastUrl` 记 onPageFinished 的地址，再进模块直接恢复（不回首页）。
+  ③ **错误兜底**：仅主框架 `onReceivedError` 才算失败（子资源挂了不影响展示），错误页给「重试 /
+  回首页」（回首页仅在不在首页时显示——镜像线路经常换，死了就回首页重新选线）。
+  ④ `HomeScreen` 里世界第二排加「吃瓜」入口（`Icons.Rounded.TheaterComedy`，第二排现在 4 个：
+  图书/电视/音乐/吃瓜）。README 界面布局/功能/免责声明同步更新（免责声明注明仅为第三方站点的内嵌网页浏览）。
+  版本：0.218/1218。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
