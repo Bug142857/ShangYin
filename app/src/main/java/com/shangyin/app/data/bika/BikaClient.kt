@@ -200,13 +200,17 @@ object BikaClient {
     // ---------- 接口 ----------
 
     /**
-     * 带 token 的调用包装：未登录直接抛 BikaAuthException（登录入口在 设置→账号管理→哔咔登录）。
-     * token 过期时先用已保存的账密静默重登一次并重试，用户无感；
-     * 重登失败（未存账密或登录失败）才清 token 并抛出，由界面引导用户重新登录。
+     * 带 token 的调用包装（所有需要登录的接口都走这里，所以静默重登只需这一处）。
+     * 本地没有 token（或 token 过期）时，先用已保存的账密静默重登一次并继续，用户无感；
+     * 重登失败（没存账密 / 账密也失效 / 网络不通）才清 token 并抛出，由界面引导重新登录。
      */
     suspend fun <T> withAuth(block: suspend (String) -> T): T {
-        val token = SettingsStore.bikaToken
-        if (token.isBlank()) throw BikaAuthException("未登录哔咔账号")
+        // 本地 token 为空时也先试一次静默重登：可能上次重登失败清过 token，但账密还在
+        var token = SettingsStore.bikaToken
+        if (token.isBlank()) {
+            if (autoSignIn()) token = SettingsStore.bikaToken
+            if (token.isBlank()) throw BikaAuthException("未登录哔咔账号")
+        }
         return try {
             block(token)
         } catch (e: BikaAuthException) {
