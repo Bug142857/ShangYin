@@ -9,8 +9,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,7 +39,6 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -88,7 +85,8 @@ import kotlinx.coroutines.launch
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 多音源：顶部 chips 可切换来源（mvmp3 / JOOX / 网易云），每个来源的搜索/歌词/封面都由各自接口提供；
+ * 音乐源固定为 mvmp3（无名音乐网）：2026-09-24 实测 gdstudio 仅剩网易云（直链尚可）与 JOOX（直链全空），
+ * 两者已按用户要求从界面移除——搜索固定走 mvmp3，旧收藏的 JOOX/网易云/33ve 条目仍可播放（自动按"歌名+歌手"去 mvmp3/33ve 找同名歌）。
  * 播放直链在播放时现取（直链带时效签名），分派逻辑见 [com.shangyin.app.data.music.MusicRepo.resolvePlay]。
  */
 
@@ -280,8 +278,6 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
 private class SearchTabState {
     var input by mutableStateOf("")
     var keyword by mutableStateOf("")
-    /** 当前搜索来源（chips 可切换：mvmp3 / JOOX / 网易云） */
-    var platform by mutableStateOf(MusicPlatform.MVMMP3)
     var results by mutableStateOf<List<MusicSong>>(emptyList())
     var page by mutableStateOf(1)
     var loading by mutableStateOf(false)
@@ -345,11 +341,10 @@ private fun SearchTab(st: SearchTabState) {
             st.loadingMore = true
         }
         st.error = null
-        val platform = st.platform
         scope.launch {
-            runCatching { MusicRepo.search(kw, page, platform) }
+            runCatching { MusicRepo.search(kw, page) }
                 .onSuccess { list ->
-                    if (kw != st.keyword || platform != st.platform) return@onSuccess // 关键词/来源已变，丢弃旧响应
+                    if (kw != st.keyword) return@onSuccess // 关键词已变，丢弃旧响应
                     val oldSize = st.results.size
                     st.results = if (page == 1) list
                     else st.results + list.filterNot { s -> st.results.any { it.key == s.key } }
@@ -361,7 +356,7 @@ private fun SearchTab(st: SearchTabState) {
                     if (page == 1 && st.results.isNotEmpty()) listState.scrollToItem(0)
                 }
                 .onFailure { e ->
-                    if (kw != st.keyword || platform != st.platform) return@onFailure
+                    if (kw != st.keyword) return@onFailure
                     val msg = e.message ?: "搜索失败"
                     // 接口把"没有数据"当成异常抛（"接口返回空"）：首页 = 没结果，翻页 = 没有更多
                     if (msg.contains("接口返回空")) {
@@ -384,17 +379,6 @@ private fun SearchTab(st: SearchTabState) {
             st.page = 1
             load(1)
         }
-    }
-
-    /** 切换搜索来源：清空旧结果并按当前关键词重搜（关键词为空就只记下来，不动列表） */
-    fun switchPlatform(next: MusicPlatform) {
-        if (next == st.platform) return
-        st.platform = next
-        st.page = 1
-        st.results = emptyList()
-        st.endReached = false
-        st.error = null
-        if (st.keyword.isNotBlank()) load(1)
     }
 
     // 滑到底自动加载下一页
@@ -425,24 +409,6 @@ private fun SearchTab(st: SearchTabState) {
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
-        // 来源切换：同一关键词可在多个音源间换着搜（结果互补，某个来源搜不到就换一个）
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 2.dp)
-        ) {
-            MusicPlatform.searchable.forEach { p ->
-                FilterChip(
-                    selected = st.platform == p,
-                    onClick = { switchPlatform(p) },
-                    label = { Text(p.label) },
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-            }
-        }
-
         // 列表区占满剩余高度，底部留给下载进度条
         Box(Modifier.weight(1f)) {
             when {
@@ -452,7 +418,7 @@ private fun SearchTab(st: SearchTabState) {
                     MusicErrorBox(st.error!!, onRetry = { load(1) })
 
                 st.results.isEmpty() ->
-                    if (st.searched) EmptyView("没有找到相关歌曲，换个关键词或换个来源试试")
+                    if (st.searched) EmptyView("没有找到相关歌曲，换个关键词试试")
                     else EmptyView("输入关键词搜索，点右侧按钮可下载或收藏")
 
                 else -> LazyColumn(

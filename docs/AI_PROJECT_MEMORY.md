@@ -397,6 +397,16 @@
   App 里 JOOX 靠 mvmp3/33ve 兜底才能播。结论：**没有新源可加**（唯一健康的 netease 已在 App 内），
   App 音乐能力 = mvmp3/33ve（主力）+ gdstudio netease + gdstudio joox（仅搜索/歌词，播放走兜底）。
 
+- **v0.217（音乐源收敛为 mvmp3，界面移除源切换，2026-09-24）**：
+  用户决定：移除 JOOX/网易云，搜索固定 mvmp3，不显示源切换 chips。
+  ① `MusicHomeScreen`：删 chips Row（FilterChip）、`SearchTabState.platform` 字段、`switchPlatform()` 函数、
+  `horizontalScroll/rememberScrollState/FilterChip` 三个 import；`MusicRepo.search(kw, page)` 用默认来源 MVMMP3。
+  ② `MusicModels`：删 `inSearch` 参数与 `searchable`（仅 chips 一个消费者）；**枚举值 4 个全保留**
+  （歌曲 key 是 `平台|ID`，旧收藏反序列化不能崩）；label 保留（旧条目列表显示用）。
+  ③ `MusicRepo`/`GdStudio` 内部分派逻辑全保留——旧收藏的 joox/netease/33ve 条目仍能播（resolvePlay 兜底）；
+  GdStudio.search 分支无 UI 入口属死代码，暂留（以后可清）。
+  版本规则提醒：0.217/1217。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK

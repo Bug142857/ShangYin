@@ -32,10 +32,10 @@ object MusicRepo {
     // ---------------- 搜索 / 歌词 ----------------
 
     /**
-     * 搜索。搜索页可以按来源切换：
+     * 搜索（界面固定用默认来源 mvmp3）：
      * - [MusicPlatform.MVMMP3] → 无名音乐网（搜索页 HTML 里自带封面，不用额外抓）
-     * - [MusicPlatform.S33VE] → 33ve（与 mvmp3 同系统，不进 chips，仅兜底用）
-     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] → gdstudio 聚合接口
+     * - [MusicPlatform.S33VE] → 33ve（与 mvmp3 同系统，仅兜底用）
+     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] → gdstudio 聚合接口（界面已移除，旧逻辑保留）
      */
     suspend fun search(
         keyword: String,
