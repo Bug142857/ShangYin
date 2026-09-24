@@ -27,12 +27,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -199,24 +202,50 @@ fun MelonHomeScreen(nav: NavHostController) {
                     keyword = input.trim()
                 })
             )
-            // 分类 chips
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 2.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                MelonClient.CATEGORIES.forEach { c ->
-                    FilterChip(
-                        selected = catPath == c.path && keyword.isBlank(),
-                        onClick = {
-                            keyword = ""
-                            input = ""
-                            catPath = c.path
-                        },
-                        label = { Text(c.name, style = MaterialTheme.typography.bodySmall) }
-                    )
+            // 分类下拉（类目多，横滑费事 → 下拉一次看全）
+            var catExpanded by remember { mutableStateOf(false) }
+            val currentCat = MelonClient.CATEGORIES.first { it.path == catPath }
+            Box(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
+                FilterChip(
+                    selected = catPath.isNotEmpty() && keyword.isBlank(),
+                    onClick = { catExpanded = true },
+                    label = {
+                        Text(
+                            if (keyword.isNotBlank()) "搜索：$keyword" else "分类：${currentCat.name}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    trailingIcon = {
+                        Icon(
+                            Icons.Rounded.ArrowDropDown,
+                            contentDescription = "选择分类",
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                )
+                DropdownMenu(
+                    expanded = catExpanded,
+                    onDismissRequest = { catExpanded = false }
+                ) {
+                    MelonClient.CATEGORIES.forEach { c ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    c.name,
+                                    fontWeight = if (c.path == catPath && keyword.isBlank())
+                                        FontWeight.Bold else null
+                                )
+                            },
+                            onClick = {
+                                catExpanded = false
+                                if (c.path != catPath || keyword.isNotBlank()) {
+                                    keyword = ""
+                                    input = ""
+                                    catPath = c.path
+                                }
+                            }
+                        )
+                    }
                 }
             }
 
@@ -597,37 +626,40 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
                                         viewerIndex = images.indexOf(block.url)
                                     }
                             )
-                            is MelonBlock.Video -> Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                modifier = Modifier
+                            is MelonBlock.Video -> Box(
+                                Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp, vertical = 6.dp)
+                                    .aspectRatio(16f / 9f)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFF1B1B1F))
                                     .clickable { play(block) }
                             ) {
-                                Row(
-                                    Modifier.padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        Icons.Rounded.PlayArrow,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        block.title,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        "播放",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                }
+                                Icon(
+                                    Icons.Rounded.PlayArrow,
+                                    contentDescription = "播放",
+                                    tint = Color.White,
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .size(56.dp)
+                                        .background(
+                                            Color.Black.copy(alpha = 0.45f),
+                                            RoundedCornerShape(28.dp)
+                                        )
+                                        .padding(10.dp)
+                                )
+                                Text(
+                                    block.title,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.9f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .fillMaxWidth()
+                                        .background(Color.Black.copy(alpha = 0.35f))
+                                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
                             }
                         }
                     }

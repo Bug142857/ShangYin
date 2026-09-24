@@ -454,8 +454,21 @@
   挂起 `fetch()` + 启动器 `load()`，刷新直接 await fetch 结束再收指示器。
   版本：0.220/1220。
 
+- **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
+  ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
+  `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
+  处理：App.kt Coil 共享 OkHttp 拦截器新增分支——host 为 `*.ndhixj.cn` 时带 Referer（当前镜像）+
+  浏览器 UA（默认 okhttp UA 易被风控）。⚠️ 视频 data-config 里**没有海报**（`thumbnails:null`，只有
+  `video_player_ads` 广告图），用户说的"视频封面"就是图床图。
+  ② 视频块改为 16:9 深色卡片 + 大播放键（更像视频位）。
+  ③ 分类 12 个横滑 chips → `DropdownMenu` 下拉（FilterChip 锚点显示当前分类）。
+  版本：0.221/1221。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
+- **先升版本号再编译，只编一次**（2026-09-24 用户要求）：改动完成后先把 `build.gradle.kts` 的
+  versionCode/versionName 改好，再跑唯一一次 `assembleRelease`——不要"先编译验证、再改版本号重编"，
+  第二次编译纯属浪费。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
   （本机**没有 gh CLI**，asset 名沿用拼音 `LaoZhengFenXiang-X.YYY.apk`）。
 - APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\zsy\Desktop\老郑分享-X.YYY.apk`。

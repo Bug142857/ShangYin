@@ -160,6 +160,15 @@ class App : Application(), ImageLoaderFactory {
                                 .build()
                         } else req
                     } ?: req
+                } else if (host == "pic.ndhixj.cn" || host.endsWith(".ndhixj.cn")) {
+                    // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）
+                    req.newBuilder()
+                        .header(
+                            "Referer",
+                            SettingsStore.melonBase.ifBlank { "https://branch.upsqllhj.cc" }.trimEnd('/') + "/"
+                        )
+                        .header("User-Agent", com.shangyin.app.data.melon.MelonClient.UA)
+                        .build()
                 } else req
                 chain.proceed(newReq)
             }
