@@ -43,6 +43,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -103,29 +104,34 @@ fun MelonHomeScreen(nav: NavHostController) {
     var nextPath by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var refreshing by remember { mutableStateOf(false) }
     var loadedKey by remember { mutableStateOf<String?>(null) }
     val lastSeen = remember { MelonCache.last }
+
+    suspend fun fetch(reset: Boolean, next: String? = null) {
+        runCatching {
+            if (next != null) MelonClient.nextPage(next)
+            else when {
+                keyword.isNotBlank() -> MelonClient.search(keyword)
+                catPath.isNotBlank() -> MelonClient.category(catPath)
+                else -> MelonClient.home()
+            }
+        }.onSuccess { page ->
+            items = (if (reset || next == null) page.items else items + page.items)
+                .distinctBy { it.id }
+            nextPath = page.nextPath
+        }.onFailure { e ->
+            if (reset || next == null) items = emptyList()
+            error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
+        }
+    }
 
     fun load(reset: Boolean, next: String? = null) {
         if (loading) return
         loading = true
         error = null
         scope.launch {
-            runCatching {
-                if (next != null) MelonClient.nextPage(next)
-                else when {
-                    keyword.isNotBlank() -> MelonClient.search(keyword)
-                    catPath.isNotBlank() -> MelonClient.category(catPath)
-                    else -> MelonClient.home()
-                }
-            }.onSuccess { page ->
-                items = (if (reset || next == null) page.items else items + page.items)
-                    .distinctBy { it.id }
-                nextPath = page.nextPath
-            }.onFailure { e ->
-                if (reset || next == null) items = emptyList()
-                error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
-            }
+            fetch(reset, next)
             loading = false
         }
     }
@@ -239,7 +245,19 @@ fun MelonHomeScreen(nav: NavHostController) {
                     ) { Text("重试") }
                 }
 
-                else -> LazyColumn(
+                else -> PullToRefreshBox(
+                    isRefreshing = refreshing,
+                    onRefresh = {
+                        scope.launch {
+                            refreshing = true
+                            error = null
+                            fetch(true)
+                            refreshing = false
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
@@ -307,6 +325,7 @@ fun MelonHomeScreen(nav: NavHostController) {
                             }
                         }
                     }
+                }
                 }
             }
         }

@@ -209,7 +209,7 @@ object MelonClient {
      *  - 网络异常 / 403 / 5xx → 大概率线路挂了，作废当前镜像重新选线再试一次
      *  - 404 等 → 内容问题，直接抛出（换线没用）
      */
-    private suspend fun doc(path: String): Document {
+    private suspend fun doc(path: String): Document = withContext(Dispatchers.IO) {
         repeat(2) { attempt ->
             val base = currentBase()
             try {
@@ -217,7 +217,7 @@ object MelonClient {
                 val url = if (path.startsWith("http")) path else "$base$path"
                 val html = httpGet(url)
                 if (html.isBlank()) throw IOException("站点返回空内容")
-                return Jsoup.parse(html, url)
+                return@withContext Jsoup.parse(html, url)
             } catch (e: HttpError) {
                 if (e.code != 403 && e.code !in 500..599) throw e
                 if (attempt == 1) throw e

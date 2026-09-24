@@ -445,6 +445,15 @@
   服务端渲染 HTML；先抓镜像 HTML 再下结论。
   版本：0.219/1219。
 
+- **v0.220（吃瓜热修：网络错误 + 下拉刷新，2026-09-24）**：
+  ① **致命 bug**：`MelonClient.doc()` 的 `httpGet` 没切 `Dispatchers.IO`，UI 在 main 作用域调用
+  → `NetworkOnMainThreadException`（message 为空 → 页面显示"网络错误"）。修：`doc()` 整体包
+  `withContext(Dispatchers.IO)`。**教训：网络 client 的所有 suspend 入口必须自己切 IO，
+  不能依赖调用方**（WygamerClient 的 `doc()` 就是这么写的，抄的时候漏了）。
+  ② 首页补下拉刷新：`PullToRefreshBox`（项目已有同款用法在 LiveHomeScreen），加载逻辑拆成
+  挂起 `fetch()` + 启动器 `load()`，刷新直接 await fetch 结束再收指示器。
+  版本：0.220/1220。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
