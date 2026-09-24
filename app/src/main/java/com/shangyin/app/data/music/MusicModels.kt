@@ -5,8 +5,8 @@ package com.shangyin.app.data.music
  * 所以同名歌曲在不同来源下是两条收藏记录。
  *
  * - [S33VE] 闪闪音乐网（https://www.33ve.com）：搜索、播放直链、歌词、封面全都免登录免验证、无限频（详见 [Site33]）。
- * - [JOOX] / [NETEASE] 走聚合接口 gdstudio（详见 [GdStudio]）。实测 JOOX 只有搜索/歌词/封面可用，
- *   直链接口返回空，因此播放时由 [MusicRepo.resolvePlay] 回退到 33ve 找同名歌曲；网易云搜索+直链都可用。
+ * - [JOOX] / [NETEASE] 走聚合接口 gdstudio（详见 [GdStudio]）。JOOX 的直链**时有时无**（部分曲目/时段上游不给流），
+ *   [GdStudio.resolveUrl] 会多轮重试，仍拿不到时由 [MusicRepo.resolvePlay] 回退到 33ve 找同名歌；网易云稳定可用。
  *
  * 历史：曾用过 24bit（www.24bit.net）与洛雪音源脚本，因限额/稳定性问题已按用户要求全部移除，
  * 旧收藏里的 `bit24|…` 条目因此不再能播放（用户已确认接受）。

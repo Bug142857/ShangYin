@@ -73,8 +73,8 @@ object MusicRepo {
             }
 
             MusicPlatform.JOOX -> {
-                // JOOX 直链接口恒返回空（见 GdStudio 类注释）：先试一次（将来可用了就直接用），
-                // 拿不到就按"歌名 + 歌手"去 33ve 找同名歌曲播放，尽量让用户点得响
+                // JOOX 直链时有时无（见 GdStudio 类注释），GdStudio.resolveUrl 内部已多轮重试；
+                // 仍然拿不到（这首/这刻上游不给流）就按"歌名 + 歌手"去 33ve 找同名歌播放，尽量让用户点得响
                 val direct = runCatching { GdStudio.resolveUrl(song.platform, song.id) }.getOrNull()
                 if (!direct.isNullOrBlank()) {
                     MusicPlayInfo(direct, GdStudio.PLAY_HEADERS)

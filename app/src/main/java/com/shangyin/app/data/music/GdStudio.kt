@@ -4,6 +4,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -26,9 +27,13 @@ import java.util.concurrent.TimeUnit
  * - 歌词：`types=lyric&source=&id=` → `{lyric, tlyric}`
  * - 封面：`types=pic&source=&id=&size=300` → `{url}`（数组/对象两种形态都遇到过，这里都兼容）
  *
- * ⚠️ 实测结论（2026-09-24）：`source=joox` 搜索/歌词/封面都正常，但 `types=url` 无论 br 取多少
- * 都返回空 url（`{"url":"","br":-1,"size":0}`），所以 JOOX 只能当"找歌 + 歌词"的来源；
- * 播放直链由 [MusicRepo.resolvePlay] 回退到 33ve。`source=netease` 搜索与直链都可用。
+ * ⚠️ **JOOX 直链是「时有时无」，不是拿不到**（2026-09-24 反复实测修正过一版错误结论）：
+ * - 同一首《晴天》第一次测拿到 `206 audio/mpeg`（ID3 头，11MB，仅需 UA 就能播），几分钟后连测 8 次全空；
+ * - 一批 8 首不同歌一次一测：3 首有、5 首空（空的偏热门原唱/大厂版权：陈奕迅、周杰伦、Beyond、王菲）；
+ * - 上一批里《小城故事》3/3 有、《Shape of You》2/3 有、《Hello》3/3 有。
+ * 结论：上游对**部分曲目/时段**不给流（版权或额度），单次失败不能当成"这首歌没有"。
+ * 所以 [resolveUrl] 对 JOOX 做**多轮重试**（换码率 + 短退避），并把 33ve 兜底留在
+ * [MusicRepo.resolvePlay]；`source=netease` 一直稳定可用（320k 实测可下）。
  */
 object GdStudio {
 
@@ -59,6 +64,10 @@ object GdStudio {
 
     /** 补封面这步是可选的，超时就放弃，不让搜索卡住 */
     private const val COVER_TIMEOUT_MS = 8000L
+
+    /** 取直链的重试轮数（JOOX 时有时无，见类注释）与尝试的码率 */
+    private const val MAX_URL_ROUNDS = 3
+    private val URL_BITRATES = listOf(320, 128)
 
     // ==================== 搜索 ====================
 
@@ -129,15 +138,24 @@ object GdStudio {
 
     // ==================== 直链 / 歌词 ====================
 
-    /** 取播放直链；拿不到返回 null（JOOX 恒为 null，见类注释） */
+    /**
+     * 取播放直链；拿不到返回 null。
+     *
+     * ⚠️ JOOX 的直链**时有时无**（见类注释）：单次空返回只代表"这一刻上游没给"，不代表这首歌没有，
+     * 所以这里做 3 轮 × 2 种码率的重试（轮间短退避）。netease 基本第一轮第一个码率就命中，
+     * 多出来的轮次不会真的发出去。
+     */
     suspend fun resolveUrl(platform: MusicPlatform, id: String): String? {
-        for (br in listOf(320, 999, 128)) {
-            val text = runCatching {
-                get(mapOf("types" to "url", "source" to platform.key, "id" to id, "br" to "$br"))
-            }.getOrNull() ?: continue
-            val obj = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: continue
-            val url = obj["url"]?.jsonPrimitive?.contentOrNull
-            if (!url.isNullOrBlank() && url.startsWith("http")) return url
+        repeat(MAX_URL_ROUNDS) { round ->
+            for (br in URL_BITRATES) {
+                val text = runCatching {
+                    get(mapOf("types" to "url", "source" to platform.key, "id" to id, "br" to "$br"))
+                }.getOrNull() ?: continue
+                val obj = runCatching { json.parseToJsonElement(text) as? JsonObject }.getOrNull() ?: continue
+                val url = obj["url"]?.jsonPrimitive?.contentOrNull
+                if (!url.isNullOrBlank() && url.startsWith("http")) return url
+            }
+            if (round < MAX_URL_ROUNDS - 1) delay(400L * (round + 1))
         }
         return null
     }

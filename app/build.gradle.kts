@@ -17,8 +17,8 @@ android {
         // 版本号规则（2026-09-22 用户指定）：versionName = 上一版 + 1（不补零），从 0.190 起
         // （不再读 git 提交次数——那条规则会因"每轮 2 个提交"而每次 +2）
         // ⚠️ versionCode 固定取 1000 + N（0.190 → 1190）：必须单调递增，否则系统拒绝覆盖安装
-        versionCode = 1212
-        versionName = "0.212"
+        versionCode = 1213
+        versionName = "0.213"
 
         // FFmpeg 解码扩展（NextLib）带了 4 个 ABI 的原生库：只保留真机在用的两个，控制体积
         ndk {
