@@ -16,7 +16,7 @@ import org.json.JSONObject
  * 导致豆瓣登录态和坚果云配置丢失、每次更新都要重新登录。
  * 方案：这些配置同步备份到公共目录 Download/老郑分享/config_backup.json，
  * 启动时若应用内缺失对应配置则自动从备份恢复（只补空缺，不覆盖新值）。
- * 注意：备份文件含 Cookie 和应用密码明文，仅适用于个人设备。
+ * 注意：备份文件含 Cookie、应用密码与哔咔账密明文，仅适用于个人设备。
  */
 object ConfigBackup {
 
@@ -32,6 +32,9 @@ object ConfigBackup {
         "webdav_pass",
         "vod_sources_json",
         "bika_token",
+        // 哔咔账密：token 过期时靠它静默重登，重装后也要能恢复，否则会退回"请重新登录"
+        "bika_account",
+        "bika_password",
         "wygamer_cookie",
         "zlib_cookie",
         "zlib_host",

@@ -112,7 +112,7 @@
 - 本子页面的"最近更新"按钮和分类加载功能需修复，网络规则应与番号一致（需外网环境）
 
 ## Engineering Conventions
-- **版本号规则（2026-09-22 用户指定，取代「读提交次数」，也取代最早的 `2.23.NN`）**：**每个发版轮次 `versionName` = 上一版 +1**（不补零），**从 `0.190` 起**（`0.190` → `0.191` → `0.192`…）。⚠️ **不再读 `git rev-list --count HEAD`**：老规则会因为"每轮固定产生 2 个提交（功能提交 + 记忆同步提交）"而每次 +2（用户 2026-09-22 指出 `0.185 → 0.187` 正是 +2，要求以后 +1）。APK 文件名 = `老郑分享-0.<N>.apk`，GitHub 资产名 = `LaoZhengFenXiang-0.<N>.apk`（必须 ASCII），tag = `v0.<N>`。⚠️ **versionCode 固定取 `1000 + N`**（`0.190` → `1190`；必须保持单调递增，否则系统拒绝覆盖安装）。**版本沿革**：最后一个"提交次数"版本是 `v0.183`（versionCode 1183，Release 392804722，仍在仓库里）；`v0.185`/`v0.187` 的改动与 tag/Release 已按用户要求**全部撤销**（2026-09-22，`git revert` 5 个提交），**版本号从 `0.190` 重新起算**；仓库 `app/build.gradle.kts` 当前为 `0.191 / 1191`（第二十一轮发版后；上一版是重新起算的 `0.190 / 1190`）。
+- **版本号规则（2026-09-22 用户指定，取代「读提交次数」，也取代最早的 `2.23.NN`）**：**每个发版轮次 `versionName` = 上一版 +1**（不补零），**从 `0.190` 起**（`0.190` → `0.191` → `0.192`…）。⚠️ **不再读 `git rev-list --count HEAD`**：老规则会因为"每轮固定产生 2 个提交（功能提交 + 记忆同步提交）"而每次 +2（用户 2026-09-22 指出 `0.185 → 0.187` 正是 +2，要求以后 +1）。APK 文件名 = `老郑分享-0.<N>.apk`，GitHub 资产名 = `LaoZhengFenXiang-0.<N>.apk`（必须 ASCII），tag = `v0.<N>`。⚠️ **versionCode 固定取 `1000 + N`**（`0.190` → `1190`；必须保持单调递增，否则系统拒绝覆盖安装）。**版本沿革**：最后一个"提交次数"版本是 `v0.183`（versionCode 1183，Release 392804722，仍在仓库里）；`v0.185`/`v0.187` 的改动与 tag/Release 已按用户要求**全部撤销**（2026-09-22，`git revert` 5 个提交），**版本号从 `0.190` 重新起算**；仓库 `app/build.gradle.kts` 当前为 `0.212 / 1212`（v0.212 发版后；上一版是 `0.211 / 1211`）。
 - **项目记忆同步（v2.21.2 起，用户要求"换电脑/换账号也不丢上下文"）**：每次更新本记忆文件后，必须把全文同步拷贝到仓库 `docs/AI_PROJECT_MEMORY.md`（头部注明"由 AI 助手维护，与本地项目记忆同步"）并随 commit push——这是给 AI 的硬规则，不是可选项
 - **发版流程（以本会话为准；2026-09-22 起版本号改为「上一版 +1、从 0.190 起」）**：① 算版本号：**上一版 +1** → `versionName = "0.<N>"`、`versionCode = 1000 + N`（规则见上条；**不再读提交次数**；下一版就是当前 `0.190` 之后要发的那个号）→ ② 需要时同步 README 功能描述 → ③ 记忆同步到 `docs/AI_PROJECT_MEMORY.md` → ④ `git add <只加自己改过的文件>` + commit → ⑤ `git push origin main` → ⑥ `git tag v0.<N>` + `git push origin v0.<N>` → ⑦ **查一次** Release：`GET /repos/Bug142857/ShangYin/releases/tags/<tag>` —— **404 → 直接由本会话 POST 创建 + 上传 APK**；万一已是 200 → 只核对资产，**不重复上传、不删改** → ⑧ APK 拷桌面（`老郑分享-0.<N>.apk`，用 `[System.IO.File]::Copy`）。⚠️ **历史遗留（已结束，流程里不再为它让步）**：早前另有一个并行 AI 会话会在 tag 推送后自动代建 Release，**该会话已于 2026-09-21 结束**（已核实：仓库无 GitHub Actions、无 bot，时间戳显示是 agent 行为）。**因此发版不再有任何「等待/重查/核对他人产物」的步骤，一律由本会话一次做完；历史条目里出现的「并行会话代建 Release」只是当时的记录，不代表现在还有第二条流水线。**
 - **发版工具细节（本会话实测可用，照做即可）**：gh CLI 未安装 → 直接调 REST：用环境变量 **`$env:GH_TOKEN`**（40 字符）作 `Authorization: token ...` 头；创建 `POST /repos/Bug142857/ShangYin/releases`（JSON: tag_name/name/body/draft/prerelease）→ 上传 `POST https://uploads.github.com/repos/Bug142857/ShangYin/releases/<id>/assets?name=<ASCII文件名>`（`Content-Type: application/vnd.android.package-archive` + `-InFile`）；查询用 `GET /repos/Bug142857/ShangYin/releases/tags/<tag>`。⚠️ 硬教训：**资产名必须纯 ASCII**（GitHub 会自动剥离中文，实测中文名被剥成 `-0.179.apk`，统一用 `LaoZhengFenXiang-0.<N>.apk`）；PS1 脚本/命令含中文会被按 GBK 解析报语法错（命令尽量短、复杂格式化别写内联 if）；`Copy-Item` 会被沙箱拒 → 用 `[System.IO.File]::Copy`；`curl ... | ConvertFrom-Json` 偶发返空对象，别据一次空输出判失败。
@@ -308,6 +308,9 @@
     私有目录 `file://…`），调用方**不要再拼 `file://` 前缀**。
     新增 `comicDirInfo()` / `bikaDirInfo()`（`DirInfo(path, isPublic, relative)`）给下载管理页的目录卡用。
   - **顺手修掉一个老 bug**：导出/导入 JSON 一直漏写 `lists.world`（导入后清单全变表世界），现在 `world` / `musicList` 都写都读（旧备份缺字段走默认值）。
+  - **哔咔账密也进配置备份**：`ConfigBackup.KEYS` 加 `bika_account` / `bika_password` —— 只备份 `bika_token` 的话，
+    卸载重装/换机后 token 虽然能恢复，但一旦过期就没有账密可用来静默重登，会退回「请重新登录」。
+    ⚠️ 至此 `Download/老郑分享/config_backup.json` 里含 Cookie / WebDAV 密码 / 哔咔账密**明文**（个人设备取舍，已在类注释注明）。
 - **真机未验证项**（下次可先问用户）：33ve 直链在实际网络/手机上能否出声、通知栏/锁屏控制、通知点击回原页的两种场景、
   私有目录跳转提示；v0.212 新增的：JOOX 歌自动回退 33ve 是否总能找到同名歌、漫画/本子存进公共 Download 后的离线阅读
   （`content://` 图片能否正常显示 / 长按保存）、哔咔账密自动重登在真实 token 过期时是否无感。
