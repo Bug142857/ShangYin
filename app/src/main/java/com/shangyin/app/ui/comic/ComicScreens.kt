@@ -614,6 +614,9 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     }
 
     /** 下载指定章节（1 章或整套） */
+    // 下载确认：点击后先弹窗问一次是否下载（用户要求所有下载操作都要确认）
+    var pendingDownload by remember { mutableStateOf<List<Int>?>(null) }
+
     fun download(targets: List<Int>) {
         val list = targets.mapNotNull { ordered.getOrNull(it)?.let { ch -> it to ch } }
         if (list.isEmpty()) return
@@ -791,7 +794,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                                 Text(if (sortDesc) "倒序" else "正序", style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
-                                onClick = { download(ordered.indices.toList()) },
+                                onClick = { pendingDownload = ordered.indices.toList() },
                                 enabled = chapters.isNotEmpty()
                             ) {
                                 Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -898,7 +901,7 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                                     )
                                 }
                                 else -> IconButton(
-                                    onClick = { download(listOf(i)) },
+                                    onClick = { pendingDownload = listOf(i) },
                                     enabled = ordered.isNotEmpty()
                                 ) {
                                     Icon(
@@ -957,6 +960,19 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                 }
             )
         }
+    }
+
+    // 下载确认：点击后先问一次是否下载（漫画：下载全部 / 单章共用）
+    pendingDownload?.let { targets ->
+        com.shangyin.app.ui.common.DownloadConfirmDialog(
+            detail = "将下载《${detail?.title ?: "漫画"}》共 ${targets.size} 章到本地，是否继续？",
+            onDismiss = { pendingDownload = null },
+            onConfirm = {
+                val t = targets
+                pendingDownload = null
+                download(t)
+            }
+        )
     }
 
     // 单章图片总览网格（images=null 时内部显示加载占位）

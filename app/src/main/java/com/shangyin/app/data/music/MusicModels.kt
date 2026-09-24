@@ -5,19 +5,26 @@ package com.shangyin.app.data.music
  * 所以同名歌曲在不同来源下是两条收藏记录。
  *
  * - [S33VE] 闪闪音乐网（https://www.33ve.com）：搜索、播放直链、歌词、封面全都免登录免验证、无限频（详见 [Site33]）。
- * - [JOOX] / [NETEASE] 走聚合接口 gdstudio（详见 [GdStudio]）。JOOX 的直链**时有时无**（部分曲目/时段上游不给流），
- *   [GdStudio.resolveUrl] 会多轮重试，仍拿不到时由 [MusicRepo.resolvePlay] 回退到 33ve 找同名歌；网易云稳定可用。
+ * - [MVMMP3] 无名音乐网（http://www.mvmp3.com）：与 33ve 同一套建站系统，接口形态一致（详见 [MvMp3]），
+ *   搜索结果自带封面，直链走酷我 CDN，实测稳定可用。
+ * - [JOOX] / [NETEASE]：历史来源，原先走 gdstudio 聚合接口，该接口已按用户要求整体下线（被 mvmp3 替代）。
+ *   枚举值仅为兼容旧收藏条目（key 解析不崩）：这两个来源**不再出现在搜索 chips**，
+ *   旧条目点播时由 [MusicRepo.resolvePlay] 自动按"歌名 + 歌手"去 mvmp3 / 33ve 找同名歌播放。
  *
  * 历史：曾用过 24bit（www.24bit.net）与洛雪音源脚本，因限额/稳定性问题已按用户要求全部移除，
  * 旧收藏里的 `bit24|…` 条目因此不再能播放（用户已确认接受）。
  */
-enum class MusicPlatform(val key: String, val label: String) {
+enum class MusicPlatform(val key: String, val label: String, val inSearch: Boolean = true) {
     S33VE("33ve", "音乐"),
-    JOOX("joox", "JOOX"),
-    NETEASE("netease", "网易云");
+    MVMMP3("mvmp3", "mvmp3"),
+    JOOX("joox", "JOOX", inSearch = false),
+    NETEASE("netease", "网易云", inSearch = false);
 
     companion object {
         fun of(key: String): MusicPlatform? = entries.firstOrNull { it.key == key }
+
+        /** 搜索页 chips 要显示的来源（历史上线过又下线的来源不显示） */
+        val searchable: List<MusicPlatform> get() = entries.filter { it.inSearch }
     }
 }
 

@@ -343,6 +343,32 @@
   `MusicRepo.boards/boardSongs`、`MusicBoard` 模型以及 MusicApis 里 8 个平台榜单实现 + `TX_BOARDS`/`KW_BOARDS`/`MG_RANK_*`/`mgRankSong`/`fmtDate`
   （搜索与歌词代码未动）。收藏的歌曲仍可在里世界清单里看到（收藏口径没变）。
 
+- **v0.214（音乐 9 条需求 + 1 答疑，2026-09-24）**：
+  ① **清单里的音乐点完直接播**：`ListDetailScreen.openEntity` 不再 `safeNavigate("musicPlayer")`，
+  只 `MusicPlayback.play`（清单页本来就挂了 `MusicMiniPlayer`，点迷你条才进大播放器）。
+  ② **音源换 mvmp3**：JOOX/网易云整体下线（**删了 GdStudio.kt**），新音源 `MvMp3.kt`（无名音乐网 www.mvmp3.com）。
+  ⚠️ **mvmp3 与 33ve 是同一套建站系统（ilingku），接口完全同构**：`GET /so.php?wd=&page=` 搜索（**HTML 自带酷狗封面** imge.kugou.com，
+  不用补抓）、`POST /style/js/play.php`（表单 `id={32hex}&type=dance` → JSON url/lrc/pic/name/singer）。
+  实测**接口免登录免验证免 Cookie**（首页有人机验证墙但接口不拦；必须带 Accept + Accept-Language，同 33ve 坑）；
+  直链走**酷我 CDN**（car-er.kuwo.cn，https，只需 UA，实测 206 audio/mpeg）。
+  `MusicPlatform` 加 `inSearch` 标志：JOOX/NETEASE 保留枚举值（旧收藏 key 解析不崩）但不出现在 chips；
+  旧 JOOX/网易云条目点播走 `resolveViaSite`（按"歌名+歌手"去 mvmp3 → 33ve 找同名，找不到才报错）。
+  ③ **全仓下载先确认**：新增公共 `DownloadConfirmDialog`（Components.kt），7 个入口全覆盖——音乐搜索页、音乐播放页、
+  漫画详情（下载全部/单章）、哔咔详情（下载全部·本篇/单话）、书籍详情；点下载按钮只置 pendingDownload，确认才真正开始。
+  游戏详情的"下载"是解析网盘链接跳浏览器（App 不落盘），未加确认（避免过度干预）。
+  ④ **唯一音乐清单免选择收藏**：`CollectDialog` 里 `music=true` 且加载后 `musicList` 清单恰好 1 个 → 自动收藏（弹窗不渲染防闪烁），
+  失败复位 `autoCollected` 恢复弹窗可手选。其它类型清单不受影响。
+  ⑤ **歌手排序规则**：`sortItemsByArtist` 用 `Collator.getInstance(Locale.CHINA)`——首字符 ASCII（英文/数字歌手）在前按 a-z，
+  中文在后按拼音 a-z；统一走 `getCollationKey`（Collator 对纯字母也是字母序）。⚠️ compareBy 两个 selector 必须同 Comparable 类型
+  （String 和 CollationKey 混用编译不过，统一 CollationKey 即可）。
+  ⑥ **目录打不开修复**：`DownloadScreen.launchDir` 改三级 fallback——通用 `ACTION_VIEW`(documents dir uri) →
+  显式包名 `com.android.documentsui` / `com.google.android.documentsui` → `ACTION_OPEN_DOCUMENT_TREE`+`EXTRA_INITIAL_URI`
+  （系统文件选择器定位到该目录，全 ROM 可用）；全失败才 Toast。国产 ROM 不认通用 ACTION_VIEW 是主因。
+  ⑦ **清单名右侧显示条目数**：`ListDetailScreen` TopAppBar 标题 Row 里 name 后追加 `items.size`（音乐 Tag 之前）。
+  ⑧ **删除提示语义（答疑，未改码）**：「删除清单/移出条目不会删除收藏条目本身」= 条目全局唯一（collection_items 表），
+  清单与条目是 list_items 关联（一条目可挂多清单）；删清单/移出只动关联。⚠️ 但 `removeItemFromList`/`deleteListTree`
+  之后有 **pruneOrphans**：不再属于任何清单的条目会被自动清掉——所以"独占条目"实际上会随最后一个清单消失。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK

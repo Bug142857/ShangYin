@@ -275,6 +275,25 @@ private suspend fun performDownload(context: android.content.Context, url: Strin
         .onFailure { e -> Toast.makeText(context, "保存失败：${e.message}", Toast.LENGTH_LONG).show() }
 }
 
+/**
+ * 下载确认弹窗：**所有下载入口**（音乐/漫画/本子/书籍）点击后统一先走这里问一次"是否下载"，
+ * 确认才真正开始。文案由调用方拼好（含将要下载的内容与数量）。
+ */
+@Composable
+fun DownloadConfirmDialog(
+    detail: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("确认下载") },
+        text = { Text(detail) },
+        confirmButton = { TextButton(onClick = onConfirm) { Text("下载") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
 /** 豆瓣评分 */
 @Composable
 fun DoubanRating(rating: Float?, modifier: Modifier = Modifier) {

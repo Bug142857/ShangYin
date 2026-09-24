@@ -232,8 +232,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         if (song != null && musicSongs.isNotEmpty()) {
             val idx = musicSongs.indexOfFirst { it.key == song.key }.coerceAtLeast(0)
             ensureNotifPermission()
+            // 点完直接播：底部有迷你播放条（点它才进完整播放页），不自动跳大播放器
             com.shangyin.app.ui.music.MusicPlayback.play(context, musicSongs, idx)
-            nav.safeNavigate("musicPlayer")
         } else {
             nav.safeNavigate("item/${entity.id}")
         }
@@ -280,6 +280,15 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier.weight(1f, fill = false)
                             )
+                            // 条目数量跟在清单名称右侧（与清单列表页一致）
+                            if (items.isNotEmpty()) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "${items.size}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                             if (isMusicList) {
                                 Spacer(Modifier.width(6.dp))
                                 com.shangyin.app.ui.common.MusicListTag()
@@ -1141,11 +1150,20 @@ private fun MusicItemRowInList(
 }
 
 /**
- * 音乐条目按歌手（subTitle）排序：sortedBy 为稳定排序，歌手相同时保持添加顺序；
+ * 音乐条目按歌手（subTitle）排序：**英文歌手在前**（按字母 a-z，不区分大小写），**中文歌手在后**（按拼音 a-z，
+ * 用 Collator 的中文排序规则，免新增依赖）；sortedWith 为稳定排序，歌手相同时保持添加顺序；
  * 音乐条目填回原来属于音乐条目的位置，非音乐条目的顺序与位置都不变。
  */
 private fun sortItemsByArtist(items: List<CollectionItemEntity>): List<CollectionItemEntity> {
-    val music = items.filter { it.category == MusicRepo.CATEGORY }.sortedBy { it.subTitle }
+    val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
+    val music = items.filter { it.category == MusicRepo.CATEGORY }.sortedWith(
+        compareBy(
+            // 首字符是 ASCII（字母/数字，即"英文歌手"）的排前面；空歌手跟中文一组排后面
+            { (it.subTitle.firstOrNull()?.code ?: Int.MAX_VALUE) >= 128 },
+            // 统一用 CollationKey（Collator 对纯字母也是 a-z 序；中文是拼音序）；小写化避免大小写干扰
+            { collator.getCollationKey(it.subTitle.trim().lowercase()) }
+        )
+    )
     if (music.isEmpty()) return items
     var i = 0
     return items.map { if (it.category == MusicRepo.CATEGORY) music[i++] else it }

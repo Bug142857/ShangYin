@@ -328,6 +328,8 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     var retryKey by remember { mutableIntStateOf(0) }
 
     var downloading by remember { mutableStateOf(false) }
+    // 下载确认弹窗开关（确认后才真正调 download()）
+    var pendingDownload by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf<Pair<Long, Long>?>(null) }
     var quota by remember { mutableStateOf<ZlibClient.DownloadQuota?>(null) }
 
@@ -469,7 +471,8 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
 
                     item {
                         Button(
-                            onClick = { download() },
+                            // 下载确认：点击后先弹窗问一次是否下载（用户要求所有下载操作都要确认）
+                            onClick = { pendingDownload = true },
                             enabled = !downloading,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -522,6 +525,18 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
                 }
             }
         }
+    }
+
+    // 下载确认：点击后先问一次是否下载（书籍下载会消耗账号当日额度）
+    if (pendingDownload) {
+        com.shangyin.app.ui.common.DownloadConfirmDialog(
+            detail = "将下载《${book?.title ?: "该书"}》到本地书籍目录（会消耗当日下载额度），是否继续？",
+            onDismiss = { pendingDownload = false },
+            onConfirm = {
+                pendingDownload = false
+                download()
+            }
+        )
     }
 }
 

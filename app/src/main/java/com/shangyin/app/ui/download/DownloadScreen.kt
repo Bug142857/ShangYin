@@ -1,6 +1,5 @@
 package com.shangyin.app.ui.download
 
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.os.Environment
@@ -634,18 +633,38 @@ private fun openPrivateDir(context: Context, dir: File) {
     if (docId == null) fail() else launchDir(context, docId, fail)
 }
 
-/** 用系统文件管理器打开一个 documents 目录；任何异常都走 onFail 兜底 */
+/**
+ * 用系统文件管理器打开一个 documents 目录，**多级兜底**（部分国产 ROM 不认通用 ACTION_VIEW）：
+ * 1. 通用 `ACTION_VIEW`（原生系统文件管理器认它）；
+ * 2. 显式指定 DocumentsUI 包名再试（部分系统把文件管理器从隐式匹配里排除了）；
+ * 3. `ACTION_OPEN_DOCUMENT_TREE` + `EXTRA_INITIAL_URI`（系统文件选择器直接定位到该目录，全部 ROM 都有）；
+ * 全失败才走 onFail（Toast 提示路径）。任何一级成功即返回。
+ */
 private fun launchDir(context: Context, docId: String, onFail: () -> Unit) {
-    try {
-        val uri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTH, docId)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        context.startActivity(intent)
-    } catch (e: ActivityNotFoundException) {
-        onFail()
-    } catch (e: Exception) {
-        onFail()
+    val uri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTH, docId)
+    // 1. 通用 ACTION_VIEW
+    val view = Intent(Intent.ACTION_VIEW).apply {
+        setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
+    if (tryStartActivity(context, view)) return
+    // 2. 显式指定系统文件管理器（DocumentsUI 的两个常见包名）
+    for (pkg in listOf("com.android.documentsui", "com.google.android.documentsui")) {
+        if (tryStartActivity(context, Intent(view).apply { setPackage(pkg) })) return
+    }
+    // 3. 文件选择器定位到该目录（R+ 支持 INITIAL_URI，低版本会打开选择器根目录）
+    val picker = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+        }
+    }
+    if (tryStartActivity(context, picker)) {
+        Toast.makeText(context, "已在文件选择器中定位该目录", Toast.LENGTH_SHORT).show()
+        return
+    }
+    onFail()
 }
+
+/** 起 Activity，任何异常（没有可处理的应用等）都算失败 */
+private fun tryStartActivity(context: Context, intent: Intent): Boolean =
+    runCatching { context.startActivity(intent) }.isSuccess

@@ -34,7 +34,8 @@ object MusicRepo {
     /**
      * 搜索。搜索页可以按来源切换：
      * - [MusicPlatform.S33VE] → 33ve（搜索页 HTML 里自带封面，不用额外抓）
-     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] → gdstudio 聚合接口
+     * - [MusicPlatform.MVMMP3] → 无名音乐网（同样自带封面）
+     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] 已下线，不进搜索
      */
     suspend fun search(
         keyword: String,
@@ -42,12 +43,14 @@ object MusicRepo {
         platform: MusicPlatform = MusicPlatform.S33VE
     ): List<MusicSong> = when (platform) {
         MusicPlatform.S33VE -> Site33.search(keyword, page)
-        else -> GdStudio.search(platform, keyword, page)
+        MusicPlatform.MVMMP3 -> MvMp3.search(keyword, page)
+        else -> throw MusicResolveException("该来源已下线，请换用其它来源搜索")
     }
 
     suspend fun lyric(song: MusicSong): MusicLyric = when (song.platform) {
         MusicPlatform.S33VE -> Site33.lyric(song)
-        else -> GdStudio.lyric(song.platform, song.id)
+        MusicPlatform.MVMMP3 -> MvMp3.lyric(song)
+        else -> MusicLyric()
     }
 
     /** 清空直链缓存（直链带时效签名，需要强制换新时用） */
@@ -72,44 +75,39 @@ object MusicRepo {
                 MusicPlayInfo(url, Site33.PLAY_HEADERS)
             }
 
-            MusicPlatform.JOOX -> {
-                // JOOX 直链时有时无（见 GdStudio 类注释），GdStudio.resolveUrl 内部已多轮重试；
-                // 仍然拿不到（这首/这刻上游不给流）就按"歌名 + 歌手"去 33ve 找同名歌播放，尽量让用户点得响
-                val direct = runCatching { GdStudio.resolveUrl(song.platform, song.id) }.getOrNull()
-                if (!direct.isNullOrBlank()) {
-                    MusicPlayInfo(direct, GdStudio.PLAY_HEADERS)
-                } else {
-                    resolveVia33ve(song)
-                }
+            MusicPlatform.MVMMP3 -> {
+                val result = MvMp3.resolve(song)
+                val url = result.url
+                if (url.isNullOrBlank()) throw MusicResolveException(result.error ?: "没有可用的播放直连")
+                MusicPlayInfo(url, MvMp3.PLAY_HEADERS)
             }
 
-            MusicPlatform.NETEASE -> {
-                val direct = runCatching { GdStudio.resolveUrl(song.platform, song.id) }.getOrNull()
-                    ?: throw MusicResolveException("网易云没有这首歌的可播放资源")
-                MusicPlayInfo(direct, GdStudio.PLAY_HEADERS)
-            }
+            // 历史来源（gdstudio 已下线，存的都是失效 ID）：直接按"歌名 + 歌手"去 mvmp3 / 33ve 找同名歌
+            MusicPlatform.JOOX, MusicPlatform.NETEASE ->
+                resolveViaSite(song, useMvmp3 = true) ?: resolveViaSite(song, useMvmp3 = false)
+                ?: throw MusicResolveException("原来源已下线，mvmp3 / 33ve 里也没找到同名的歌")
         }
         urlCache[song.key] = info.url to System.currentTimeMillis()
         return info
     }
 
     /**
-     * 回退解析：拿"歌名 歌手"去 33ve 搜一次，取同名（或同名同歌手）的第一首解析直链。
-     * 只用于直链拿不到的来源（JOOX），失败给出明确的提示文案。
+     * 回退解析：拿"歌名 歌手"去 33ve 或 mvmp3 搜一次，取同名（或同名同歌手）的第一首解析直链。
+     * 用于已下线来源的旧收藏（JOOX / 网易云）；找不到返回 null，由调用方换下一个站点或报错。
      */
-    private suspend fun resolveVia33ve(song: MusicSong): MusicPlayInfo {
+    private suspend fun resolveViaSite(song: MusicSong, useMvmp3: Boolean): MusicPlayInfo? {
         val keyword = listOf(song.name, song.artists).filter { it.isNotBlank() }.joinToString(" ")
-        val candidates = runCatching { Site33.search(keyword) }.getOrNull().orEmpty()
+        val candidates = runCatching {
+            if (useMvmp3) MvMp3.search(keyword) else Site33.search(keyword)
+        }.getOrNull().orEmpty()
         // 优先同名 + 歌手前几位匹配的，其次同名，最后放弃（避免播成完全无关的歌）
         val target = candidates.firstOrNull { it.name == song.name && sameArtist(it, song) }
             ?: candidates.firstOrNull { it.name == song.name }
-        if (target == null) throw MusicResolveException("该来源拿不到播放地址，其它来源里也没找到同名的歌")
-        val result = Site33.resolve(target)
-        val url = result.url
-        if (url.isNullOrBlank()) {
-            throw MusicResolveException(result.error ?: "没有可用的播放直连")
-        }
-        return MusicPlayInfo(url, Site33.PLAY_HEADERS)
+        if (target == null) return null
+        // 两个站点的 PlayResult 是不同类型（结构相同），在分支里分别取 url 才能通过编译
+        val url = if (useMvmp3) MvMp3.resolve(target).url else Site33.resolve(target).url
+        if (url.isNullOrBlank()) return null
+        return MusicPlayInfo(url, if (useMvmp3) MvMp3.PLAY_HEADERS else Site33.PLAY_HEADERS)
     }
 
     /** 歌手是否大致相同（多歌手的歌两边排序/分隔符可能不同，只比对首个歌手名） */

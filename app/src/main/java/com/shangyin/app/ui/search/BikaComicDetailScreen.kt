@@ -169,6 +169,9 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
         ch.title?.takeIf { it.isNotBlank() }?.let { append(" ").append(it) }
     }
 
+    // 下载确认：点击后先弹窗问一次是否下载（用户要求所有下载操作都要确认）；空列表 = 单本（下载本篇）
+    var pendingDownload by remember { mutableStateOf<List<BikaChapter>?>(null) }
+
     /** 登录失效已由 BikaClient.withAuth 自动重新注册，二次失败提示返回 */
     fun handleAuthError() {
         Toast.makeText(context, "哔咔账号异常，请重新进入", Toast.LENGTH_LONG).show()
@@ -463,7 +466,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                 Text(if (sortDesc) "倒序" else "正序", style = MaterialTheme.typography.labelMedium)
                             }
                             TextButton(
-                                onClick = { download(chapters) },
+                                onClick = { pendingDownload = chapters }, // 空 = 单本（下载本篇）
                                 enabled = !chaptersLoading
                             ) {
                                 Icon(Icons.Rounded.Download, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -589,7 +592,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                                 modifier = Modifier.size(20.dp)
                                             )
                                         }
-                                        else -> IconButton(onClick = { download(listOf(ch)) }) {
+                                        else -> IconButton(onClick = { pendingDownload = listOf(ch) }) {
                                             Icon(
                                                 Icons.Rounded.Download,
                                                 contentDescription = "下载本章",
@@ -683,6 +686,20 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     )
                     if (itemId > 0) { Repo.addItemToList(listId, itemId); true } else false
                 }
+            }
+        )
+    }
+
+    // 下载确认：点击后先问一次是否下载（本子：下载全部/本篇 / 单话共用；空列表 = 单本）
+    pendingDownload?.let { targets ->
+        val countText = if (targets.isEmpty()) "本篇" else "共 ${targets.size} 话"
+        com.shangyin.app.ui.common.DownloadConfirmDialog(
+            detail = "将下载《${comic?.title ?: "本子"}》$countText 到本地，是否继续？",
+            onDismiss = { pendingDownload = null },
+            onConfirm = {
+                val t = targets
+                pendingDownload = null
+                download(t)
             }
         )
     }

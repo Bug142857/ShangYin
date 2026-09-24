@@ -88,7 +88,7 @@ import kotlinx.coroutines.launch
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 多音源：顶部 chips 可切换来源（音乐 33ve / JOOX / 网易云），每个来源的搜索/歌词/封面都由各自接口提供；
+ * 多音源：顶部 chips 可切换来源（音乐 33ve / mvmp3），每个来源的搜索/歌词/封面都由各自接口提供；
  * 播放直链在播放时现取（直链带时效签名），分派逻辑见 [com.shangyin.app.data.music.MusicRepo.resolvePlay]。
  */
 
@@ -280,7 +280,7 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
 private class SearchTabState {
     var input by mutableStateOf("")
     var keyword by mutableStateOf("")
-    /** 当前搜索来源（chips 可切换：音乐 33ve / JOOX / 网易云） */
+    /** 当前搜索来源（chips 可切换：音乐 33ve / mvmp3） */
     var platform by mutableStateOf(MusicPlatform.S33VE)
     var results by mutableStateOf<List<MusicSong>>(emptyList())
     var page by mutableStateOf(1)
@@ -314,7 +314,9 @@ private fun SearchTab(st: SearchTabState) {
     // 下载失败原因（原文展示，不静默）
     var downloadError by remember { mutableStateOf<String?>(null) }
 
-    // 下载一首歌：进度显示在页面底部，成功/失败都给提示
+    // 下载一首歌：先弹确认（用户要求所有下载操作都要先问一次），进度显示在页面底部，成功/失败都给提示
+    var pendingDownload by remember { mutableStateOf<MusicSong?>(null) }
+
     fun startDownload(song: MusicSong) {
         if (downloadingKey != null) return
         downloadingKey = song.key
@@ -431,7 +433,7 @@ private fun SearchTab(st: SearchTabState) {
                 .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 2.dp)
         ) {
-            MusicPlatform.entries.forEach { p ->
+            MusicPlatform.searchable.forEach { p ->
                 FilterChip(
                     selected = st.platform == p,
                     onClick = { switchPlatform(p) },
@@ -464,7 +466,7 @@ private fun SearchTab(st: SearchTabState) {
                             // 下载按钮排在收藏按钮前面
                             trailing = {
                                 IconButton(
-                                    onClick = { startDownload(song) },
+                                    onClick = { pendingDownload = song },
                                     enabled = downloadingKey == null
                                 ) {
                                     Icon(
@@ -507,6 +509,19 @@ private fun SearchTab(st: SearchTabState) {
                 onDismiss = { collectSong = null },
                 collect = { listId -> MusicRepo.collect(song, listId) },
                 music = true
+            )
+        }
+
+        // 下载确认：所有下载操作点击后都要先问一次是否下载
+        pendingDownload?.let { song ->
+            com.shangyin.app.ui.common.DownloadConfirmDialog(
+                detail = "将下载《${song.name}》到本地下载目录，是否继续？",
+                onDismiss = { pendingDownload = null },
+                onConfirm = {
+                    val target = song
+                    pendingDownload = null
+                    startDownload(target)
+                }
             )
         }
     }

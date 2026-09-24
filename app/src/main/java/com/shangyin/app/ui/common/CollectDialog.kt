@@ -55,12 +55,18 @@ fun CollectDialog(
     var showCreate by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
 
+    suspend fun performCollect(listId: Long): Boolean {
+        if (busy) return false
+        busy = true
+        val ok = runCatching { collect(listId) }.getOrDefault(false)
+        busy = false
+        return ok
+    }
+
     fun doCollect(listId: Long) {
         if (busy) return
         scope.launch {
-            busy = true
-            val ok = runCatching { collect(listId) }.getOrDefault(false)
-            busy = false
+            val ok = performCollect(listId)
             if (ok) {
                 Toast.makeText(context, "已收藏", Toast.LENGTH_SHORT).show()
                 onDismiss()
@@ -70,9 +76,30 @@ fun CollectDialog(
         }
     }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("收藏到清单") },
+    // 音乐收藏：有且只有一个音乐清单时不用再选，直接收藏进去（清单加载完成后只判一次）；
+    // 弹窗期间先隐藏界面（autoCollected），失败时恢复弹窗可手动重选
+    var autoCollected by remember { mutableStateOf(false) }
+    LaunchedEffect(lists) {
+        if (!music || autoCollected || busy || lists.isEmpty()) return@LaunchedEffect
+        val musicLists = lists.filter { it.list.musicList }
+        if (musicLists.size == 1) {
+            autoCollected = true
+            val ok = performCollect(musicLists.first().list.id)
+            if (ok) {
+                Toast.makeText(context, "已收藏", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            } else {
+                autoCollected = false
+                Toast.makeText(context, "收藏失败，请重试", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 自动收藏进行中不渲染弹窗（避免一闪而过）；失败时 autoCollected 复位会重新显示
+    if (!autoCollected) {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("收藏到清单") },
         text = {
             Column {
                 Text(
@@ -126,6 +153,7 @@ fun CollectDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+    }
 
     // 新建里世界清单
     if (showCreate) {

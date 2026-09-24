@@ -127,7 +127,9 @@ fun MusicPlayerScreen(nav: NavHostController) {
         )
     }
 
-    // 下载当前歌曲，进度回传到按钮；下载中忽略重复点击
+    // 下载当前歌曲：先弹确认（用户要求所有下载操作都要先问一次），进度回传到按钮；下载中忽略重复点击
+    var pendingDownload by remember { mutableStateOf<com.shangyin.app.data.music.MusicSong?>(null) }
+
     fun startDownload() {
         if (downloading) return
         val target = song ?: return
@@ -141,6 +143,18 @@ fun MusicPlayerScreen(nav: NavHostController) {
                 .onFailure { e -> downloadError = e.message ?: "下载失败" }
             downloading = false
         }
+    }
+
+    // 下载确认弹窗
+    pendingDownload?.let { target ->
+        com.shangyin.app.ui.common.DownloadConfirmDialog(
+            detail = "将下载《${target.name}》到本地下载目录，是否继续？",
+            onDismiss = { pendingDownload = null },
+            onConfirm = {
+                pendingDownload = null
+                startDownload()
+            }
+        )
     }
 
     // 换歌：重置进度拖动、拉歌词、查收藏状态
@@ -197,7 +211,7 @@ fun MusicPlayerScreen(nav: NavHostController) {
                     }
                 }
             } else {
-                IconButton(onClick = { startDownload() }) {
+                IconButton(onClick = { pendingDownload = song }) {
                     Icon(Icons.Rounded.Download, contentDescription = "下载")
                 }
             }
