@@ -1,17 +1,14 @@
 package com.shangyin.app.data.music
 
 /**
- * 音乐来源。
+ * 音乐来源：只有 [S33VE]（闪闪音乐网 https://www.33ve.com）。
+ * 搜索、播放直链、歌词、封面全都免登录免验证，且没有每日限额（详见 [Site33]）。
  *
- * 主来源是 [S33VE]（闪闪音乐网 https://www.33ve.com）：搜索、播放直链、歌词、封面全都免登录免验证，
- * 实测没有任何每日限额（详见 [Site33] 的注释）。
- *
- * [BIT24] 是上一版用的来源（www.24bit.net），它的详情页有**每日访问限额**，现在只用于兼容旧收藏
- * （旧条目的 doubanId 前缀是 `bit24|…`，删掉会导致这些条目打不开）。
+ * 历史：曾用过 24bit（www.24bit.net）与洛雪音源脚本，因限额/稳定性问题已按用户要求全部移除，
+ * 旧收藏里的 `bit24|…` 条目因此不再能播放（用户已确认接受）。
  */
 enum class MusicPlatform(val key: String, val label: String) {
-    S33VE("33ve", "音乐"),
-    BIT24("bit24", "24bit无损");
+    S33VE("33ve", "音乐");
 
     companion object {
         fun of(key: String): MusicPlatform? = entries.firstOrNull { it.key == key }

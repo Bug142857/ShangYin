@@ -1,5 +1,10 @@
 package com.shangyin.app.ui.download
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.os.Environment
+import android.provider.DocumentsContract
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -16,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -41,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,11 +65,16 @@ import com.shangyin.app.data.ReadProgressStore
 import com.shangyin.app.data.download.ComicDownloadManager
 import com.shangyin.app.data.download.ComicDownloadStore
 import com.shangyin.app.data.download.DownloadedComic
+import com.shangyin.app.data.download.MediaFileStore
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safePopBackStack
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
- * 我的下载：进行中的任务 + 已下载的漫画/本子（离线阅读、单章删除、整套删除）。
+ * 我的下载：进行中的任务 + 四类已下载资源（漫画 / 本子 / 音乐 / 书籍）。
+ * 四类各自一个独立目录，每节展示数量与占用大小，目录说明可点击跳转到该文件夹。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,8 +92,25 @@ fun DownloadScreen(nav: NavHostController) {
 
     LaunchedEffect(Unit) { ComicDownloadManager.refresh(context) }
 
+    // 音乐 / 书籍：文件系统枚举（Android 10+ 走 MediaStore，8/9 走私有目录），IO 放后台线程
+    val music by produceState(MediaFileStore.EMPTY, context) {
+        value = withContext(Dispatchers.IO) { MediaFileStore.musicSummary(context) }
+    }
+    val books by produceState(MediaFileStore.EMPTY, context) {
+        value = withContext(Dispatchers.IO) { MediaFileStore.bookSummary(context) }
+    }
+
+    // 漫画 / 本子按来源拆分：bika = 本子（独立目录），其余 = 漫画
+    val comics = remember(library) { library.filterNot { it.source == ComicDownloadStore.BIKA } }
+    val bikas = remember(library) { library.filter { it.source == ComicDownloadStore.BIKA } }
+    val comicsSize = remember(comics) { comics.sumOf { ComicDownloadStore.size(context, it.source, it.id) } }
+    val bikasSize = remember(bikas) { bikas.sumOf { ComicDownloadStore.size(context, it.source, it.id) } }
+
     /** 先按当前活跃任务做一次快照（Map 顺序稳定，避免下标越界） */
     val tasks = active.values.toList()
+
+    val comicsDir = remember(context) { ComicDownloadStore.comicRoot(context) }
+    val bikasDir = remember(context) { ComicDownloadStore.bikaRoot(context) }
 
     Scaffold(
         topBar = {
@@ -105,112 +134,95 @@ fun DownloadScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(pad).fillMaxSize()
         ) {
-            // 下载目录（存储位置）设置
-            item { DownloadDirCard() }
-
-            if (tasks.isEmpty() && library.isEmpty()) {
-                item {
-                    Column(
-                        Modifier.fillMaxWidth().padding(vertical = 80.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text("还没有下载内容", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "在漫画 / 本子详情页点「下载全部」或章节右侧的下载按钮",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
+            // 下载中（保持原有功能）
             if (tasks.isNotEmpty()) {
-                item {
-                    Text("下载中（${tasks.size}）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                item(key = "tasks-header") {
+                    SectionHeader("下载中（${tasks.size}）", "")
                 }
-                items(tasks, key = { "${it.source}/${it.id}/${it.chapterKey}" }) { t ->
-                    Card(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text(
-                                "${t.title} · ${t.chapterName}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            if (t.error != null) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        "失败：${t.error}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    TextButton(onClick = {
-                                        ComicDownloadManager.dismiss(t.source, t.id, t.chapterKey)
-                                    }) { Text("移除") }
-                                }
-                            } else if (t.total <= 0) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("获取图片列表…", style = MaterialTheme.typography.labelSmall)
-                                }
-                            } else {
-                                LinearProgressIndicator(
-                                    progress = { t.done.toFloat() / t.total },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                Row {
-                                    Text(
-                                        "${t.done}/${t.total} 张",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    TextButton(onClick = {
-                                        ComicDownloadManager.cancel(t.source, t.id, t.chapterKey)
-                                    }) { Text("取消") }
-                                }
-                            }
-                        }
-                    }
+                items(tasks, key = { "task-${it.source}/${it.id}/${it.chapterKey}" }) { t ->
+                    DownloadTaskCard(t)
                 }
             }
 
-            if (library.isNotEmpty()) {
-                item {
-                    Text("已下载（${library.size}）", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            // 漫画
+            comicSection(
+                title = "漫画",
+                unit = "部",
+                emptyHint = "还没有下载漫画，去漫画详情页点「下载全部」或章节右侧的下载按钮",
+                keyPrefix = "comic",
+                comics = comics,
+                totalBytes = comicsSize,
+                dirTitle = PRIVATE_DIR_TITLE,
+                dirPath = comicsDir.absolutePath,
+                onOpenDir = { openPrivateDir(context, comicsDir) },
+                expanded = expanded,
+                onToggle = { c ->
+                    val k = "${c.source}/${c.id}"
+                    expanded = if (k in expanded) expanded - k else expanded + k
+                },
+                onDeleteComic = { pendingComicDelete = it },
+                onReadChapter = { c, chapterKey ->
+                    val pages = ComicDownloadStore.chapterPages(context, c.source, c.id, chapterKey)
+                    if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
+                    else {
+                        viewer = Triple(c, chapterKey, pages.map { "file://$it" })
+                        ReadProgressStore.record(context, c.source, c.id, chapterKey)
+                    }
+                },
+                onDeleteChapter = { c, chapterKey -> pendingChapterDelete = c to chapterKey }
+            )
+
+            // 本子
+            comicSection(
+                title = "本子",
+                unit = "本",
+                emptyHint = "还没有下载本子，去哔咔详情页点「下载全部」或章节右侧的下载按钮",
+                keyPrefix = "bika",
+                comics = bikas,
+                totalBytes = bikasSize,
+                dirTitle = PRIVATE_DIR_TITLE,
+                dirPath = bikasDir.absolutePath,
+                onOpenDir = { openPrivateDir(context, bikasDir) },
+                expanded = expanded,
+                onToggle = { c ->
+                    val k = "${c.source}/${c.id}"
+                    expanded = if (k in expanded) expanded - k else expanded + k
+                },
+                onDeleteComic = { pendingComicDelete = it },
+                onReadChapter = { c, chapterKey ->
+                    val pages = ComicDownloadStore.chapterPages(context, c.source, c.id, chapterKey)
+                    if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
+                    else {
+                        viewer = Triple(c, chapterKey, pages.map { "file://$it" })
+                        ReadProgressStore.record(context, c.source, c.id, chapterKey)
+                    }
+                },
+                onDeleteChapter = { c, chapterKey -> pendingChapterDelete = c to chapterKey }
+            )
+
+            // 音乐（目录由 MusicDownloader 维护，路径不变）
+            mediaSection(
+                title = "音乐",
+                emptyHint = "还没有下载音乐，去音乐页点下载按钮吧",
+                keyPrefix = "music",
+                summary = music,
+                onOpenDir = {
+                    if (music.isPublic) openPublicDir(context, music.path)
+                    else openPrivateDir(context, MediaFileStore.musicAppDir(context))
                 }
-                items(library.size, key = { "${library[it].source}/${library[it].id}" }) { i ->
-                    val comic = library[i]
-                    ComicDownloadRow(
-                        comic = comic,
-                        expanded = "${comic.source}/${comic.id}" in expanded,
-                        onToggle = {
-                            val k = "${comic.source}/${comic.id}"
-                            expanded = if (k in expanded) expanded - k else expanded + k
-                        },
-                        onDeleteComic = {
-                            pendingComicDelete = comic
-                        },
-                        onReadChapter = { key ->
-                            val pages = ComicDownloadStore.chapterPages(context, comic.source, comic.id, key)
-                            if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
-                            else {
-                                viewer = Triple(comic, key, pages.map { "file://$it" })
-                                ReadProgressStore.record(context, comic.source, comic.id, key)
-                            }
-                        },
-                        onDeleteChapter = { key ->
-                            pendingChapterDelete = comic to key
-                        }
-                    )
+            )
+
+            // 书籍（固定目录 Download/老郑分享/书籍/）
+            mediaSection(
+                title = "书籍",
+                emptyHint = "还没有下载书籍，去图书详情页点「下载」吧",
+                keyPrefix = "book",
+                summary = books,
+                onOpenDir = {
+                    if (books.isPublic) openPublicDir(context, books.path)
+                    else openPrivateDir(context, MediaFileStore.bookAppDir(context))
                 }
-            }
+            )
         }
     }
 
@@ -279,6 +291,199 @@ fun DownloadScreen(nav: NavHostController) {
                 TextButton(onClick = { pendingChapterDelete = null }) { Text("取消") }
             }
         )
+    }
+}
+
+private const val PRIVATE_DIR_TITLE = "应用私有目录（无需存储权限，卸载应用时自动清除）"
+private const val PUBLIC_DIR_TITLE = "公共下载目录（无需存储权限）"
+private const val APP_DIR_TITLE = "应用私有目录（Android 8/9，无需存储权限）"
+
+/** 每节标题：左右分别是「标题」与「数量 · 大小」 */
+@Composable
+private fun SectionHeader(title: String, meta: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f)
+        )
+        if (meta.isNotBlank()) {
+            Text(meta, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** 目录说明卡：整块可点击 → 跳到该文件夹 */
+@Composable
+private fun DirCard(title: String, path: String, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable { onClick() }) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(2.dp))
+                Text(path, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(2.dp))
+                Text("点击打开文件夹", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyHint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(vertical = 6.dp)
+    )
+}
+
+/** 音乐 / 书籍的一节：标题（数量 · 大小）+ 目录说明（可点）+ 文件列表（文件名 + 大小） */
+private fun LazyListScope.mediaSection(
+    title: String,
+    emptyHint: String,
+    keyPrefix: String,
+    summary: MediaFileStore.Summary,
+    onOpenDir: () -> Unit
+) {
+    item(key = "$keyPrefix-header") {
+        SectionHeader(title, "${summary.count} 个文件 · ${ComicDownloadStore.formatSize(summary.totalBytes)}")
+    }
+    item(key = "$keyPrefix-dir") {
+        DirCard(
+            title = if (summary.isPublic) PUBLIC_DIR_TITLE else APP_DIR_TITLE,
+            path = summary.path.ifBlank { "（暂无）" },
+            onClick = onOpenDir
+        )
+    }
+    if (summary.entries.isEmpty()) {
+        item(key = "$keyPrefix-empty") { EmptyHint(emptyHint) }
+    } else {
+        items(summary.entries, key = { "$keyPrefix-${it.name}" }) { e ->
+            MediaFileRow(e)
+        }
+    }
+}
+
+/** 漫画 / 本子的一节：标题（数量 · 大小）+ 目录说明（可点）+ 已下载条目卡片 */
+private fun LazyListScope.comicSection(
+    title: String,
+    unit: String,
+    emptyHint: String,
+    keyPrefix: String,
+    comics: List<DownloadedComic>,
+    totalBytes: Long,
+    dirTitle: String,
+    dirPath: String,
+    onOpenDir: () -> Unit,
+    expanded: Set<String>,
+    onToggle: (DownloadedComic) -> Unit,
+    onDeleteComic: (DownloadedComic) -> Unit,
+    onReadChapter: (DownloadedComic, String) -> Unit,
+    onDeleteChapter: (DownloadedComic, String) -> Unit
+) {
+    item(key = "$keyPrefix-header") {
+        SectionHeader(title, "${comics.size} $unit · ${ComicDownloadStore.formatSize(totalBytes)}")
+    }
+    item(key = "$keyPrefix-dir") {
+        DirCard(title = dirTitle, path = dirPath, onClick = onOpenDir)
+    }
+    if (comics.isEmpty()) {
+        item(key = "$keyPrefix-empty") { EmptyHint(emptyHint) }
+    } else {
+        items(comics, key = { "$keyPrefix-${it.source}/${it.id}" }) { comic ->
+            ComicDownloadRow(
+                comic = comic,
+                expanded = "${comic.source}/${comic.id}" in expanded,
+                onToggle = { onToggle(comic) },
+                onDeleteComic = { onDeleteComic(comic) },
+                onReadChapter = { key -> onReadChapter(comic, key) },
+                onDeleteChapter = { key -> onDeleteChapter(comic, key) }
+            )
+        }
+    }
+}
+
+/** 音乐 / 书籍的单个文件行 */
+@Composable
+private fun MediaFileRow(entry: MediaFileStore.Entry) {
+    Card(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                entry.name,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                ComicDownloadStore.formatSize(entry.size),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 进行中的下载任务卡片（保持原功能） */
+@Composable
+private fun DownloadTaskCard(t: ComicDownloadManager.Task) {
+    val context = LocalContext.current
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                "${t.title} · ${t.chapterName}",
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(6.dp))
+            if (t.error != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "失败：${t.error}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    TextButton(onClick = {
+                        ComicDownloadManager.dismiss(t.source, t.id, t.chapterKey)
+                    }) { Text("移除") }
+                }
+            } else if (t.total <= 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("获取图片列表…", style = MaterialTheme.typography.labelSmall)
+                }
+            } else {
+                LinearProgressIndicator(
+                    progress = { t.done.toFloat() / t.total },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                Row {
+                    Text(
+                        "${t.done}/${t.total} 张",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = {
+                        ComicDownloadManager.cancel(t.source, t.id, t.chapterKey)
+                    }) { Text("取消") }
+                }
+            }
+        }
     }
 }
 
@@ -391,25 +596,48 @@ private fun ComicDownloadRow(
 private fun chapterNo(name: String): Long =
     Regex("\\d+").find(name)?.value?.toLongOrNull() ?: Long.MAX_VALUE
 
-/** 下载目录：只作文字说明（应用私有目录，无需存储权限，卸载即清） */
-@Composable
-private fun DownloadDirCard() {
-    val context = LocalContext.current
-    Card(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Rounded.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text("下载目录", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                Text(
-                    "图片保存在应用私有目录（无需存储权限，卸载应用时自动清除）：\n${ComicDownloadStore.root(context).absolutePath}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+/** 外部存储提供者（系统文件管理器）的 authority */
+private const val EXTERNAL_STORAGE_AUTH = "com.android.externalstorage.documents"
+
+/**
+ * 打开公共目录（如 Download/老郑分享/音乐）。
+ * `primary:` 后面是**相对外部存储根**的路径，不能有前导斜杠。
+ */
+private fun openPublicDir(context: Context, relative: String) {
+    val docId = "primary:" + relative.trim('/')
+    launchDir(context, docId) {
+        Toast.makeText(context, "系统文件管理器打不开该目录：$relative", Toast.LENGTH_LONG).show()
+    }
+}
+
+/**
+ * 打开应用私有目录。Android 11+ 基本打不开，先尝试同样的 ACTION_VIEW，
+ * 失败就 Toast 说明（含绝对路径），绝不崩。
+ */
+private fun openPrivateDir(context: Context, dir: File) {
+    val abs = dir.absolutePath
+    val extRoot = Environment.getExternalStorageDirectory().absolutePath
+    val docId = if (abs.startsWith("$extRoot/")) {
+        "primary:" + abs.removePrefix("$extRoot/").trim('/')
+    } else null
+    val fail: () -> Unit = {
+        Toast.makeText(context, "该目录在应用私有空间，系统文件管理器无法直接打开：$abs", Toast.LENGTH_LONG).show()
+    }
+    if (docId == null) fail() else launchDir(context, docId, fail)
+}
+
+/** 用系统文件管理器打开一个 documents 目录；任何异常都走 onFail 兜底 */
+private fun launchDir(context: Context, docId: String, onFail: () -> Unit) {
+    try {
+        val uri = DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTH, docId)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        context.startActivity(intent)
+    } catch (e: ActivityNotFoundException) {
+        onFail()
+    } catch (e: Exception) {
+        onFail()
     }
 }

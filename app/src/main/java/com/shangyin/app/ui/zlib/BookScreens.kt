@@ -1,8 +1,6 @@
 package com.shangyin.app.ui.zlib
 
 import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -313,7 +311,7 @@ fun BookHomeScreen(nav: NavHostController) {
 }
 
 /**
- * 图书详情：封面 + 标题/作者 + 出版信息 + 下载（走站点自己的 `/dl/{token}` 入口，存到系统下载目录）+ 简介。
+ * 图书详情：封面 + 标题/作者 + 出版信息 + 下载（走站点自己的 `/dl/{token}` 入口，存到固定书籍目录）+ 简介。
  * 简介来自站点，是带 `<p>`/`<br>` 的 HTML，已在 [ZlibClient] 里清成纯文本。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -333,34 +331,6 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     var progress by remember { mutableStateOf<Pair<Long, Long>?>(null) }
     var quota by remember { mutableStateOf<ZlibClient.DownloadQuota?>(null) }
 
-    // 下载流程：先弹系统「保存到…」让用户选目录/文件名，再取文件写入所选位置
-    val savePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/octet-stream")
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult   // 用户取消
-        val b = book ?: return@rememberLauncherForActivityResult
-        downloading = true
-        progress = null
-        scope.launch {
-            runCatching {
-                val target = ZlibClient.downloadTarget(b.id, b.hash, b.dl)
-                BookDownload.saveTo(context, uri, target) { done, total -> progress = done to total }
-            }.onSuccess {
-                Toast.makeText(context, "已保存：${it.name}", Toast.LENGTH_LONG).show()
-            }.onFailure {
-                Toast.makeText(
-                    context,
-                    it.message?.takeIf { m -> m.isNotBlank() } ?: "下载失败",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-            downloading = false
-            progress = null
-            // 下载会消耗当日额度，重新拉一次账号额度显示
-            quota = runCatching { ZlibClient.downloadQuota() }.getOrNull()
-        }
-    }
-
     LaunchedEffect(bookId, hashId, retryKey) {
         loading = true
         error = null
@@ -377,12 +347,30 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
         quota = runCatching { ZlibClient.downloadQuota() }.getOrNull()
     }
 
+    /** 直接下载到固定书籍目录（Download/老郑分享/书籍/；Android 8/9 为应用私有目录），完成后 Toast 实际位置 */
     fun download() {
         val b = book ?: return
         if (downloading) return
-        // 先让用户选保存位置（系统「保存到…」），选完再取文件下载
-        val suggested = b.extension?.takeIf { it.isNotBlank() }?.let { "${b.title}.$it" } ?: b.title
-        savePicker.launch(suggested.replace(Regex("[\\\\/:*?\"<>|\\r\\n]"), "_"))
+        downloading = true
+        progress = null
+        scope.launch {
+            runCatching {
+                val target = ZlibClient.downloadTarget(b.id, b.hash, b.dl)
+                BookDownload.saveTo(context, target) { done, total -> progress = done to total }
+            }.onSuccess {
+                Toast.makeText(context, "已保存到：${it.where}", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(
+                    context,
+                    it.message?.takeIf { m -> m.isNotBlank() } ?: "下载失败",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            downloading = false
+            progress = null
+            // 下载会消耗当日额度，重新拉一次账号额度显示
+            quota = runCatching { ZlibClient.downloadQuota() }.getOrNull()
+        }
     }
 
     Scaffold(

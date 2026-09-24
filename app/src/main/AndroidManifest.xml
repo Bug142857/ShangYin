@@ -20,9 +20,12 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.ShangYin">
 
+        <!-- singleTask：点「音乐播放通知」时不新建实例，而是把已有任务切回前台
+             （Compose 导航栈保留 → 回到最小化前的那一页；Activity 已被回收时由 NavRestore 恢复） -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode|density|fontScale"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

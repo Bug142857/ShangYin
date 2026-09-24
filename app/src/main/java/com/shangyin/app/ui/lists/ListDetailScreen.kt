@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
@@ -35,7 +36,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Close
@@ -136,7 +136,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
     var showRename by remember { mutableStateOf(false) }
     var showDelete by remember { mutableStateOf(false) }
     var showCreateChild by remember { mutableStateOf(false) }
-    var showInnerPicker by remember { mutableStateOf(false) }
     // 布局模式按清单 ID 持久化（key: list_layout_<id>）；从未记过时先按平铺，下面按"是否含音乐条目"定默认值
     val savedLayout = remember(listId) { SettingsStore.listLayout(listId) }
     var layoutMode by remember(listId) {
@@ -170,9 +169,17 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             layoutDecided = true
         }
     }
-    // 展示顺序：按歌手时只重排音乐条目（非音乐条目顺序与位置不变），按添加时间时就是原始顺序
+    // 展示顺序：「更新」= 音乐条目倒序（最新添加在最前），非音乐条目顺序与位置不变；「歌手」= 按歌手名排序
     val displayItems = remember(items, sortMode) {
-        if (sortMode == MusicSortMode.ADDED) items else sortItemsByArtist(items)
+        if (sortMode == MusicSortMode.ADDED) sortItemsByAddedDesc(items) else sortItemsByArtist(items)
+    }
+    // 切换排序：写回持久化（key: list_sort_<id>）
+    fun selectSort(mode: MusicSortMode) {
+        sortMode = mode
+        SettingsStore.setListSort(
+            listId,
+            if (mode == MusicSortMode.ARTIST) SettingsStore.SORT_ARTIST else SettingsStore.SORT_ADDED
+        )
     }
 
     // ---- 清单内搜索：本清单 + 所有层级子清单 ----
@@ -302,55 +309,17 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                                     )
                                 }
                             )
-                            // 含音乐条目的清单：可切换音乐条目的展示顺序（当前生效的一项打勾）
-                            if (hasMusicItems) {
-                                DropdownMenuItem(
-                                    text = { Text("按添加时间排序") },
-                                    leadingIcon = {
-                                        if (sortMode == MusicSortMode.ADDED) {
-                                            Icon(Icons.Rounded.Check, contentDescription = "已选")
-                                        }
-                                    },
-                                    onClick = {
-                                        menuOpen = false
-                                        sortMode = MusicSortMode.ADDED
-                                        SettingsStore.setListSort(listId, SettingsStore.SORT_ADDED)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("按歌手名称排序") },
-                                    leadingIcon = {
-                                        if (sortMode == MusicSortMode.ARTIST) {
-                                            Icon(Icons.Rounded.Check, contentDescription = "已选")
-                                        }
-                                    },
-                                    onClick = {
-                                        menuOpen = false
-                                        sortMode = MusicSortMode.ARTIST
-                                        SettingsStore.setListSort(listId, SettingsStore.SORT_ARTIST)
-                                    }
-                                )
-                            }
+                            // 编辑：只有「更新」排序下展示顺序与库内一致，才允许拖拽
                             DropdownMenuItem(
                                 text = { Text("编辑") },
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     isEditMode = true
-                                    // 按歌手排序时条目顺序由歌手决定，不参与拖拽，提示一下
+                                    // 「歌手」排序时条目顺序由歌手决定，不参与拖拽，提示一下
                                     if (sortMode == MusicSortMode.ARTIST && hasMusicItems) {
                                         Toast.makeText(context, "按歌手排序时条目不支持拖拽排序", Toast.LENGTH_SHORT).show()
                                     }
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("添加条目") },
-                                leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                                onClick = {
-                                    menuOpen = false
-                                    // 里世界清单：从已收藏的番号/本子里选；表世界：跳搜索页搜豆瓣
-                                    if ((list?.world ?: 0) == 1) showInnerPicker = true
-                                    else nav.safeNavigate("search/$listId")
                                 }
                             )
                             DropdownMenuItem(
@@ -454,7 +423,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             }
         } else if (items.isEmpty() && childLists.isEmpty()) {
             Column(Modifier.padding(pad)) {
-                EmptyView("清单还是空的\n点右上角菜单 → 添加条目")
+                EmptyView("清单还是空的")
             }
         } else {
             when (layoutMode) {
@@ -465,6 +434,12 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
+                    // 排序控件放在最上方，占满整行；grid 的 contentPadding 已提供左右 16dp 边距
+                    if (hasMusicItems) {
+                        item(span = { GridItemSpan(maxLineSpan) }) {
+                            SortModeRow(sortMode = sortMode) { selectSort(it) }
+                        }
+                    }
                     gridItems(childLists, key = { "child_${it.list.id}" }) { meta ->
                         val isDragging = draggingSubListId == meta.list.id
                         val scale by animateFloatAsState(if (isDragging) 1.08f else 1f, label = "subScale")
@@ -519,6 +494,15 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                     modifier = Modifier.padding(pad).fillMaxSize()
                 ) {
+                    // 排序控件放在最上方；list 的 contentPadding 只有纵向，这里补左右 16dp 与 grid 对齐
+                    if (hasMusicItems) {
+                        item(key = "sort_row") {
+                            SortModeRow(
+                                sortMode = sortMode,
+                                modifier = Modifier.padding(horizontal = 16.dp)
+                            ) { selectSort(it) }
+                        }
+                    }
                     items(childLists, key = { "child_${it.list.id}" }) { meta ->
                         val isDragging = draggingSubListId == meta.list.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "subScale")
@@ -694,93 +678,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             onDismiss = { showCreateChild = false }
         )
     }
-
-    // 里世界清单：从已收藏的番号/本子条目中选择加入
-    if (showInnerPicker) {
-        InnerItemPickerDialog(
-            listId = listId,
-            onDismiss = { showInnerPicker = false }
-        )
-    }
-}
-
-/** 里世界清单添加条目：列出所有已收藏的番号视频 / 本子漫画，点选加入清单 */
-@Composable
-private fun InnerItemPickerDialog(listId: Long, onDismiss: () -> Unit) {
-    val scope = rememberCoroutineScope()
-    val all by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val innerItems = remember(all) {
-        all.filter {
-            it.category == "番号" || it.category == "本子" || it.category == "漫画" ||
-                it.category == com.shangyin.app.data.live.LivePlatforms.CATEGORY
-        }
-            .sortedByDescending { it.updatedAt }
-    }
-    androidx.compose.material3.AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("添加到清单") },
-        text = {
-            if (innerItems.isEmpty()) {
-                Text(
-                    "还没有收藏过番号或本子\n去里世界的番号/本子页面点红心收藏",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
-            } else {
-                androidx.compose.foundation.lazy.LazyColumn(
-                    modifier = Modifier.height((innerItems.size * 56).coerceAtMost(320).dp)
-                ) {
-                    items(innerItems, key = { it.id }) { e ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    scope.launch {
-                                        Repo.addItemToList(listId, e.id)
-                                        onDismiss()
-                                    }
-                                }
-                                .padding(vertical = 6.dp)
-                        ) {
-                            // 没有封面的收藏（电视）：用频道名当封面，不留空
-                            CoverImage(
-                                url = e.coverUrl,
-                                placeholderText = e.title,
-                                modifier = Modifier.size(40.dp, 56.dp)
-                            )
-                            Spacer(Modifier.width(10.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    e.title,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    when (e.category) {
-                                        "番号" -> "番号 · ${e.subTitle}"
-                                        "本子" -> "本子 · ${e.subTitle}"
-                                        com.shangyin.app.data.live.LivePlatforms.CATEGORY ->
-                                            "电视 · ${e.subTitle}"
-                                        else -> "漫画 · ${e.subTitle}"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.outline,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
-        }
-    )
 }
 
 /** 子清单网格卡片：和条目同尺寸（2:3 封面），角标区分 */
@@ -1232,4 +1129,46 @@ private fun sortItemsByArtist(items: List<CollectionItemEntity>): List<Collectio
     if (music.isEmpty()) return items
     var i = 0
     return items.map { if (it.category == MusicRepo.CATEGORY) music[i++] else it }
+}
+
+/**
+ * 音乐条目按添加时间倒序（最新添加的在最前）：倒序后的音乐条目填回原来属于音乐条目的位置，
+ * 非音乐条目的顺序与位置都不变；纯音乐清单即整体倒序。
+ */
+private fun sortItemsByAddedDesc(items: List<CollectionItemEntity>): List<CollectionItemEntity> {
+    val music = items.filter { it.category == MusicRepo.CATEGORY }.reversed()
+    if (music.isEmpty()) return items
+    var i = 0
+    return items.map { if (it.category == MusicRepo.CATEGORY) music[i++] else it }
+}
+
+/** 排序控件：仅含音乐条目的清单显示，常驻在内容区最上方一行 */
+@Composable
+private fun SortModeRow(
+    sortMode: MusicSortMode,
+    modifier: Modifier = Modifier,
+    onSelect: (MusicSortMode) -> Unit
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "排序",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.weight(1f))
+        FilterChip(
+            selected = sortMode == MusicSortMode.ADDED,
+            onClick = { onSelect(MusicSortMode.ADDED) },
+            label = { Text("更新") }
+        )
+        Spacer(Modifier.width(8.dp))
+        FilterChip(
+            selected = sortMode == MusicSortMode.ARTIST,
+            onClick = { onSelect(MusicSortMode.ARTIST) },
+            label = { Text("歌手") }
+        )
+    }
 }

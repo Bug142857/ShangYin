@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -31,42 +32,75 @@ data class DownloadedComic(
 )
 
 /**
- * 漫画/本子离线下载存储：
- * 目录 {外部私有目录}/comics/{source}/{id}/meta.json + {章节key}/0001.jpg ...
- * 使用应用外部私有目录，无需任何存储权限，卸载应用时一并清除。
+ * 漫画/本子离线下载存储（**漫画与本子分开两个根目录**）：
+ * - 漫画（source != bika）：{外部私有目录}/comics/{source}/{id}/meta.json + {章节key}/0001.jpg ...
+ * - 本子（source == bika）：{外部私有目录}/bika/{id}/meta.json + {章节key}/0001.jpg ...
+ * 使用应用外部私有目录，无需任何存储权限，卸载应用时一并清除；
+ * 设置里打开"内部存储"（[SettingsStore.downloadInternal]）时退回到内部私有目录（filesDir 下的同名目录）。
  */
 object ComicDownloadStore {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    /** 当前设置的下载根目录（新下载写入这里；外部私有优先，不可用时退回内部） */
-    fun root(context: Context): File {
+    /** 本子来源标识：单独一个根目录，与漫画分开 */
+    const val BIKA = "bika"
+
+    private const val DIR_COMICS = "comics"
+    private const val DIR_BIKA = "bika"
+
+    /** 某个根目录：外部私有优先，内部开关打开或外部不可用时退回内部私有 */
+    private fun baseRoot(context: Context, dirName: String): File {
         val ext = context.getExternalFilesDir(null)
-        return if (SettingsStore.downloadInternal || ext == null) File(context.filesDir, "comics")
-        else File(ext, "comics")
+        return if (SettingsStore.downloadInternal || ext == null) File(context.filesDir, dirName)
+        else File(ext, dirName)
     }
 
-    /** 全部候选根目录（扫描/读取/删除用，兼容切换存储位置前的旧内容） */
-    private fun roots(context: Context): List<File> =
+    /** 漫画根目录（非 bika 来源，结构 {root}/{source}/{id}/…） */
+    fun comicRoot(context: Context): File = baseRoot(context, DIR_COMICS)
+
+    /** 本子根目录（bika 来源，结构 {root}/{id}/…，与漫画不再共用一个根目录） */
+    fun bikaRoot(context: Context): File = baseRoot(context, DIR_BIKA)
+
+    /** 某来源应写入的根目录 */
+    fun root(context: Context, source: String): File =
+        if (source == BIKA) bikaRoot(context) else comicRoot(context)
+
+    /** 某来源的候选根目录（外部私有 + 内部私有；扫描用，兼容切换过存储位置） */
+    private fun candidateRoots(context: Context, dirName: String): List<File> =
         listOfNotNull(
-            context.getExternalFilesDir(null)?.let { File(it, "comics") },
-            File(context.filesDir, "comics")
+            context.getExternalFilesDir(null)?.let { File(it, dirName) },
+            File(context.filesDir, dirName)
         ).distinctBy { it.absolutePath }
 
+    /** 单本的写入目录：本子在 bika 根下直接是 {id}，漫画在 comics 根下是 {source}/{id} */
     fun comicDir(context: Context, source: String, id: String): File =
-        File(root(context), "$source/$id")
+        if (source == BIKA) File(bikaRoot(context), id)
+        else File(File(comicRoot(context), source), id)
 
     fun chapterDir(context: Context, source: String, id: String, key: String): File =
         File(comicDir(context, source, id), key)
 
-    private fun loadMetaIn(root: File, source: String, id: String): DownloadedComic? {
-        val f = File(File(File(root, source), id), "meta.json")
+    /** 同一本书在各存储位置的可能目录（含旧位置，兼容迁移前/迁移失败/切换过存储位置） */
+    private fun candidateDirs(context: Context, source: String, id: String): List<File> {
+        val all = if (source == BIKA) {
+            // 本子：新位置 {bika根}/{id}，兼容旧位置 {comics根}/bika/{id}
+            candidateRoots(context, DIR_BIKA).map { File(it, id) } +
+                candidateRoots(context, DIR_COMICS).map { File(File(it, BIKA), id) }
+        } else {
+            candidateRoots(context, DIR_COMICS).map { File(File(it, source), id) }
+        }
+        // 写入位置排最前，优先读最新内容
+        return (listOf(comicDir(context, source, id)) + all).distinctBy { it.absolutePath }
+    }
+
+    private fun loadMetaIn(dir: File): DownloadedComic? {
+        val f = File(dir, "meta.json")
         if (!f.isFile) return null
         return runCatching { json.decodeFromString<DownloadedComic>(f.readText()) }.getOrNull()
     }
 
     fun loadMeta(context: Context, source: String, id: String): DownloadedComic? =
-        roots(context).firstNotNullOfOrNull { loadMetaIn(it, source, id) }
+        candidateDirs(context, source, id).firstNotNullOfOrNull { loadMetaIn(it) }
 
     private fun saveMeta(context: Context, meta: DownloadedComic) {
         val dir = comicDir(context, meta.source, meta.id).apply { mkdirs() }
@@ -80,24 +114,37 @@ object ComicDownloadStore {
         saveMeta(context, cur.copy(title = comic.title, cover = comic.cover ?: cur.cover, chapters = chapters))
     }
 
-    /** 扫描全部根目录的下载记录（按目录修改时间倒序，同一本取最新位置） */
-    fun loadLibrary(context: Context): List<DownloadedComic> =
-        roots(context).flatMap { root ->
-            if (!root.isDirectory) emptyList()
-            else root.listFiles().orEmpty().filter { it.isDirectory }.flatMap { srcDir ->
-                srcDir.listFiles().orEmpty().filter { it.isDirectory }.mapNotNull { comic ->
-                    loadMetaIn(root, srcDir.name, comic.name)?.takeIf { it.chapters.isNotEmpty() }
-                        ?.let { it to comic.lastModified() }
-                }
+    /** 全部可能存在下载记录的目录（漫画 {comics根}/{source}/{id}；本子 {bika根}/{id} + 旧位置 {comics根}/bika/{id}） */
+    private fun allComicDirs(context: Context): List<File> {
+        val out = mutableListOf<File>()
+        candidateRoots(context, DIR_COMICS).forEach { root ->
+            runCatching { root.listFiles() }.getOrNull().orEmpty().filter { it.isDirectory }.forEach { srcDir ->
+                runCatching { srcDir.listFiles() }.getOrNull().orEmpty()
+                    .filter { it.isDirectory }.forEach { out += it }
             }
-        }.sortedByDescending { it.second }
+        }
+        candidateRoots(context, DIR_BIKA).forEach { root ->
+            runCatching { root.listFiles() }.getOrNull().orEmpty()
+                .filter { it.isDirectory }.forEach { out += it }
+        }
+        return out
+    }
+
+    /** 扫描全部下载记录（按目录修改时间倒序，同一本取最新位置；读不出的目录直接跳过） */
+    fun loadLibrary(context: Context): List<DownloadedComic> = runCatching {
+        allComicDirs(context)
+            .mapNotNull { dir ->
+                loadMetaIn(dir)?.takeIf { it.chapters.isNotEmpty() }?.let { it to dir.lastModified() }
+            }
+            .sortedByDescending { it.second }
             .map { it.first }
             .distinctBy { it.source to it.id }
+    }.getOrDefault(emptyList())
 
     /** 章节的本地图片路径（按文件名正序；各存储位置都找，谁有内容用谁） */
     fun chapterPages(context: Context, source: String, id: String, key: String): List<String> =
-        roots(context).firstNotNullOfOrNull { root ->
-            File(File(File(root, source), id), key).listFiles().orEmpty()
+        candidateDirs(context, source, id).firstNotNullOfOrNull { dir ->
+            runCatching { File(dir, key).listFiles() }.getOrNull().orEmpty()
                 .filter { it.isFile && it.name != "meta.json" }
                 .takeIf { it.isNotEmpty() }
                 ?.sortedBy { it.name }
@@ -106,31 +153,100 @@ object ComicDownloadStore {
 
     /** 目录占用字节数（各存储位置合计） */
     fun size(context: Context, source: String, id: String): Long =
-        roots(context).sumOf { root ->
-            File(root, "$source/$id").walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+        candidateDirs(context, source, id).sumOf { dir ->
+            runCatching { dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
         }
 
     fun deleteChapter(context: Context, source: String, id: String, key: String) {
         // 各位置的该章目录都删除；meta 里最后一章删完则整本目录一并清掉
-        roots(context).forEach { root ->
-            File(File(File(root, source), id), key).deleteRecursively()
-        }
-        roots(context).forEach { root ->
-            val comicDir = File(File(root, source), id)
-            val metaFile = File(comicDir, "meta.json")
+        candidateDirs(context, source, id).forEach { dir ->
+            runCatching { File(dir, key).deleteRecursively() }
+            val metaFile = File(dir, "meta.json")
             if (!metaFile.isFile) return@forEach
             val cur = runCatching { json.decodeFromString<DownloadedComic>(metaFile.readText()) }.getOrNull()
                 ?: return@forEach
             val left = cur.chapters.filterNot { it.key == key }
-            if (left.isEmpty()) comicDir.deleteRecursively()
-            else metaFile.writeText(json.encodeToString(DownloadedComic.serializer(), cur.copy(chapters = left)))
+            runCatching {
+                if (left.isEmpty()) dir.deleteRecursively()
+                else metaFile.writeText(json.encodeToString(DownloadedComic.serializer(), cur.copy(chapters = left)))
+            }
         }
     }
 
     fun deleteComic(context: Context, source: String, id: String) {
-        roots(context).forEach { root ->
-            File(root, "$source/$id").deleteRecursively()
+        candidateDirs(context, source, id).forEach { dir ->
+            runCatching { dir.deleteRecursively() }
         }
+    }
+
+    // ---------- 一次性迁移：comics/bika/** → bika/** ----------
+
+    /**
+     * 把旧版存在 `comics/bika/` 里的本子搬到独立根目录 `bika/`（保留 {id} 目录结构）。
+     *
+     * 触发时机：刷新下载库时（[ComicDownloadManager.refresh]）在 IO 线程调用，也就是
+     * "首次读取下载列表"时执行；无需持久化标记——旧目录搬空后会被删除，下次调用直接空跑（幂等）。
+     *
+     * 防覆盖：目标已存在同名目录时**合并**而不是覆盖/删源——
+     * 同名文件保留目标、源文件尽量搬走；meta.json 先按章节取并集（避免"图片搬了记录没搬"）。
+     * 失败：单个文件搬不动就留在源目录，下次启动继续尝试，绝不丢数据；整体用 runCatching 包住。
+     */
+    fun migrateBikaOnce(context: Context) {
+        val oldRoots = listOfNotNull(
+            context.getExternalFilesDir(null)?.let { File(it, DIR_COMICS) },
+            File(context.filesDir, DIR_COMICS)
+        )
+        val newRoots = listOfNotNull(
+            context.getExternalFilesDir(null)?.let { File(it, DIR_BIKA) },
+            File(context.filesDir, DIR_BIKA)
+        )
+        oldRoots.forEachIndexed { i, oldRoot ->
+            val newRoot = newRoots.getOrNull(i) ?: return@forEachIndexed
+            val oldBika = File(oldRoot, BIKA)
+            if (!oldBika.isDirectory) return@forEachIndexed
+            runCatching {
+                oldBika.listFiles().orEmpty().forEach { src ->
+                    val dst = File(newRoot, src.name)
+                    if (src.isDirectory && dst.isDirectory) {
+                        // 两边都有同名目录：先合并章节记录，再逐文件合并（不覆盖）
+                        mergeMeta(File(src, "meta.json"), File(dst, "meta.json"))
+                    }
+                    mergeMove(src, dst)
+                }
+                // 旧目录空了才删（还有没搬走的就留着，下次继续）
+                if (oldBika.listFiles().orEmpty().isEmpty()) oldBika.delete()
+            }
+        }
+    }
+
+    /** 迁移时合并两边的 meta.json：章节按 key 取并集 */
+    private fun mergeMeta(srcMeta: File, dstMeta: File) {
+        val src = runCatching { json.decodeFromString<DownloadedComic>(srcMeta.readText()) }.getOrNull() ?: return
+        val dst = runCatching { json.decodeFromString<DownloadedComic>(dstMeta.readText()) }.getOrNull() ?: return
+        val merged = (dst.chapters + src.chapters).distinctBy { it.key }
+        runCatching {
+            dstMeta.writeText(json.encodeToString(DownloadedComic.serializer(), dst.copy(chapters = merged)))
+        }
+    }
+
+    /** 递归合并式移动：目标已存在的文件保留（不覆盖），能移的移走；源目录搬空后删除 */
+    private fun mergeMove(src: File, dst: File) {
+        if (src.isFile) {
+            if (!dst.exists()) {
+                dst.parentFile?.mkdirs()
+                val moved = runCatching { src.renameTo(dst) }.getOrDefault(false)
+                if (!moved) {
+                    runCatching { src.copyTo(dst, overwrite = false) }.onSuccess { src.delete() }
+                }
+            }
+            return
+        }
+        if (!src.isDirectory) return
+        dst.mkdirs()
+        runCatching { src.listFiles() }.getOrNull().orEmpty().forEach { child ->
+            mergeMove(child, File(dst, child.name))
+        }
+        if (runCatching { src.listFiles() }.getOrNull().isNullOrEmpty()) src.delete()
     }
 
     /**
@@ -198,9 +314,13 @@ object ComicDownloadManager {
 
     fun key(source: String, id: String, chapterKey: String) = "$source/$id/$chapterKey"
 
-    /** 从磁盘刷新已下载库（进入详情页/下载页时调用一次即可） */
+    /** 从磁盘刷新已下载库（进入详情页/下载页时调用一次即可）；顺带做一次本子目录迁移（幂等） */
     suspend fun refresh(context: Context) {
-        _library.value = ComicDownloadStore.loadLibrary(context.applicationContext)
+        val ctx = context.applicationContext
+        withContext(Dispatchers.IO) {
+            ComicDownloadStore.migrateBikaOnce(ctx)
+            _library.value = ComicDownloadStore.loadLibrary(ctx)
+        }
     }
 
     /** 已完成下载的章节 key 集合 */

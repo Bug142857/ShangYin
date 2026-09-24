@@ -262,7 +262,27 @@
   - 24bit 保留为**旧来源**（`MusicPlatform.BIT24`），只用于兼容旧收藏；`MusicRepo` 按 `song.platform` 分派 search/resolve/lyric/fillCovers。
   - ⚠️ 又一次踩到 Kotlin 限制：`runCatching{}.getOrElse{ continue }` 在内联 lambda 里**不能 `continue`**（编译失败），
     必须写成 `val r = runCatching{...}; val v = r.getOrNull(); if (v == null) { ...; continue }`（Bit24/Site33 都改成这种写法了）。
-- **真机未验证项**（下次可先问用户）：33ve 直链在实际网络/手机上能否出声、通知栏/锁屏控制、锁屏后台播放。
+- **v0.211（用户一次提 8 条：删 24bit、清单排序/菜单、四个下载目录、通知回原页）**：
+  - **24bit 彻底删除**（用户："不需要24bit旧来源"）：`Bit24.kt` 删除，`MusicPlatform` 只剩 `S33VE`，
+    `MusicRepo` 里按平台分派的 `when`/`fillCovers` 全部去掉；`Bit24AudioDataSourceFactory` 改名 `MusicAudioDataSourceFactory`。
+    旧收藏 `bit24|…` 条目从此不可播（用户已确认）。
+  - **清单排序**：控件从「更多」菜单挪到列表最上方（两个 FilterChip：**更新 / 歌手**，仅含音乐的清单显示）；
+    **「更新」= 新添加的在上**（音乐条目倒序后填回原槽位，非音乐条目位置不变，`sortItemsByAddedDesc`）。
+    ⚠️ 遗留矛盾：倒序后"编辑模式拖拽"用的是库内索引，会出现拖动错位（当前仍允许「更新」下拖拽，未换算索引）。
+  - **移除「添加条目」**：菜单项 + `InnerItemPickerDialog` + `showInnerPicker` 全删；随之**删除已无入口的 `search/{listId}` 路由**
+    与 `SearchScreen` 的 `targetListId` 参数（它的"搜索添加"分支已不可达）。
+  - **四个下载目录**（用户明确要 **漫画 / 本子 / 音乐 / 书籍** 四个）：漫画 `files/comics/`、本子 `files/bika/`（**新增**，
+    带一次性幂等迁移 `migrateBikaOnce()`：合并而非覆盖、搬不动就留源、`comics/bika/` 读路径仍兼容）、
+    音乐 `Download/老郑分享/音乐/`、书籍改为固定目录 `Download/老郑分享/书籍/`（**不再弹系统"另存为"**，旧系统写 `files/书籍/`）。
+    新增 `data/download/MediaFileStore.kt` 做公共目录枚举（MediaStore）/私有目录枚举（File）；`DownloadScreen` 改成四节，每节显示数量/大小 +
+    **可点击的目录卡**（`DocumentsContract.buildDocumentUri("com.android.externalstorage.documents","primary:Download/老郑分享/音乐")` + ACTION_VIEW + MIME_TYPE_DIR；
+    私有目录打不开时 Toast 说明，不崩）。
+  - **通知点击回到最小化前的页面**：`MainActivity` 加 `android:launchMode="singleTask"`，通知的 `sessionActivity` Intent 加
+    `FLAG_ACTIVITY_SINGLE_TOP or FLAG_ACTIVITY_NEW_TASK` + extra 标记；App 存活时直接切前台保留 Compose 栈，
+    被回收时由新增 `ui/NavRestore.kt`（独立 SP `nav_restore`：`last_route` / `from_media_notification`）在 AppNav 起来后 `safeNavigate` 跳回。
+    ⚠️ `MainActivity.onNewIntent` 签名必须是 `Intent`（非 `Intent?`），否则编译报 "overrides nothing"。
+- **真机未验证项**（下次可先问用户）：33ve 直链在实际网络/手机上能否出声、通知栏/锁屏控制、通知点击回原页的两种场景、
+  「更新」排序下拖拽错位、私有目录跳转提示。
 - **v0.202（用户装机反馈后的两处修复）**：
   ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
   而混淆过的音源（六音等）连这些字符串都是加密的 → 好脚本被拒。**已删掉关键字校验**，只拦明显不是脚本的内容（`<!doctype`/`<html`，

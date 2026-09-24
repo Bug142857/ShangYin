@@ -1,5 +1,6 @@
 package com.shangyin.app.ui
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
@@ -18,6 +19,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavBackStackEntry
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -39,6 +42,7 @@ import com.shangyin.app.ui.settings.CloudSyncScreen
 import com.shangyin.app.ui.settings.DataManageScreen
 import com.shangyin.app.ui.settings.SettingsScreen
 import com.shangyin.app.ui.settings.VodSourceScreen
+import kotlinx.coroutines.flow.collect
 
 /**
  * 导航动画配置：切换动画极短（120ms），保证操作省时丝滑。
@@ -98,12 +102,6 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     initialCat = entry.arguments?.getString("cat").orEmpty(),
                     initialKw = entry.arguments?.getString("kw").orEmpty()
                 )
-            }
-            composable(
-                route = "search/{listId}",
-                arguments = listOf(navArgument("listId") { type = NavType.LongType; defaultValue = -1L })
-            ) { entry ->
-                SearchScreen(nav, targetListId = entry.arguments?.getLong("listId") ?: -1L)
             }
             composable(
                 route = "item/{id}",
@@ -249,4 +247,56 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             lastRoute = route
         }
     }
+
+    // ---------- 点「播放通知」回来时恢复上次页面（App 被系统回收/Activity 被销毁的场景） ----------
+    val ctx = LocalContext.current
+
+    // 关键：这里必须在任何写入之前**同步**读一次（用 remember，不是 LaunchedEffect），
+    // 否则会被下面监听器刚发出的 home 覆盖掉。只有「本次启动来自播放通知」才返回目标路由，
+    // 读的同时就清掉了标记 → 只跳一次。
+    val pendingRestoreRoute = remember { NavRestore.consumePendingRestoreRoute(ctx) }
+
+    // 持续记录当前路由：Activity 被回收后 Compose 导航栈不复存在，冷启动只能靠它回到原页面。
+    // 写入的是「可再次 navigate 的完整路由串」（模板里的 {arg} 用实参填回去，见 restorableRoute）。
+    LaunchedEffect(nav) {
+        nav.currentBackStackEntryFlow.collect { entry ->
+            entry.restorableRoute()?.let { NavRestore.saveRoute(ctx, it) }
+        }
+    }
+
+    // 真正跳一次：系统若已把任务栈恢复回来（当前就是目标页）就不重复跳；
+    // safeNavigate 自带 runCatching 兜底，路由不存在 / 参数非法时不会崩，停在 home。
+    LaunchedEffect(nav) {
+        val target = pendingRestoreRoute ?: return@LaunchedEffect
+        if (nav.currentBackStackEntry?.restorableRoute() == target) return@LaunchedEffect
+        nav.safeNavigate(target)
+    }
+}
+
+/** 路由模板里的参数占位符，如 `item/{id}` 中的 `{id}` */
+private val ARG_PLACEHOLDER = Regex("\\{([^{}]+)\\}")
+
+/**
+ * 把导航栈条目还原成可以再次 navigate 的完整路由字符串。
+ *
+ * NavController 只暴露路由**模板**（`item/{id}`），要跳回去必须把实参填回占位符；
+ * 字符串参数做 URL 编码（与项目各处 navigate 前的 encode 保持一致），
+ * 否则参数里的 `/`、`?`、中文会破坏路径分段，导致恢复跳转失败。
+ * 还原不出来的（缺参数）返回 null，调用方直接跳过，不会影响正常启动。
+ */
+private fun NavBackStackEntry.restorableRoute(): String? {
+    val pattern = destination.route?.takeIf { it.isNotBlank() } ?: return null
+    if (!pattern.contains('{')) return pattern
+    val args = arguments ?: return null
+    val route = ARG_PLACEHOLDER.replace(pattern) { m ->
+        val name = m.groupValues[1]
+        val value = args.get(name)
+        when {
+            value == null -> m.value
+            value is String -> Uri.encode(value)
+            else -> value.toString()
+        }
+    }
+    // 还有没填上的占位符（参数缺失）→ 这条路由不能拿来恢复，交给调用方跳过
+    return route.takeIf { !it.contains('{') }
 }

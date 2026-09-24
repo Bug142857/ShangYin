@@ -74,7 +74,6 @@ private var lastSelectedListId: Long = -1L
 @Composable
 fun SearchScreen(
     nav: NavHostController,
-    targetListId: Long = -1L,
     initialCat: String = "",
     initialKw: String = ""
 ) {
@@ -200,7 +199,7 @@ fun SearchScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (targetListId > 0) "搜索添加" else "搜索") },
+                title = { Text("搜索") },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -380,13 +379,7 @@ fun SearchScreen(
 
     // 添加时选分类
     pendingAdd?.let { result ->
-        if (targetListId > 0) {
-            // 从清单内进入搜索：直接添加到目标清单，不弹选择框
-            LaunchedEffect(result) {
-                addToList(result, targetListId)
-                pendingAdd = null
-            }
-        } else if (lists.isEmpty()) {
+        if (lists.isEmpty()) {
             AlertDialog(
                 onDismissRequest = { pendingAdd = null },
                 title = { Text("还没有分类") },

@@ -124,19 +124,6 @@ fun MusicHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 24bit（旧来源）的详情页有每日限额：只有播旧收藏时才会命中，命中后提前说清楚
-            if (com.shangyin.app.data.music.Bit24.quotaExceeded()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(
-                        "24bit 今日详情页额度已用完（站点限制）：播放与下载请明天再试，或先去 24bit 官网登录以提升额度",
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                }
-            }
             Box(Modifier.weight(1f)) {
                 SearchTab(searchState)
             }
@@ -366,13 +353,6 @@ private fun SearchTab(st: SearchTabState) {
                         st.endReached = true
                     }
                     if (page == 1 && st.results.isNotEmpty()) listState.scrollToItem(0)
-                    // 补封面：搜索结果本身不带封面（站点给的是占位图），只能从详情页取；
-                    // 详情页有每日限额，所以这里只补最前面几首（播过/收藏过的歌会自动进缓存，后面越用越全）
-                    if (list.isNotEmpty() && page == 1) {
-                        val filled = runCatching { MusicRepo.fillCovers(st.results, max = 3) }
-                            .getOrDefault(st.results)
-                        if (kw == st.keyword && filled != st.results) st.results = filled
-                    }
                 }
                 .onFailure { e ->
                     if (kw != st.keyword) return@onFailure
