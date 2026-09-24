@@ -1,4 +1,4 @@
-﻿package com.shangyin.app.data.music
+package com.shangyin.app.data.music
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -107,7 +107,14 @@ object GdStudio {
             name = name,
             artists = artists,
             album = o["album"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-            raw = mapOf("id" to id, "name" to name, "singer" to artists)
+            // pic_id 是封面接口的正确参数：网易云用歌曲 id 拼出来的封面地址是无效的（404），
+            // 必须拿搜索结果自带的 pic_id 去查（JOOX 同理更稳）
+            raw = mapOf(
+                "id" to id,
+                "name" to name,
+                "singer" to artists,
+                "pic_id" to (o["pic_id"]?.jsonPrimitive?.contentOrNull ?: "")
+            )
         )
     }
 
@@ -115,7 +122,7 @@ object GdStudio {
     private suspend fun fillCovers(platform: MusicPlatform, songs: List<MusicSong>): List<MusicSong> =
         coroutineScope {
             val covers = songs.take(COVER_LIMIT)
-                .map { s -> async { runCatching { pic(platform, s.id) }.getOrNull() } }
+                .map { s -> async { runCatching { pic(platform, s.raw["pic_id"]?.takeIf { it.isNotBlank() } ?: s.id) }.getOrNull() } }
                 .awaitAll()
             songs.mapIndexed { i, s ->
                 val url = covers.getOrNull(i)

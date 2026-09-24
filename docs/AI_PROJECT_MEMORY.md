@@ -379,6 +379,16 @@
   ④ mvmp3 音源（MvMp3.kt）与「下载确认弹窗/自动收藏/歌手排序/目录打开修复」等 v0.214 其余改动全部保留不动。
   教训：**「改成 X」类需求先分清是改显示名还是换实现**，拿不准要问；本轮用户明确说「仅是想显示他的名称而已」。
 
+- **v0.216（删除提示精简 + JOOX/网易云封面修复，2026-09-24）**：
+  ① **删除/移出弹窗去掉「不会删除收藏的条目本身」半句**（用户嫌提示啰嗦）：共 4 处——
+  `ListsScreen.kt` 删除清单弹窗、`ListDetailScreen.kt` 删除清单 / 删除子清单弹窗（改为「确定删除「X」吗？」）、
+  `ListDetailScreen.kt` 移出条目弹窗（直接删掉该行）。孤儿清理（pruneOrphans）逻辑未动，仅改文案。
+  ② **JOOX / 网易云搜索封面全灭的根因**：gdstudio 搜索结果每条自带 `pic_id` 字段，**pic 封面接口必须用 pic_id 查**；
+  原代码用歌曲 id 去查——网易云会返回一个拿歌曲 id 拼凑的无效 URL（实测 404，全军覆没），JOOX 的 base64 歌曲 id 同样无效。
+  修复：`GdStudio.parseSong` 把 `pic_id` 存进 `raw`，`fillCovers` 优先用 `raw["pic_id"]`（缺省退回歌曲 id）。
+  实测：pic 接口 <100ms；pic_id 版网易云封面 200/14KB、JOOX 200/36KB（image.joox.com 与 p2.music.126.net 均无防盗链）。
+  ⚠️ 直链接口（types=url）仍然用歌曲 id，与 pic 接口参数不同，别混淆。旧收藏条目（cover 已存空）不会自动补封面。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK

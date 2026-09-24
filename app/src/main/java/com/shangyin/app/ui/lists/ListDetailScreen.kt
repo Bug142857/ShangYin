@@ -619,7 +619,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             text = {
                 Text(
                     buildString {
-                        append("删除清单「${list!!.name}」不会删除收藏的条目本身。")
+                        append("确定删除清单「${list!!.name}」吗？")
                         if (hasChildren) append("\n⚠️ 该清单下还有 ${childLists.size} 个子清单（含其下级），将一并删除。")
                     }
                 )
@@ -649,7 +649,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             text = {
                 Text(
                     buildString {
-                        append("删除子清单「${meta.list.name}」不会删除收藏的条目本身。")
+                        append("确定删除子清单「${meta.list.name}」吗？")
                         if (grandchildCount > 0) append("\n⚠️ 其下还有 $grandchildCount 个下级子清单，将一并删除。")
                     }
                 )
@@ -676,7 +676,6 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                     buildString {
                         val ownerName = listNameById[r.ownerListId] ?: "清单"
                         append("将「${r.item.title}」从「$ownerName」中移除？")
-                        append("\n不会删除收藏的条目本身。")
                     }
                 )
             },

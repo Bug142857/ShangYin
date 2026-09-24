@@ -179,7 +179,7 @@ fun ListsScreen(nav: NavHostController) {
             text = {
                 Text(
                     buildString {
-                        append("删除清单「${meta.list.name}」不会删除收藏的条目本身。")
+                        append("确定删除清单「${meta.list.name}」吗？")
                         if (subCount > 0) append("\n⚠️ 该清单下还有 $subCount 个子清单（含其下级），将一并删除。")
                     }
                 )
