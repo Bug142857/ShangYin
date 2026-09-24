@@ -49,6 +49,9 @@ fun buildExportJson(data: ExportData): String {
             put("coverUrl", l.coverUrl)
             put("parentId", l.parentId)
             put("sortIndex", l.sortIndex)
+            // 归属世界与音乐清单类型：曾经漏过 world，导致导入后清单全变表世界
+            put("world", l.world)
+            put("musicList", l.musicList)
             put("createdAt", l.createdAt)
         })
     }
@@ -126,6 +129,9 @@ fun parseExportJson(json: String): ExportData {
                 parentId = o.opt("parentId")?.let { (it as? Number)?.toLong() },
                 // 旧备份文件无 sortIndex，默认 0（未手动排序，按创建时间展示）
                 sortIndex = o.optInt("sortIndex", 0),
+                // 旧备份文件无 world / musicList，默认表世界 + 普通清单
+                world = o.optInt("world", 0),
+                musicList = o.optBoolean("musicList", false),
                 createdAt = o.optLong("createdAt", System.currentTimeMillis())
             )
         }

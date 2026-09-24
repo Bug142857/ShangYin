@@ -1,6 +1,11 @@
 package com.shangyin.app.data.download
 
+import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import com.shangyin.app.ImageDownloader
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.CoroutineScope
@@ -33,10 +38,12 @@ data class DownloadedComic(
 
 /**
  * 漫画/本子离线下载存储（**漫画与本子分开两个根目录**）：
- * - 漫画（source != bika）：{外部私有目录}/comics/{source}/{id}/meta.json + {章节key}/0001.jpg ...
- * - 本子（source == bika）：{外部私有目录}/bika/{id}/meta.json + {章节key}/0001.jpg ...
- * 使用应用外部私有目录，无需任何存储权限，卸载应用时一并清除；
- * 设置里打开"内部存储"（[SettingsStore.downloadInternal]）时退回到内部私有目录（filesDir 下的同名目录）。
+ * - 漫画（source != bika）：`Download/老郑分享/漫画/{source}/{id}/meta.json` + `{章节key}/0001.jpg ...`
+ * - 本子（source == bika）：`Download/老郑分享/本子/{id}/meta.json` + `{章节key}/0001.jpg ...`
+ *
+ * Android 10+（Q）走 MediaStore.Downloads 写公共下载目录（无需存储权限，系统文件管理器可直接打开）；
+ * Android 8/9 仍写应用私有目录（外部优先，[SettingsStore.downloadInternal] 打开时退回内部 filesDir），
+ * 该位置在 Android 11+ 已无法被系统文件管理器打开，仅作为旧数据的兼容读取位置保留。
  */
 object ComicDownloadStore {
 
@@ -47,6 +54,17 @@ object ComicDownloadStore {
 
     private const val DIR_COMICS = "comics"
     private const val DIR_BIKA = "bika"
+    private const val META_NAME = "meta.json"
+
+    /** 漫画/本子在公共下载目录下的相对根（Android 10+；末尾带 / 与 MediaStore 的 RELATIVE_PATH 一致） */
+    private const val PUBLIC_COMICS = "Download/老郑分享/漫画/"
+    private const val PUBLIC_BIKA = "Download/老郑分享/本子/"
+
+    /**
+     * 目录展示信息（下载管理页的目录卡用）：
+     * [path] 展示给用户的路径；[isPublic] 是否公共目录；[relative] 仅公共目录有值，供"打开文件夹"跳转。
+     */
+    data class DirInfo(val path: String, val isPublic: Boolean, val relative: String?)
 
     /** 某个根目录：外部私有优先，内部开关打开或外部不可用时退回内部私有 */
     private fun baseRoot(context: Context, dirName: String): File {
@@ -55,13 +73,23 @@ object ComicDownloadStore {
         else File(ext, dirName)
     }
 
-    /** 漫画根目录（非 bika 来源，结构 {root}/{source}/{id}/…） */
+    /** 漫画根目录（非 bika 来源，结构 {root}/{source}/{id}/…；仅 Android 8/9 的写入位置与旧数据位置） */
     fun comicRoot(context: Context): File = baseRoot(context, DIR_COMICS)
 
-    /** 本子根目录（bika 来源，结构 {root}/{id}/…，与漫画不再共用一个根目录） */
+    /** 本子根目录（bika 来源，结构 {root}/{id}/…；仅 Android 8/9 的写入位置与旧数据位置） */
     fun bikaRoot(context: Context): File = baseRoot(context, DIR_BIKA)
 
-    /** 某来源应写入的根目录 */
+    /** 漫画目录展示信息（Android 10+ 为公共目录，8/9 为私有目录绝对路径） */
+    fun comicDirInfo(context: Context): DirInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) DirInfo(PUBLIC_COMICS.trimEnd('/'), true, PUBLIC_COMICS.trimEnd('/'))
+        else DirInfo(comicRoot(context).absolutePath, false, null)
+
+    /** 本子目录展示信息 */
+    fun bikaDirInfo(context: Context): DirInfo =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) DirInfo(PUBLIC_BIKA.trimEnd('/'), true, PUBLIC_BIKA.trimEnd('/'))
+        else DirInfo(bikaRoot(context).absolutePath, false, null)
+
+    /** 某来源应写入的私有根目录 */
     fun root(context: Context, source: String): File =
         if (source == BIKA) bikaRoot(context) else comicRoot(context)
 
@@ -72,7 +100,7 @@ object ComicDownloadStore {
             File(context.filesDir, dirName)
         ).distinctBy { it.absolutePath }
 
-    /** 单本的写入目录：本子在 bika 根下直接是 {id}，漫画在 comics 根下是 {source}/{id} */
+    /** 单本的私有写入目录：本子在 bika 根下直接是 {id}，漫画在 comics 根下是 {source}/{id} */
     fun comicDir(context: Context, source: String, id: String): File =
         if (source == BIKA) File(bikaRoot(context), id)
         else File(File(comicRoot(context), source), id)
@@ -80,7 +108,15 @@ object ComicDownloadStore {
     fun chapterDir(context: Context, source: String, id: String, key: String): File =
         File(comicDir(context, source, id), key)
 
-    /** 同一本书在各存储位置的可能目录（含旧位置，兼容迁移前/迁移失败/切换过存储位置） */
+    /** 单本在公共目录下的相对目录（末尾带 /） */
+    private fun publicComicRel(source: String, id: String): String =
+        if (source == BIKA) "$PUBLIC_BIKA$id/" else "$PUBLIC_COMICS$source/$id/"
+
+    /** 某章在公共目录下的相对目录（末尾带 /） */
+    private fun publicChapterRel(source: String, id: String, key: String): String =
+        publicComicRel(source, id) + "$key/"
+
+    /** 同一本书在各存储位置的可能私有目录（含旧位置，兼容迁移前/迁移失败/切换过存储位置） */
     private fun candidateDirs(context: Context, source: String, id: String): List<File> {
         val all = if (source == BIKA) {
             // 本子：新位置 {bika根}/{id}，兼容旧位置 {comics根}/bika/{id}
@@ -93,18 +129,172 @@ object ComicDownloadStore {
         return (listOf(comicDir(context, source, id)) + all).distinctBy { it.absolutePath }
     }
 
+    // ---------- 公共目录（Android 10+，MediaStore）读写 ----------
+
+    /** 公共目录下 meta.json 的 content URI（没有则 null） */
+    private fun queryMetaUri(context: Context, rel: String): Uri? = runCatching {
+        context.contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.MediaColumns._ID),
+            "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+            arrayOf(rel, META_NAME),
+            null
+        )?.use { c ->
+            if (c.moveToFirst()) ContentUris.withAppendedId(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                c.getLong(c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID))
+            ) else null
+        }
+    }.getOrNull()
+
+    /** 读取公共目录里的 meta.json（读不出返回 null，不抛异常） */
+    private fun readMeta(context: Context, uri: Uri): DownloadedComic? = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() }
+            ?.let { json.decodeFromString<DownloadedComic>(it) }
+    }.getOrNull()
+
+    /** 写公共目录里的 meta.json（同名先删再写，避免出现 (1)(2) 副本） */
+    private fun writeMetaPublic(context: Context, rel: String, text: String) {
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        runCatching {
+            resolver.delete(
+                collection,
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                arrayOf(rel, META_NAME)
+            )
+        }
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, META_NAME)
+            put(MediaStore.MediaColumns.MIME_TYPE, "application/json")
+            put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(collection, values) ?: throw IllegalStateException("下载失败：无法创建 meta.json")
+        try {
+            resolver.openOutputStream(uri)?.use { it.write(text.toByteArray()) }
+                ?: throw IllegalStateException("下载失败：无法写入 meta.json")
+            resolver.update(
+                uri,
+                ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                null, null
+            )
+        } catch (e: Exception) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw e
+        }
+    }
+
+    /** 某章目录下已有的文件名集合（公共目录，用于断点续传的"已存在则跳过"） */
+    private fun queryFileNames(context: Context, rel: String): Set<String> {
+        val out = mutableSetOf<String>()
+        runCatching {
+            context.contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.MediaColumns.DISPLAY_NAME),
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                arrayOf(rel),
+                null
+            )?.use { c ->
+                val idx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                while (c.moveToNext()) c.getString(idx)?.let { out += it }
+            }
+        }
+        return out
+    }
+
+    /** 公共目录下某章的图片（返回可直接加载的 content:// URL，按文件名正序） */
+    private fun queryPagesPublic(context: Context, rel: String): List<String> {
+        val out = mutableListOf<Pair<String, String>>()
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        runCatching {
+            context.contentResolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME),
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}<>?",
+                arrayOf(rel, META_NAME),
+                null
+            )?.use { c ->
+                val idIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                while (c.moveToNext()) {
+                    val name = c.getString(nameIdx).orEmpty()
+                    if (name.isNotBlank()) {
+                        out += name to ContentUris.withAppendedId(collection, c.getLong(idIdx)).toString()
+                    }
+                }
+            }
+        }
+        return out.sortedBy { it.first }.map { it.second }
+    }
+
+    /** 公共目录下某前缀（一本书）的文件总字节数 */
+    private fun sizePublic(context: Context, relPrefix: String): Long = runCatching {
+        var total = 0L
+        context.contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            arrayOf(MediaStore.MediaColumns.SIZE),
+            "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+            arrayOf("$relPrefix%"),
+            null
+        )?.use { c ->
+            val idx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+            while (c.moveToNext()) total += c.getLong(idx)
+        }
+        total
+    }.getOrDefault(0L)
+
+    /** 扫描公共目录里的全部 meta.json（source/id 取自 meta 内容，不靠路径猜） */
+    private fun loadLibraryPublic(context: Context): List<Pair<DownloadedComic, Long>> {
+        val out = mutableListOf<Pair<DownloadedComic, Long>>()
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        runCatching {
+            context.contentResolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_MODIFIED),
+                "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND (${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?)",
+                arrayOf(META_NAME, "$PUBLIC_COMICS%", "$PUBLIC_BIKA%"),
+                null
+            )?.use { c ->
+                val idIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val timeIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                while (c.moveToNext()) {
+                    val uri = ContentUris.withAppendedId(collection, c.getLong(idIdx))
+                    val meta = readMeta(context, uri)
+                    // DATE_MODIFIED 单位是秒，统一乘 1000 变毫秒
+                    if (meta != null) out += meta to (c.getLong(timeIdx) * 1000L)
+                }
+            }
+        }
+        return out
+    }
+
+    // ---------- 私有目录（Android 8/9 或历史数据）读写 ----------
+
     private fun loadMetaIn(dir: File): DownloadedComic? {
-        val f = File(dir, "meta.json")
+        val f = File(dir, META_NAME)
         if (!f.isFile) return null
         return runCatching { json.decodeFromString<DownloadedComic>(f.readText()) }.getOrNull()
     }
 
-    fun loadMeta(context: Context, source: String, id: String): DownloadedComic? =
-        candidateDirs(context, source, id).firstNotNullOfOrNull { loadMetaIn(it) }
+    /** 读某本的 meta：Android 10+ 先看公共目录，再看私有目录（旧数据） */
+    fun loadMeta(context: Context, source: String, id: String): DownloadedComic? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            queryMetaUri(context, publicComicRel(source, id) + META_NAME)?.let { uri ->
+                readMeta(context, uri)?.let { return it }
+            }
+        }
+        return candidateDirs(context, source, id).firstNotNullOfOrNull { loadMetaIn(it) }
+    }
 
     private fun saveMeta(context: Context, meta: DownloadedComic) {
-        val dir = comicDir(context, meta.source, meta.id).apply { mkdirs() }
-        File(dir, "meta.json").writeText(json.encodeToString(DownloadedComic.serializer(), meta))
+        val text = json.encodeToString(DownloadedComic.serializer(), meta)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            writeMetaPublic(context, publicComicRel(meta.source, meta.id), text)
+        } else {
+            val dir = comicDir(context, meta.source, meta.id).apply { mkdirs() }
+            File(dir, META_NAME).writeText(text)
+        }
     }
 
     /** 写入/更新某一章记录（下载完成后调用） */
@@ -114,7 +304,7 @@ object ComicDownloadStore {
         saveMeta(context, cur.copy(title = comic.title, cover = comic.cover ?: cur.cover, chapters = chapters))
     }
 
-    /** 全部可能存在下载记录的目录（漫画 {comics根}/{source}/{id}；本子 {bika根}/{id} + 旧位置 {comics根}/bika/{id}） */
+    /** 全部可能存在下载记录的私有目录（漫画 {comics根}/{source}/{id}；本子 {bika根}/{id} + 旧位置 {comics根}/bika/{id}） */
     private fun allComicDirs(context: Context): List<File> {
         val out = mutableListOf<File>()
         candidateRoots(context, DIR_COMICS).forEach { root ->
@@ -130,38 +320,76 @@ object ComicDownloadStore {
         return out
     }
 
-    /** 扫描全部下载记录（按目录修改时间倒序，同一本取最新位置；读不出的目录直接跳过） */
+    /** 扫描全部下载记录（公共 + 私有旧位置；按修改时间倒序，同一本取最新位置；读不出的目录直接跳过） */
     fun loadLibrary(context: Context): List<DownloadedComic> = runCatching {
-        allComicDirs(context)
-            .mapNotNull { dir ->
-                loadMetaIn(dir)?.takeIf { it.chapters.isNotEmpty() }?.let { it to dir.lastModified() }
-            }
-            .sortedByDescending { it.second }
+        val found = mutableListOf<Pair<DownloadedComic, Long>>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) found += loadLibraryPublic(context)
+        found += allComicDirs(context).mapNotNull { dir ->
+            loadMetaIn(dir)?.let { it to dir.lastModified() }
+        }
+        found.sortedByDescending { it.second }
             .map { it.first }
+            .filter { it.chapters.isNotEmpty() }
             .distinctBy { it.source to it.id }
     }.getOrDefault(emptyList())
 
-    /** 章节的本地图片路径（按文件名正序；各存储位置都找，谁有内容用谁） */
-    fun chapterPages(context: Context, source: String, id: String, key: String): List<String> =
-        candidateDirs(context, source, id).firstNotNullOfOrNull { dir ->
+    /**
+     * 章节的图片 URL（按文件名正序，可直接交给 Coil 加载）。
+     * Android 10+ 返回公共目录的 `content://`，Android 8/9 返回 `file://`；各存储位置都找，谁有内容用谁。
+     */
+    fun chapterPages(context: Context, source: String, id: String, key: String): List<String> {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val pages = queryPagesPublic(context, publicChapterRel(source, id, key))
+            if (pages.isNotEmpty()) return pages
+        }
+        return candidateDirs(context, source, id).firstNotNullOfOrNull { dir ->
             runCatching { File(dir, key).listFiles() }.getOrNull().orEmpty()
-                .filter { it.isFile && it.name != "meta.json" }
+                .filter { it.isFile && it.name != META_NAME }
                 .takeIf { it.isNotEmpty() }
                 ?.sortedBy { it.name }
-                ?.map { it.absolutePath }
+                ?.map { "file://${it.absolutePath}" }
         } ?: emptyList()
+    }
 
-    /** 目录占用字节数（各存储位置合计） */
-    fun size(context: Context, source: String, id: String): Long =
-        candidateDirs(context, source, id).sumOf { dir ->
+    /** 目录占用字节数（公共 + 各私有位置合计） */
+    fun size(context: Context, source: String, id: String): Long {
+        var total = 0L
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            total += sizePublic(context, publicComicRel(source, id))
+        }
+        return total + candidateDirs(context, source, id).sumOf { dir ->
             runCatching { dir.walkBottomUp().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
         }
+    }
 
     fun deleteChapter(context: Context, source: String, id: String, key: String) {
-        // 各位置的该章目录都删除；meta 里最后一章删完则整本目录一并清掉
+        // 公共目录（Android 10+）：删该章目录全部文件；meta 里最后一章删完则整本目录一并清掉
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching {
+            val resolver = context.contentResolver
+            val comicRel = publicComicRel(source, id)
+            resolver.delete(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=?",
+                arrayOf(publicChapterRel(source, id, key))
+            )
+            val meta = queryMetaUri(context, comicRel + META_NAME)?.let { readMeta(context, it) }
+            if (meta != null) {
+                val left = meta.chapters.filterNot { it.key == key }
+                if (left.isEmpty()) {
+                    resolver.delete(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                        arrayOf("$comicRel%")
+                    )
+                } else {
+                    writeMetaPublic(context, comicRel, json.encodeToString(DownloadedComic.serializer(), meta.copy(chapters = left)))
+                }
+            }
+        }
+        // 私有目录（Android 8/9 或历史遗留）：各位置的该章目录都删除
         candidateDirs(context, source, id).forEach { dir ->
             runCatching { File(dir, key).deleteRecursively() }
-            val metaFile = File(dir, "meta.json")
+            val metaFile = File(dir, META_NAME)
             if (!metaFile.isFile) return@forEach
             val cur = runCatching { json.decodeFromString<DownloadedComic>(metaFile.readText()) }.getOrNull()
                 ?: return@forEach
@@ -174,6 +402,14 @@ object ComicDownloadStore {
     }
 
     fun deleteComic(context: Context, source: String, id: String) {
+        // 公共目录（Android 10+）：按路径前缀删掉整本
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching {
+            context.contentResolver.delete(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                arrayOf("${publicComicRel(source, id)}%")
+            )
+        }
         candidateDirs(context, source, id).forEach { dir ->
             runCatching { dir.deleteRecursively() }
         }
@@ -251,6 +487,7 @@ object ComicDownloadStore {
 
     /**
      * 下载一章的全部图片（已存在的文件跳过 → 支持中断后继续）。
+     * Android 10+ 写公共下载目录（MediaStore，IS_PENDING 保护），8/9 写私有目录。
      * @param onProgress (已完成张数, 总张数)
      */
     suspend fun downloadChapter(
@@ -260,6 +497,9 @@ object ComicDownloadStore {
         urls: List<String>,
         onProgress: (Int, Int) -> Unit
     ): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return downloadChapterPublic(context, comic, chapter, urls, onProgress)
+        }
         val dir = chapterDir(context, comic.source, comic.id, chapter.key).apply { mkdirs() }
         var done = 0
         urls.forEachIndexed { i, url ->
@@ -274,6 +514,64 @@ object ComicDownloadStore {
         }
         return done
     }
+
+    /** Android 10+：逐张写公共下载目录（同名同前缀已存在则跳过 → 支持中断后继续） */
+    private suspend fun downloadChapterPublic(
+        context: Context,
+        comic: DownloadedComic,
+        chapter: DownloadedChapter,
+        urls: List<String>,
+        onProgress: (Int, Int) -> Unit
+    ): Int {
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+        val rel = publicChapterRel(comic.source, comic.id, chapter.key)
+        val existing = queryFileNames(context, rel)
+        var done = 0
+        urls.forEachIndexed { i, url ->
+            val prefix = "%04d".format(i + 1)
+            if (existing.none { it.startsWith("$prefix.") }) {
+                val (bytes, contentType) = ImageDownloader.fetchBytes(url)
+                val ext = ImageDownloader.extOf(url, contentType)
+                val name = "$prefix.$ext"
+                // 同名先删，避免 insert 时生成 (1) 副本
+                runCatching {
+                    resolver.delete(
+                        collection,
+                        "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                        arrayOf(rel, name)
+                    )
+                }
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, imageMime(ext))
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, rel)
+                    // 写入期间 IS_PENDING=1，写完再置 0，避免半截文件被系统扫描到
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(collection, values)
+                    ?: throw IllegalStateException("下载失败：无法创建文件 $name")
+                try {
+                    resolver.openOutputStream(uri)?.use { it.write(bytes) }
+                        ?: throw IllegalStateException("下载失败：无法写入文件 $name")
+                    resolver.update(
+                        uri,
+                        ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) },
+                        null, null
+                    )
+                } catch (e: Exception) {
+                    runCatching { resolver.delete(uri, null, null) }
+                    throw e
+                }
+            }
+            done++
+            onProgress(done, urls.size)
+        }
+        return done
+    }
+
+    /** 图片 MIME（jpg 用标准写法 image/jpeg） */
+    private fun imageMime(ext: String): String = if (ext == "jpg" || ext == "jpeg") "image/jpeg" else "image/$ext"
 
     /** 人类可读大小 */
     fun formatSize(bytes: Long): String = when {

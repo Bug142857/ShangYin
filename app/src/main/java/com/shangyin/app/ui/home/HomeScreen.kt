@@ -434,13 +434,21 @@ private fun CategoryTile(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    text = meta.list.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    fontWeight = FontWeight.Medium
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = meta.list.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    // 音乐清单与普通清单区分开（固定列表布局、无子清单、不拖拽排序）
+                    if (meta.list.musicList) {
+                        Spacer(Modifier.width(6.dp))
+                        com.shangyin.app.ui.common.MusicListTag()
+                    }
+                }
                 Text(
                     text = "${meta.itemCount} 件",
                     style = MaterialTheme.typography.labelSmall,

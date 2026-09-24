@@ -31,10 +31,24 @@ object MusicRepo {
 
     // ---------------- 搜索 / 歌词 ----------------
 
-    /** 搜索（来源：33ve，搜索页 HTML 里自带封面，不用额外抓） */
-    suspend fun search(keyword: String, page: Int = 1): List<MusicSong> = Site33.search(keyword, page)
+    /**
+     * 搜索。搜索页可以按来源切换：
+     * - [MusicPlatform.S33VE] → 33ve（搜索页 HTML 里自带封面，不用额外抓）
+     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] → gdstudio 聚合接口
+     */
+    suspend fun search(
+        keyword: String,
+        page: Int = 1,
+        platform: MusicPlatform = MusicPlatform.S33VE
+    ): List<MusicSong> = when (platform) {
+        MusicPlatform.S33VE -> Site33.search(keyword, page)
+        else -> GdStudio.search(platform, keyword, page)
+    }
 
-    suspend fun lyric(song: MusicSong): MusicLyric = Site33.lyric(song)
+    suspend fun lyric(song: MusicSong): MusicLyric = when (song.platform) {
+        MusicPlatform.S33VE -> Site33.lyric(song)
+        else -> GdStudio.lyric(song.platform, song.id)
+    }
 
     /** 清空直链缓存（直链带时效签名，需要强制换新时用） */
     fun clearUrlCache() = urlCache.clear()
@@ -50,11 +64,59 @@ object MusicRepo {
         if (cached != null && System.currentTimeMillis() - cached.second < URL_TTL_MS) {
             return MusicPlayInfo(cached.first, Site33.PLAY_HEADERS)
         }
-        val result = Site33.resolve(song)
+        val info = when (song.platform) {
+            MusicPlatform.S33VE -> {
+                val result = Site33.resolve(song)
+                val url = result.url
+                if (url.isNullOrBlank()) throw MusicResolveException(result.error ?: "没有可用的播放直连")
+                MusicPlayInfo(url, Site33.PLAY_HEADERS)
+            }
+
+            MusicPlatform.JOOX -> {
+                // JOOX 直链接口恒返回空（见 GdStudio 类注释）：先试一次（将来可用了就直接用），
+                // 拿不到就按"歌名 + 歌手"去 33ve 找同名歌曲播放，尽量让用户点得响
+                val direct = runCatching { GdStudio.resolveUrl(song.platform, song.id) }.getOrNull()
+                if (!direct.isNullOrBlank()) {
+                    MusicPlayInfo(direct, GdStudio.PLAY_HEADERS)
+                } else {
+                    resolveVia33ve(song)
+                }
+            }
+
+            MusicPlatform.NETEASE -> {
+                val direct = runCatching { GdStudio.resolveUrl(song.platform, song.id) }.getOrNull()
+                    ?: throw MusicResolveException("网易云没有这首歌的可播放资源")
+                MusicPlayInfo(direct, GdStudio.PLAY_HEADERS)
+            }
+        }
+        urlCache[song.key] = info.url to System.currentTimeMillis()
+        return info
+    }
+
+    /**
+     * 回退解析：拿"歌名 歌手"去 33ve 搜一次，取同名（或同名同歌手）的第一首解析直链。
+     * 只用于直链拿不到的来源（JOOX），失败给出明确的提示文案。
+     */
+    private suspend fun resolveVia33ve(song: MusicSong): MusicPlayInfo {
+        val keyword = listOf(song.name, song.artists).filter { it.isNotBlank() }.joinToString(" ")
+        val candidates = runCatching { Site33.search(keyword) }.getOrNull().orEmpty()
+        // 优先同名 + 歌手前几位匹配的，其次同名，最后放弃（避免播成完全无关的歌）
+        val target = candidates.firstOrNull { it.name == song.name && sameArtist(it, song) }
+            ?: candidates.firstOrNull { it.name == song.name }
+        if (target == null) throw MusicResolveException("该来源拿不到播放地址，其它来源里也没找到同名的歌")
+        val result = Site33.resolve(target)
         val url = result.url
-        if (url.isNullOrBlank()) throw MusicResolveException(result.error ?: "没有可用的播放直连")
-        urlCache[song.key] = url to System.currentTimeMillis()
+        if (url.isNullOrBlank()) {
+            throw MusicResolveException(result.error ?: "没有可用的播放直连")
+        }
         return MusicPlayInfo(url, Site33.PLAY_HEADERS)
+    }
+
+    /** 歌手是否大致相同（多歌手的歌两边排序/分隔符可能不同，只比对首个歌手名） */
+    private fun sameArtist(a: MusicSong, b: MusicSong): Boolean {
+        val x = a.artists.split("/", "&", "、", ",").firstOrNull()?.trim().orEmpty()
+        val y = b.artists.split("/", "&", "、", ",").firstOrNull()?.trim().orEmpty()
+        return x.isNotBlank() && x == y
     }
 
     // ---------------- 收藏（进里世界清单） ----------------

@@ -109,8 +109,9 @@ fun DownloadScreen(nav: NavHostController) {
     /** 先按当前活跃任务做一次快照（Map 顺序稳定，避免下标越界） */
     val tasks = active.values.toList()
 
-    val comicsDir = remember(context) { ComicDownloadStore.comicRoot(context) }
-    val bikasDir = remember(context) { ComicDownloadStore.bikaRoot(context) }
+    // 目录卡：Android 10+ 展示公共目录（可点开），8/9 展示私有目录绝对路径
+    val comicsDir = remember(context) { ComicDownloadStore.comicDirInfo(context) }
+    val bikasDir = remember(context) { ComicDownloadStore.bikaDirInfo(context) }
 
     Scaffold(
         topBar = {
@@ -152,9 +153,11 @@ fun DownloadScreen(nav: NavHostController) {
                 keyPrefix = "comic",
                 comics = comics,
                 totalBytes = comicsSize,
-                dirTitle = PRIVATE_DIR_TITLE,
-                dirPath = comicsDir.absolutePath,
-                onOpenDir = { openPrivateDir(context, comicsDir) },
+                dirInfo = comicsDir,
+                onOpenDir = {
+                    if (comicsDir.isPublic) openPublicDir(context, comicsDir.relative.orEmpty())
+                    else openPrivateDir(context, File(comicsDir.path))
+                },
                 expanded = expanded,
                 onToggle = { c ->
                     val k = "${c.source}/${c.id}"
@@ -165,7 +168,7 @@ fun DownloadScreen(nav: NavHostController) {
                     val pages = ComicDownloadStore.chapterPages(context, c.source, c.id, chapterKey)
                     if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
                     else {
-                        viewer = Triple(c, chapterKey, pages.map { "file://$it" })
+                        viewer = Triple(c, chapterKey, pages)
                         ReadProgressStore.record(context, c.source, c.id, chapterKey)
                     }
                 },
@@ -180,9 +183,11 @@ fun DownloadScreen(nav: NavHostController) {
                 keyPrefix = "bika",
                 comics = bikas,
                 totalBytes = bikasSize,
-                dirTitle = PRIVATE_DIR_TITLE,
-                dirPath = bikasDir.absolutePath,
-                onOpenDir = { openPrivateDir(context, bikasDir) },
+                dirInfo = bikasDir,
+                onOpenDir = {
+                    if (bikasDir.isPublic) openPublicDir(context, bikasDir.relative.orEmpty())
+                    else openPrivateDir(context, File(bikasDir.path))
+                },
                 expanded = expanded,
                 onToggle = { c ->
                     val k = "${c.source}/${c.id}"
@@ -193,7 +198,7 @@ fun DownloadScreen(nav: NavHostController) {
                     val pages = ComicDownloadStore.chapterPages(context, c.source, c.id, chapterKey)
                     if (pages.isEmpty()) Toast.makeText(context, "该章节本地文件缺失", Toast.LENGTH_SHORT).show()
                     else {
-                        viewer = Triple(c, chapterKey, pages.map { "file://$it" })
+                        viewer = Triple(c, chapterKey, pages)
                         ReadProgressStore.record(context, c.source, c.id, chapterKey)
                     }
                 },
@@ -247,7 +252,7 @@ fun DownloadScreen(nav: NavHostController) {
                     if (next == null || pages.isNullOrEmpty()) {
                         Toast.makeText(context, "下一章尚未下载：${next?.name ?: "没有更多章节"}", Toast.LENGTH_SHORT).show()
                     } else {
-                        viewer = Triple(c, next.key, pages.map { "file://$it" })
+                        viewer = Triple(c, next.key, pages)
                         ReadProgressStore.record(context, c.source, c.id, next.key)
                     }
                 }
@@ -377,8 +382,7 @@ private fun LazyListScope.comicSection(
     keyPrefix: String,
     comics: List<DownloadedComic>,
     totalBytes: Long,
-    dirTitle: String,
-    dirPath: String,
+    dirInfo: ComicDownloadStore.DirInfo,
     onOpenDir: () -> Unit,
     expanded: Set<String>,
     onToggle: (DownloadedComic) -> Unit,
@@ -390,7 +394,11 @@ private fun LazyListScope.comicSection(
         SectionHeader(title, "${comics.size} $unit · ${ComicDownloadStore.formatSize(totalBytes)}")
     }
     item(key = "$keyPrefix-dir") {
-        DirCard(title = dirTitle, path = dirPath, onClick = onOpenDir)
+        DirCard(
+            title = if (dirInfo.isPublic) PUBLIC_DIR_TITLE else PRIVATE_DIR_TITLE,
+            path = dirInfo.path,
+            onClick = onOpenDir
+        )
     }
     if (comics.isEmpty()) {
         item(key = "$keyPrefix-empty") { EmptyHint(emptyHint) }

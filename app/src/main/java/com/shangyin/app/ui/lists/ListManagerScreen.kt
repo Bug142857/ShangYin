@@ -78,6 +78,7 @@ fun ListManagerScreen(nav: NavHostController) {
 
     var showCreate by remember { mutableStateOf(false) }
     var createWorld by remember { mutableStateOf(0) } // 新建清单归属：0=表世界 1=里世界
+    var createMusic by remember { mutableStateOf(false) } // 新建清单类型：音乐清单（固定里世界）
     var renameTarget by remember { mutableStateOf<ItemListEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<com.shangyin.app.data.db.ListWithMeta?>(null) }
 
@@ -122,6 +123,7 @@ fun ListManagerScreen(nav: NavHostController) {
                                 name = meta.list.name,
                                 count = meta.itemCount,
                                 depth = depth,
+                                musicList = meta.list.musicList,
                                 onRename = { renameTarget = meta.list },
                                 onDelete = { deleteTarget = meta }
                             )
@@ -137,6 +139,7 @@ fun ListManagerScreen(nav: NavHostController) {
                                 name = meta.list.name,
                                 count = meta.itemCount,
                                 depth = depth,
+                                musicList = meta.list.musicList,
                                 onRename = { renameTarget = meta.list },
                                 onDelete = { deleteTarget = meta }
                             )
@@ -147,7 +150,7 @@ fun ListManagerScreen(nav: NavHostController) {
         }
     }
 
-    // 新建清单：名称 + 归属世界
+    // 新建清单：名称 + 类型（普通 / 音乐清单）+ 归属世界（音乐清单固定里世界）
     if (showCreate) {
         var name by remember { mutableStateOf("") }
         AlertDialog(
@@ -163,27 +166,54 @@ fun ListManagerScreen(nav: NavHostController) {
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "归属",
+                        "类型",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(4.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(
-                            selected = createWorld == 0,
-                            onClick = { createWorld = 0 },
-                            label = { Text("表世界") }
+                            selected = !createMusic,
+                            onClick = { createMusic = false },
+                            label = { Text("普通清单") }
                         )
                         FilterChip(
-                            selected = createWorld == 1,
-                            onClick = { createWorld = 1 },
-                            label = { Text("里世界") }
+                            selected = createMusic,
+                            onClick = { createMusic = true },
+                            label = { Text("音乐清单") }
                         )
                     }
-                    if (createWorld == 1) {
+                    if (!createMusic) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "归属",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = createWorld == 0,
+                                onClick = { createWorld = 0 },
+                                label = { Text("表世界") }
+                            )
+                            FilterChip(
+                                selected = createWorld == 1,
+                                onClick = { createWorld = 1 },
+                                label = { Text("里世界") }
+                            )
+                        }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "里世界清单用于收藏番号、本子与漫画",
+                            if (createWorld == 1) "里世界清单用于收藏番号、本子与漫画"
+                            else "表世界清单用于收藏豆瓣影视 / 图书 / 游戏",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    } else {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "音乐清单专放歌曲：固定列表布局、没有子清单、不参与拖拽排序，歌曲也会优先收藏到这里",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.outline
                         )
@@ -194,7 +224,9 @@ fun ListManagerScreen(nav: NavHostController) {
                 TextButton(
                     enabled = name.isNotBlank(),
                     onClick = {
-                        scope.launch { Repo.createList(name, world = createWorld) }
+                        // 音乐清单固定归里世界（里世界才是收藏歌曲的地方）
+                        val world = if (createMusic) 1 else createWorld
+                        scope.launch { Repo.createList(name, world = world, musicList = createMusic) }
                         showCreate = false
                     }
                 ) { Text("创建") }
@@ -287,6 +319,7 @@ private fun ListManagerRow(
     name: String,
     count: Int,
     depth: Int = 0,
+    musicList: Boolean = false,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -298,14 +331,25 @@ private fun ListManagerRow(
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                if (depth > 0) "└ $name" else name,
-                modifier = Modifier.weight(1f),
-                style = if (depth == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
-                fontWeight = if (depth == 0) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (depth == 0) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 1f - depth * 0.12f)
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    if (depth > 0) "└ $name" else name,
+                    modifier = Modifier.weight(1f, fill = false),
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    style = if (depth == 0) MaterialTheme.typography.bodyLarge else MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (depth == 0) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (depth == 0) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 1f - depth * 0.12f)
+                )
+                if (musicList) {
+                    Spacer(Modifier.width(6.dp))
+                    com.shangyin.app.ui.common.MusicListTag()
+                }
+            }
             Text(
                 "${count}件",
                 style = MaterialTheme.typography.labelSmall,

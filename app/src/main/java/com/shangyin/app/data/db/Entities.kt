@@ -44,6 +44,11 @@ data class ItemListEntity(
     val sortIndex: Int = 0,
     /** 归属世界：0 = 表世界（豆瓣收藏），1 = 里世界（番号/本子收藏） */
     val world: Int = 0,
+    /**
+     * 是否「音乐清单」：音乐清单与普通清单不是一回事——固定列表布局、没有子清单、不参与拖拽排序，
+     * 收藏音乐时也更容易认出来。默认 false，保持老清单的原有行为。
+     */
+    val musicList: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
 

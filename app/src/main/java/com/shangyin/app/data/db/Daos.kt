@@ -78,7 +78,7 @@ interface ListDao {
     // 用于统计包含子清单内所有条目的总数
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.musicList, l.createdAt, " +
             "(WITH RECURSIVE descendants(id) AS (" +
             "  SELECT id FROM lists WHERE id = l.id " +
             "  UNION ALL " +
@@ -97,7 +97,7 @@ interface ListDao {
     suspend fun getRootListsOnce(world: Int): List<ItemListEntity>
 
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.musicList, l.createdAt, " +
             "(WITH RECURSIVE descendants(id) AS (" +
             "  SELECT id FROM lists WHERE id = l.id " +
             "  UNION ALL " +
@@ -112,7 +112,7 @@ interface ListDao {
 
     /** 旧方法：拿所有清单（含子清单，用于设置页分类管理） */
     @Query(
-        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.createdAt, " +
+        "SELECT l.id, l.name, l.description, l.coverUrl, l.parentId, l.sortIndex, l.world, l.musicList, l.createdAt, " +
             "(WITH RECURSIVE descendants(id) AS (" +
             "  SELECT id FROM lists WHERE id = l.id " +
             "  UNION ALL " +

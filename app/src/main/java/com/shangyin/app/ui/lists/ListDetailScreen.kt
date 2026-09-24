@@ -1,6 +1,5 @@
 package com.shangyin.app.ui.lists
 
-import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -162,10 +161,19 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
 
     // 清单里是否含音乐条目：决定默认布局 + 排序菜单是否出现
     val hasMusicItems = remember(items) { items.any { it.category == MusicRepo.CATEGORY } }
-    // 未记过布局的清单：含音乐条目默认用列表（首次拿到条目时判定一次，不回写持久化）
-    LaunchedEffect(listId, items) {
-        if (!layoutDecided && items.isNotEmpty()) {
-            layoutMode = if (hasMusicItems) ListLayoutMode.LIST else ListLayoutMode.GRID
+    /**
+     * 是否「音乐清单」：新建时显式选了音乐清单类型，或清单内容里含音乐条目（老清单兼容，不用手改）。
+     * 音乐清单与普通清单不是一回事：固定列表布局、没有子清单、不参与拖拽排序。
+     */
+    val isMusicList = remember(list?.musicList, hasMusicItems) { list?.musicList == true || hasMusicItems }
+    // 音乐清单固定列表布局（忽略持久化的布局记忆，因为音乐清单没有切换布局的入口）；
+    // 其它清单：首次拿到条目时按内容判定一次，不回写持久化
+    LaunchedEffect(listId, items, isMusicList) {
+        if (isMusicList) {
+            layoutMode = ListLayoutMode.LIST
+            layoutDecided = true
+        } else if (!layoutDecided && items.isNotEmpty()) {
+            layoutMode = ListLayoutMode.GRID
             layoutDecided = true
         }
     }
@@ -265,7 +273,18 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             modifier = Modifier.fillMaxWidth()
                         )
                     } else {
-                        Text(list?.name.orEmpty(), maxLines = 1)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                list?.name.orEmpty(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            if (isMusicList) {
+                                Spacer(Modifier.width(6.dp))
+                                com.shangyin.app.ui.common.MusicListTag()
+                            }
+                        }
                     }
                 },
                 navigationIcon = {
@@ -292,41 +311,42 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             Icon(Icons.Rounded.MoreVert, contentDescription = "更多")
                         }
                         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(if (layoutMode == ListLayoutMode.GRID) "切换为列表" else "切换为平铺")
-                                },
-                                onClick = {
-                                    menuOpen = false
-                                    val next = if (layoutMode == ListLayoutMode.GRID) ListLayoutMode.LIST
-                                    else ListLayoutMode.GRID
-                                    layoutMode = next
-                                    layoutDecided = true
-                                    SettingsStore.setListLayout(
-                                        listId,
-                                        if (next == ListLayoutMode.LIST) SettingsStore.LAYOUT_LIST
-                                        else SettingsStore.LAYOUT_GRID
-                                    )
-                                }
-                            )
-                            // 编辑：只有「更新」排序下展示顺序与库内一致，才允许拖拽
+                            // 音乐清单固定列表布局、也没有子清单，这两项对它没意义，直接不给
+                            if (!isMusicList) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(if (layoutMode == ListLayoutMode.GRID) "切换为列表" else "切换为平铺")
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        val next = if (layoutMode == ListLayoutMode.GRID) ListLayoutMode.LIST
+                                        else ListLayoutMode.GRID
+                                        layoutMode = next
+                                        layoutDecided = true
+                                        SettingsStore.setListLayout(
+                                            listId,
+                                            if (next == ListLayoutMode.LIST) SettingsStore.LAYOUT_LIST
+                                            else SettingsStore.LAYOUT_GRID
+                                        )
+                                    }
+                                )
+                            }
+                            // 编辑：进去后可以逐条移出（音乐清单不参与拖拽排序）
                             DropdownMenuItem(
                                 text = { Text("编辑") },
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
                                 onClick = {
                                     menuOpen = false
                                     isEditMode = true
-                                    // 「歌手」排序时条目顺序由歌手决定，不参与拖拽，提示一下
-                                    if (sortMode == MusicSortMode.ARTIST && hasMusicItems) {
-                                        Toast.makeText(context, "按歌手排序时条目不支持拖拽排序", Toast.LENGTH_SHORT).show()
-                                    }
                                 }
                             )
-                            DropdownMenuItem(
-                                text = { Text("创建子清单") },
-                                leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                                onClick = { menuOpen = false; showCreateChild = true }
-                            )
+                            if (!isMusicList) {
+                                DropdownMenuItem(
+                                    text = { Text("创建子清单") },
+                                    leadingIcon = { Icon(Icons.Rounded.Add, contentDescription = null) },
+                                    onClick = { menuOpen = false; showCreateChild = true }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("重命名") },
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
@@ -447,7 +467,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             meta = meta,
                             isEditMode = isEditMode,
                             onRemove = { deleteSubTarget = meta },
-                            modifier = (if (isEditMode) dragReorderModifier(
+                            modifier = (if (isEditMode && !isMusicList) dragReorderModifier(
                                 itemId = meta.list.id,
                                 isListMode = false,
                                 gridColumns = 3,
@@ -471,8 +491,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             item = item,
                             isEditMode = isEditMode,
                             onRemove = { scope.launch { Repo.removeItemFromList(listId, item.id) } },
-                            // 按歌手排序时展示顺序与库内顺序不同，不接拖拽排序
-                            modifier = (if (isEditMode && sortMode == MusicSortMode.ADDED) dragReorderModifier(
+                            // 音乐清单不参与拖拽排序（展示顺序完全由「更新 / 歌手」排序决定）
+                            modifier = (if (isEditMode && !isMusicList && sortMode == MusicSortMode.ADDED) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = false,
                                 gridColumns = 3,
@@ -510,7 +530,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             meta = meta,
                             isEditMode = isEditMode,
                             onRemove = { deleteSubTarget = meta },
-                            modifier = (if (isEditMode) dragReorderModifier(
+                            modifier = (if (isEditMode && !isMusicList) dragReorderModifier(
                                 itemId = meta.list.id,
                                 isListMode = true,
                                 gridColumns = 1,
@@ -531,8 +551,8 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                         val isDragging = draggingItemId == item.id
                         val scale by animateFloatAsState(if (isDragging) 1.03f else 1f, label = "scale")
                         // 音乐条目用专用行（封面 + 歌名 + 歌手），其余沿用通用行
-                        // 按歌手排序时展示顺序与库内顺序不同，不接拖拽排序
-                        val rowModifier = (if (isEditMode && sortMode == MusicSortMode.ADDED) dragReorderModifier(
+                        // 音乐清单不参与拖拽排序（展示顺序完全由「更新 / 歌手」排序决定）
+                        val rowModifier = (if (isEditMode && !isMusicList && sortMode == MusicSortMode.ADDED) dragReorderModifier(
                             itemId = item.id,
                             isListMode = true,
                             gridColumns = 1,

@@ -13,7 +13,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * 音乐下载：把 24bit 的播放直链存到手机里。
+ * 音乐下载：把当前音源解析出的播放直链存到手机里。
  *
  * - Android 10+（Q）：写公共 `Download/老郑分享/音乐/`（MediaStore，无需存储权限）
  * - Android 8/9：写应用外部私有目录 `Android/data/<包名>/files/Music/`（免权限，路径会提示给用户）
@@ -143,7 +143,7 @@ object MusicDownloader {
         out.flush()
     }
 
-    /** 从直链推断扩展名（24bit 的直链以 .mp3 / .flac 结尾） */
+    /** 从直链推断扩展名（各家音源直链以 .mp3 / .flac / .m4a 结尾） */
     private fun extensionOf(url: String): String {
         val path = url.substringBefore('?').lowercase()
         return when {

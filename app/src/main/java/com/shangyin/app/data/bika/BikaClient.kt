@@ -200,8 +200,9 @@ object BikaClient {
     // ---------- 接口 ----------
 
     /**
-     * 带 token 的调用包装：未登录直接抛 BikaAuthException（登录入口在 设置→账号管理→哔咔登录）；
-     * 登录失效时清除本地 token 并抛出，由界面引导用户重新登录。
+     * 带 token 的调用包装：未登录直接抛 BikaAuthException（登录入口在 设置→账号管理→哔咔登录）。
+     * token 过期时先用已保存的账密静默重登一次并重试，用户无感；
+     * 重登失败（未存账密或登录失败）才清 token 并抛出，由界面引导用户重新登录。
      */
     suspend fun <T> withAuth(block: suspend (String) -> T): T {
         val token = SettingsStore.bikaToken
@@ -209,9 +210,33 @@ object BikaClient {
         return try {
             block(token)
         } catch (e: BikaAuthException) {
-            SettingsStore.clearBikaToken()
-            throw BikaAuthException("哔咔登录已失效")
+            val fresh = if (autoSignIn()) SettingsStore.bikaToken else ""
+            if (fresh.isBlank()) {
+                SettingsStore.clearBikaToken()
+                throw BikaAuthException("哔咔登录已失效")
+            }
+            try {
+                block(fresh)
+            } catch (e2: BikaAuthException) {
+                SettingsStore.clearBikaToken()
+                throw BikaAuthException("哔咔登录已失效")
+            }
         }
+    }
+
+    /**
+     * 用已保存的哔咔账密静默重登：成功写入新 token 返回 true，否则返回 false。
+     * 未保存账密、网络失败、账密已失效等一律按失败处理（不抛异常）。
+     */
+    suspend fun autoSignIn(): Boolean {
+        val user = SettingsStore.bikaAccount
+        val pass = SettingsStore.bikaPassword
+        if (user.isBlank() || pass.isBlank()) return false
+        return runCatching {
+            val token = signIn(user, pass)
+            SettingsStore.bikaToken = token
+            token.isNotBlank()
+        }.getOrDefault(false)
     }
 
     /** 登录，返回 JWT token */
@@ -223,7 +248,8 @@ object BikaClient {
 
     /**
      * 服务端校验登录态（用于账号管理里识别「看起来已登录、其实 token 已失效」）。
-     * 用最小请求 `GET categories`：失效时服务端返回 `code=401` → [BikaAuthException]，并清掉本地 token。
+     * 用最小请求 `GET categories`：失效时服务端返回 `code=401` → [BikaAuthException]。
+     * 失效时先用已保存账密静默重登并再探一次，仍失败才清 token 并返回 false。
      *
      * @return true = 有效；false = 已失效；null = 网络/被墙等无法判断（此时不提示过期，避免误报）
      */
@@ -234,8 +260,19 @@ object BikaClient {
             fetchCategories(token)
             true
         } catch (e: BikaAuthException) {
-            SettingsStore.clearBikaToken()
-            false
+            if (!autoSignIn()) {
+                SettingsStore.clearBikaToken()
+                return false
+            }
+            try {
+                fetchCategories(SettingsStore.bikaToken)
+                true
+            } catch (e2: BikaAuthException) {
+                SettingsStore.clearBikaToken()
+                false
+            } catch (e2: Exception) {
+                null
+            }
         } catch (e: Exception) {
             null
         }

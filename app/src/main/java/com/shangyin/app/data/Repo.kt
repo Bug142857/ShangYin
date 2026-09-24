@@ -244,8 +244,15 @@ object Repo {
 
     fun observeAllLists(): Flow<List<ItemListEntity>> = listDao.observeAllLists()
 
-    suspend fun createList(name: String, parentId: Long? = null, world: Int = 0): Long =
-        listDao.insertList(ItemListEntity(name = name.trim(), parentId = parentId, world = world))
+    /** 新建清单。[musicList] = true 表示创建「音乐清单」类型（固定列表布局、无子清单、不拖拽排序） */
+    suspend fun createList(
+        name: String,
+        parentId: Long? = null,
+        world: Int = 0,
+        musicList: Boolean = false
+    ): Long = listDao.insertList(
+        ItemListEntity(name = name.trim(), parentId = parentId, world = world, musicList = musicList)
+    )
 
     suspend fun renameList(list: ItemListEntity, name: String) =
         listDao.updateList(list.copy(name = name.trim()))

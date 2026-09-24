@@ -38,15 +38,16 @@ import com.shangyin.app.data.Repo
 import kotlinx.coroutines.launch
 
 /**
- * 收藏到里世界清单的对话框（番号视频 / 本子漫画共用）：
+ * 收藏到里世界清单的对话框（番号视频 / 本子漫画 / 音乐共用）：
  * - 列出所有里世界（world=1）清单，点选即收藏
- * - 底部可快捷新建里世界清单
+ * - 底部可快捷新建里世界清单；[music] = true（收藏音乐）时新建还能直接建「音乐清单」
  * item 数据由调用方通过 collect lambda 落库
  */
 @Composable
 fun CollectDialog(
     onDismiss: () -> Unit,
-    collect: suspend (listId: Long) -> Boolean // 返回是否成功
+    collect: suspend (listId: Long) -> Boolean, // 返回是否成功
+    music: Boolean = false
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -97,7 +98,13 @@ fun CollectDialog(
                                     .padding(vertical = 12.dp, horizontal = 4.dp)
                             ) {
                                 Column(Modifier.weight(1f)) {
-                                    Text(meta.list.name, style = MaterialTheme.typography.bodyLarge)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(meta.list.name, style = MaterialTheme.typography.bodyLarge)
+                                        if (meta.list.musicList) {
+                                            Spacer(Modifier.width(6.dp))
+                                            MusicListTag()
+                                        }
+                                    }
                                     Text(
                                         "${meta.itemCount} 件",
                                         style = MaterialTheme.typography.labelSmall,
@@ -123,6 +130,8 @@ fun CollectDialog(
     // 新建里世界清单
     if (showCreate) {
         var name by remember { mutableStateOf("") }
+        // 收藏音乐时默认新建「音乐清单」（可切成普通清单），其它内容不需要这个类型
+        var asMusic by remember { mutableStateOf(music) }
         AlertDialog(
             onDismissRequest = { showCreate = false },
             title = { Text("新建里世界清单") },
@@ -134,8 +143,30 @@ fun CollectDialog(
                         placeholder = { Text("清单名称") },
                         singleLine = true
                     )
+                    if (music) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "清单类型",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(
+                                selected = asMusic,
+                                onClick = { asMusic = true },
+                                label = { Text("音乐清单") }
+                            )
+                            FilterChip(
+                                selected = !asMusic,
+                                onClick = { asMusic = false },
+                                label = { Text("普通清单") }
+                            )
+                        }
+                    }
                     Text(
-                        "用于收藏番号视频 / 本子",
+                        if (music && asMusic) "音乐清单：专放歌曲，固定列表布局、无子清单"
+                        else "用于收藏番号视频 / 本子 / 漫画",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline,
                         modifier = Modifier.padding(top = 6.dp)
@@ -147,7 +178,7 @@ fun CollectDialog(
                     enabled = name.isNotBlank(),
                     onClick = {
                         scope.launch {
-                            val id = Repo.createList(name, world = 1)
+                            val id = Repo.createList(name, world = 1, musicList = music && asMusic)
                             showCreate = false
                             if (id > 0) doCollect(id)
                         }

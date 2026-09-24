@@ -178,14 +178,31 @@ object SettingsStore {
     // ---------- 哔咔漫画 ----------
 
     private const val KEY_BIKA_TOKEN = "bika_token"
+    private const val KEY_BIKA_ACCOUNT = "bika_account"
+    private const val KEY_BIKA_PASSWORD = "bika_password"
 
     /** 哔咔漫画登录 token（JWT，为空 = 未登录） */
     var bikaToken: String
         get() = sp.getString(KEY_BIKA_TOKEN, "").orEmpty()
         set(v) = sp.edit().putString(KEY_BIKA_TOKEN, v).apply()
 
+    /** 哔咔账号（用户名/邮箱，用于 token 过期后静默重登） */
+    var bikaAccount: String
+        get() = sp.getString(KEY_BIKA_ACCOUNT, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_BIKA_ACCOUNT, v).apply()
+
+    /** 哔咔密码（明文存本机，仅供 token 过期后自动重登） */
+    var bikaPassword: String
+        get() = sp.getString(KEY_BIKA_PASSWORD, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_BIKA_PASSWORD, v).apply()
+
     fun clearBikaToken() {
         sp.edit().remove(KEY_BIKA_TOKEN).apply()
+    }
+
+    /** 清除哔咔账号密码（登出时用） */
+    fun clearBikaCredentials() {
+        sp.edit().remove(KEY_BIKA_ACCOUNT).remove(KEY_BIKA_PASSWORD).apply()
     }
 
     // ---------- 无忧游戏库（www.wygamer.com） ----------

@@ -52,6 +52,7 @@ import com.shangyin.app.data.Repo
 import com.shangyin.app.data.buildExportJson
 import com.shangyin.app.data.parseExportJson
 import com.shangyin.app.data.sync.CloudSyncClient
+import com.shangyin.app.ui.common.PasswordField
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -370,11 +371,10 @@ private fun ConfigForm(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
-            OutlinedTextField(
+            PasswordField(
                 value = pass,
                 onValueChange = { pass = it },
-                label = { Text("应用密码") },
-                singleLine = true,
+                label = "应用密码",
                 modifier = Modifier.fillMaxWidth()
             )
 

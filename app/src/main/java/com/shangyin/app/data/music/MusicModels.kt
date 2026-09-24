@@ -1,14 +1,20 @@
 package com.shangyin.app.data.music
 
 /**
- * 音乐来源：只有 [S33VE]（闪闪音乐网 https://www.33ve.com）。
- * 搜索、播放直链、歌词、封面全都免登录免验证，且没有每日限额（详见 [Site33]）。
+ * 音乐来源。搜索页可以按来源切换（chips），每个来源的歌曲 key 里带自己的 key，
+ * 所以同名歌曲在不同来源下是两条收藏记录。
+ *
+ * - [S33VE] 闪闪音乐网（https://www.33ve.com）：搜索、播放直链、歌词、封面全都免登录免验证、无限频（详见 [Site33]）。
+ * - [JOOX] / [NETEASE] 走聚合接口 gdstudio（详见 [GdStudio]）。实测 JOOX 只有搜索/歌词/封面可用，
+ *   直链接口返回空，因此播放时由 [MusicRepo.resolvePlay] 回退到 33ve 找同名歌曲；网易云搜索+直链都可用。
  *
  * 历史：曾用过 24bit（www.24bit.net）与洛雪音源脚本，因限额/稳定性问题已按用户要求全部移除，
  * 旧收藏里的 `bit24|…` 条目因此不再能播放（用户已确认接受）。
  */
 enum class MusicPlatform(val key: String, val label: String) {
-    S33VE("33ve", "音乐");
+    S33VE("33ve", "音乐"),
+    JOOX("joox", "JOOX"),
+    NETEASE("netease", "网易云");
 
     companion object {
         fun of(key: String): MusicPlatform? = entries.firstOrNull { it.key == key }
@@ -18,7 +24,7 @@ enum class MusicPlatform(val key: String, val label: String) {
 /**
  * 一首歌（搜索结果 / 清单里收藏的歌都归一化成它）。
  *
- * [raw] 是采集时留下的原始字段（24bit 目前存 id/name/player/album），
+ * [raw] 是采集时留下的原始字段（33ve 存 id/name/singer；gdstudio 来源存 id/name/singer），
  * 供后续重新解析直链时使用；收藏进清单时它会一起写进 info 字段。
  */
 data class MusicSong(

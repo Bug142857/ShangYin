@@ -6,11 +6,11 @@ import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -86,8 +88,8 @@ import kotlinx.coroutines.launch
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 数据来源：音乐来源（闪闪音乐网 https://www.33ve.com），搜索/歌词/封面都由内置接口提供；
- * 播放直链由 [com.shangyin.app.data.music.Site33] 在播放时现取（直链带时效签名）。
+ * 多音源：顶部 chips 可切换来源（音乐 33ve / JOOX / 网易云），每个来源的搜索/歌词/封面都由各自接口提供；
+ * 播放直链在播放时现取（直链带时效签名），分派逻辑见 [com.shangyin.app.data.music.MusicRepo.resolvePlay]。
  */
 
 /** 翻页步长：接口每页返回 30 条，用来判断"是否还有下一页" */
@@ -194,12 +196,13 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
                 )
                 Spacer(Modifier.width(8.dp))
                 // 进度条与外层 clickable 行是同级节点，手势不会被抢走；16dp 高只做触摸区，视觉仍是 2dp 细条
+                // ⚠️ 必须 CenterStart 对齐：填充条用 fillMaxWidth(fraction) 取宽度，若居中对齐会从中线向两侧撑开（进度条看着是错的）
                 Box(
                     Modifier
                         .weight(1f)
                         .height(16.dp)
                         .then(dragModifier),
-                    contentAlignment = Alignment.Center
+                    contentAlignment = Alignment.CenterStart
                 ) {
                     Box(
                         Modifier
@@ -277,6 +280,8 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
 private class SearchTabState {
     var input by mutableStateOf("")
     var keyword by mutableStateOf("")
+    /** 当前搜索来源（chips 可切换：音乐 33ve / JOOX / 网易云） */
+    var platform by mutableStateOf(MusicPlatform.S33VE)
     var results by mutableStateOf<List<MusicSong>>(emptyList())
     var page by mutableStateOf(1)
     var loading by mutableStateOf(false)
@@ -303,8 +308,6 @@ private fun SearchTab(st: SearchTabState) {
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
     var collectSong by remember { mutableStateOf<MusicSong?>(null) }
-    // 长按搜索结果弹出的小菜单（收藏到清单 / 下载）
-    var menuSong by remember { mutableStateOf<MusicSong?>(null) }
     // 下载状态：downloadingKey 为正在下载的歌（非空即视为下载中，天然防重复点击）
     var downloadingKey by remember { mutableStateOf<String?>(null) }
     var downloadPercent by remember { mutableIntStateOf(0) }
@@ -340,10 +343,11 @@ private fun SearchTab(st: SearchTabState) {
             st.loadingMore = true
         }
         st.error = null
+        val platform = st.platform
         scope.launch {
-            runCatching { MusicRepo.search(kw, page) }
+            runCatching { MusicRepo.search(kw, page, platform) }
                 .onSuccess { list ->
-                    if (kw != st.keyword) return@onSuccess // 关键词已变，丢弃旧响应
+                    if (kw != st.keyword || platform != st.platform) return@onSuccess // 关键词/来源已变，丢弃旧响应
                     val oldSize = st.results.size
                     st.results = if (page == 1) list
                     else st.results + list.filterNot { s -> st.results.any { it.key == s.key } }
@@ -355,7 +359,7 @@ private fun SearchTab(st: SearchTabState) {
                     if (page == 1 && st.results.isNotEmpty()) listState.scrollToItem(0)
                 }
                 .onFailure { e ->
-                    if (kw != st.keyword) return@onFailure
+                    if (kw != st.keyword || platform != st.platform) return@onFailure
                     val msg = e.message ?: "搜索失败"
                     // 接口把"没有数据"当成异常抛（"接口返回空"）：首页 = 没结果，翻页 = 没有更多
                     if (msg.contains("接口返回空")) {
@@ -378,6 +382,17 @@ private fun SearchTab(st: SearchTabState) {
             st.page = 1
             load(1)
         }
+    }
+
+    /** 切换搜索来源：清空旧结果并按当前关键词重搜（关键词为空就只记下来，不动列表） */
+    fun switchPlatform(next: MusicPlatform) {
+        if (next == st.platform) return
+        st.platform = next
+        st.page = 1
+        st.results = emptyList()
+        st.endReached = false
+        st.error = null
+        if (st.keyword.isNotBlank()) load(1)
     }
 
     // 滑到底自动加载下一页
@@ -408,6 +423,24 @@ private fun SearchTab(st: SearchTabState) {
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         )
 
+        // 来源切换：同一关键词可在多个音源间换着搜（结果互补，某个来源搜不到就换一个）
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 2.dp)
+        ) {
+            MusicPlatform.entries.forEach { p ->
+                FilterChip(
+                    selected = st.platform == p,
+                    onClick = { switchPlatform(p) },
+                    label = { Text(p.label) },
+                    modifier = Modifier.padding(end = 8.dp)
+                )
+            }
+        }
+
         // 列表区占满剩余高度，底部留给下载进度条
         Box(Modifier.weight(1f)) {
             when {
@@ -417,8 +450,8 @@ private fun SearchTab(st: SearchTabState) {
                     MusicErrorBox(st.error!!, onRetry = { load(1) })
 
                 st.results.isEmpty() ->
-                    if (st.searched) EmptyView("没有找到相关歌曲，换个关键词试试")
-                    else EmptyView("输入关键词搜索，长按结果可收藏或下载")
+                    if (st.searched) EmptyView("没有找到相关歌曲，换个关键词或换个来源试试")
+                    else EmptyView("输入关键词搜索，点右侧按钮可下载或收藏")
 
                 else -> LazyColumn(
                     state = listState,
@@ -428,9 +461,18 @@ private fun SearchTab(st: SearchTabState) {
                         MusicSongRow(
                             song = song,
                             onClick = { play(st.results, index) },
-                            // 长按改为弹菜单（收藏到清单 / 下载）
-                            onLongClick = { menuSong = song },
+                            // 下载按钮排在收藏按钮前面
                             trailing = {
+                                IconButton(
+                                    onClick = { startDownload(song) },
+                                    enabled = downloadingKey == null
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Download,
+                                        contentDescription = "下载",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                                 IconButton(onClick = {
                                     if (song.key in savedKeys) {
                                         Toast.makeText(context, "已在清单中", Toast.LENGTH_SHORT).show()
@@ -463,30 +505,10 @@ private fun SearchTab(st: SearchTabState) {
         collectSong?.let { song ->
             CollectDialog(
                 onDismiss = { collectSong = null },
-                collect = { listId -> MusicRepo.collect(song, listId) }
+                collect = { listId -> MusicRepo.collect(song, listId) },
+                music = true
             )
         }
-    }
-
-    // 长按搜索结果弹出的小菜单：收藏到清单 / 下载
-    menuSong?.let { song ->
-        AlertDialog(
-            onDismissRequest = { menuSong = null },
-            title = { Text(song.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-            text = {
-                Column {
-                    TextButton(onClick = {
-                        menuSong = null
-                        collectSong = song
-                    }) { Text("收藏到清单") }
-                    TextButton(onClick = {
-                        menuSong = null
-                        startDownload(song)
-                    }) { Text("下载") }
-                }
-            },
-            confirmButton = { TextButton(onClick = { menuSong = null }) { Text("取消") } }
-        )
     }
 
     // 下载失败：展示原因原文，不静默
@@ -551,22 +573,20 @@ internal fun rememberCollectedKeys(): Set<String> {
 }
 
 /**
- * 歌曲行：封面 + 歌名 + 歌手·专辑；点即播，长按收藏。
- * [trailing] 放行尾按钮（收藏图标等）。
+ * 歌曲行：封面 + 歌名 + 歌手·专辑；点即播。
+ * [trailing] 放行尾按钮（下载 / 收藏图标等）。
  */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun MusicSongRow(
     song: MusicSong,
     onClick: () -> Unit,
-    onLongClick: (() -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         CoverImage(

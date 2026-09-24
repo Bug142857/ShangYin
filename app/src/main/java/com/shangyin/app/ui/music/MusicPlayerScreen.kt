@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -66,13 +65,12 @@ import com.shangyin.app.data.music.MusicDownloader
 import com.shangyin.app.data.music.MusicLyric
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.ui.common.CollectDialog
-import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 
 /**
- * 完整播放页：大封面 / 歌词（点击封面切换）、可拖动进度条、播放控制、循环/随机/收藏。
+ * 完整播放页：歌词（常驻，不显示封面）、可拖动进度条、播放控制、循环/随机/收藏。
  * 离开页面不停播（播放器在 [MusicPlaybackService] 里，页面只是遥控器）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -83,7 +81,6 @@ fun MusicPlayerScreen(nav: NavHostController) {
     val state by MusicPlayback.state.collectAsStateWithLifecycle()
     val song = state.song
 
-    var showLyric by remember { mutableStateOf(false) }
     var showCollect by remember { mutableStateOf(false) }
     var collected by remember { mutableStateOf(false) }
     var lyric by remember { mutableStateOf(MusicLyric()) }
@@ -217,71 +214,37 @@ fun MusicPlayerScreen(nav: NavHostController) {
                     .weight(1f)
                     .fillMaxWidth()
             ) {
-                if (showLyric) {
-                    when {
-                        lyricLoading -> MusicLoadingBox()
+                when {
+                    lyricLoading -> MusicLoadingBox()
 
-                        lines.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    lines.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "暂无歌词",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    else -> LazyColumn(
+                        state = lyricState,
+                        contentPadding = PaddingValues(vertical = 24.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        itemsIndexed(lines, key = { i, line -> "lyric_${line.timeMs}_$i" }) { index, line ->
                             Text(
-                                "暂无歌词",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                line.text,
+                                style = if (index == currentLine) MaterialTheme.typography.titleMedium
+                                else MaterialTheme.typography.bodyMedium,
+                                color = if (index == currentLine) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { MusicPlayback.seekTo(line.timeMs) }
+                                    .padding(horizontal = 8.dp, vertical = 7.dp)
                             )
                         }
-
-                        else -> LazyColumn(
-                            state = lyricState,
-                            contentPadding = PaddingValues(vertical = 24.dp),
-                            modifier = Modifier.fillMaxSize()
-                        ) {
-                            itemsIndexed(lines, key = { i, line -> "lyric_${line.timeMs}_$i" }) { index, line ->
-                                Text(
-                                    line.text,
-                                    style = if (index == currentLine) MaterialTheme.typography.titleMedium
-                                    else MaterialTheme.typography.bodyMedium,
-                                    color = if (index == currentLine) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable { MusicPlayback.seekTo(line.timeMs) }
-                                        .padding(horizontal = 8.dp, vertical = 7.dp)
-                                )
-                            }
-                        }
                     }
-                } else {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(vertical = 4.dp),
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CoverImage(
-                            url = song.cover,
-                            modifier = Modifier
-                                .fillMaxWidth(0.8f)
-                                .aspectRatio(1f),
-                            corner = 16.dp,
-                            placeholderText = song.name,
-                            onClick = { showLyric = true }
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "点击封面看歌词",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
-
-                // 封面 / 歌词 切换
-                TextButton(
-                    onClick = { showLyric = !showLyric },
-                    modifier = Modifier.align(Alignment.TopEnd)
-                ) {
-                    Text(if (showLyric) "封面" else "歌词")
                 }
             }
 
@@ -424,7 +387,8 @@ fun MusicPlayerScreen(nav: NavHostController) {
                     collected = runCatching { MusicRepo.isCollected(song) }.getOrDefault(false)
                 }
             },
-            collect = { listId -> MusicRepo.collect(song, listId) }
+            collect = { listId -> MusicRepo.collect(song, listId) },
+            music = true
         )
     }
 }

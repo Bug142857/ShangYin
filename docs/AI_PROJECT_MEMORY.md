@@ -281,8 +281,36 @@
     `FLAG_ACTIVITY_SINGLE_TOP or FLAG_ACTIVITY_NEW_TASK` + extra 标记；App 存活时直接切前台保留 Compose 栈，
     被回收时由新增 `ui/NavRestore.kt`（独立 SP `nav_restore`：`last_route` / `from_media_notification`）在 AppNav 起来后 `safeNavigate` 跳回。
     ⚠️ `MainActivity.onNewIntent` 签名必须是 `Intent`（非 `Intent?`），否则编译报 "overrides nothing"。
+- **v0.212（用户一次提 9 条：迷你进度条、播放页去封面、JOOX 音源、搜索行按钮、哔咔自动重登+记住账密、音乐清单类型、下载目录进公共 Download）**：
+  - **迷你播放条进度条修好**：填充条用 `fillMaxWidth(fraction)`，而外层 Box 是 `contentAlignment = Center` → 进度从中线向两侧撑开（看着就是错的）。
+    改成 `Alignment.CenterStart`。教训：**`fillMaxWidth(fraction)` 的进度条绝不能放在居中对齐的 Box 里**。
+  - **播放页去掉封面**：不再有「封面/歌词」切换，进页直接显示歌词（无歌词显示「暂无歌词」）。
+  - **多音源（新增 gdstudio）**：`MusicPlatform` 加 `JOOX("joox")` / `NETEASE("netease")`，新文件 `data/music/GdStudio.kt` 封装
+    `https://music-api.gdstudio.xyz/api.php`（cl-music 的后端）：`types=search|url|lyric|pic`；搜索页顶部 FilterChip 切来源。
+    ⚠️ **实测 JOOX 直链拿不到**（`types=url` 无论 br=320/999/128 都返回 `{"url":"","br":-1,"size":0}`，歌词/封面/搜索都正常）；
+    网易云搜索+直链都可用（320k mp3 实测可下）。因此 `MusicRepo.resolvePlay` 里 JOOX 先试直链，拿不到就按「歌名 歌手」
+    回 33ve 找同名歌播放（同名 + 首歌手一致优先，找不到才报错）。
+  - **音乐搜索行**：去掉长按菜单，改为行尾两个按钮「**下载（前）/ 收藏（后）**」并排。
+  - **哔咔登录不再弹「登录已失效」**：`BikaClient.withAuth` / `sessionOk` 遇到 401 时，用**本机记住的账密自动静默重登**并重试一次；
+    `SettingsStore` 新增 `bikaAccount` / `bikaPassword`（登录成功即记住、登出时 `clearBikaCredentials()` 清掉）。
+    ⚠️ 密码**明文**存 SharedPreferences（用户明确要"点一下就能再登录"的方案，与 WebDAV 应用密码同级）。
+  - **密码框统一支持明文切换**：新增 `ui/common/PasswordField.kt`（眼睛图标切 `PasswordVisualTransformation` ↔ `None`），
+    哔咔登录框与坚果云 WebDAV「应用密码」都换用它。豆瓣 / 无忧 / Z-Library 是 WebView 登录，App 侧没有密码输入框，
+    「记住」由已持久化的 Cookie 承担。
+  - **「音乐清单」类型**：`lists` 表加 `musicList`（Room version **6→7**，`MIGRATION_6_7`；**3 处手写列名的 `ListWithMeta` 查询必须同步加列**）。
+    新建清单时可选「音乐清单」（名称仍自定义，固定归里世界），清单管理 / 收藏对话框 / 首页清单行都打「音乐」小标签（`ui/common/MusicListTag.kt`）。
+    判定口径 = `list.musicList == true || 清单里含音乐条目`（**老音乐清单不用手改**，第一次打开就自动按音乐清单渲染）。
+  - **音乐清单移除三样**：切换为平铺（固定列表布局）、创建子清单、拖拽排序 —— 顺带**消除了 v0.211 遗留的「更新排序下拖拽错位」问题**。
+  - **漫画/本子下载目录搬进公共 Download**（用户要求"能点击进入查看"）：Android 10+ 走 `MediaStore.Downloads` 写
+    `Download/老郑分享/漫画/{source}/{id}/meta.json` + `{章节key}/0001.jpg…` 与 `Download/老郑分享/本子/{id}/…`；
+    8/9 仍写应用私有目录（旧私有数据继续可读可删，**不搬迁**）。四个目录现在统一在 `Download/老郑分享/{漫画,本子,音乐,书籍}/`。
+    ⚠️ `ComicDownloadStore.chapterPages` 语义变了：返回**可直接加载的 URL**（公共目录 `content://media/external/downloads/<id>`，
+    私有目录 `file://…`），调用方**不要再拼 `file://` 前缀**。
+    新增 `comicDirInfo()` / `bikaDirInfo()`（`DirInfo(path, isPublic, relative)`）给下载管理页的目录卡用。
+  - **顺手修掉一个老 bug**：导出/导入 JSON 一直漏写 `lists.world`（导入后清单全变表世界），现在 `world` / `musicList` 都写都读（旧备份缺字段走默认值）。
 - **真机未验证项**（下次可先问用户）：33ve 直链在实际网络/手机上能否出声、通知栏/锁屏控制、通知点击回原页的两种场景、
-  「更新」排序下拖拽错位、私有目录跳转提示。
+  私有目录跳转提示；v0.212 新增的：JOOX 歌自动回退 33ve 是否总能找到同名歌、漫画/本子存进公共 Download 后的离线阅读
+  （`content://` 图片能否正常显示 / 长按保存）、哔咔账密自动重登在真实 token 过期时是否无感。
 - **v0.202（用户装机反馈后的两处修复）**：
   ① **导入被误判"不是有效的音源脚本"**：`MusicSourceStore.import` 曾用关键字校验（要求文本含 `globalThis.lx` 或 `lx.`），
   而混淆过的音源（六音等）连这些字符串都是加密的 → 好脚本被拒。**已删掉关键字校验**，只拦明显不是脚本的内容（`<!doctype`/`<html`，

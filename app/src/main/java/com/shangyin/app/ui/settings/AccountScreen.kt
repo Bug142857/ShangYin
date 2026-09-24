@@ -49,10 +49,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.bika.BikaClient
+import com.shangyin.app.ui.common.PasswordField
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
@@ -333,6 +333,7 @@ fun AccountScreen(nav: NavHostController) {
                 TextButton(
                     onClick = {
                         SettingsStore.clearBikaToken()
+                        SettingsStore.clearBikaCredentials()
                         bikaLoginKey++
                         showBikaLogout = false
                         Toast.makeText(context, "已退出哔咔登录", Toast.LENGTH_SHORT).show()
@@ -421,8 +422,9 @@ private fun SettingCard(
 @Composable
 fun BikaLoginDialog(onDismiss: () -> Unit, onLoggedIn: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    // 预填上次保存的账密：打开即可直接点「登录」，也便于 token 过期后静默重登
+    var email by remember { mutableStateOf(SettingsStore.bikaAccount) }
+    var password by remember { mutableStateOf(SettingsStore.bikaPassword) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -434,6 +436,8 @@ fun BikaLoginDialog(onDismiss: () -> Unit, onLoggedIn: () -> Unit) {
             runCatching { BikaClient.signIn(email.trim(), password) }
                 .onSuccess {
                     SettingsStore.bikaToken = it
+                    SettingsStore.bikaAccount = email.trim()
+                    SettingsStore.bikaPassword = password
                     onLoggedIn()
                 }
                 .onFailure { error = it.message ?: "登录失败" }
@@ -462,14 +466,11 @@ fun BikaLoginDialog(onDismiss: () -> Unit, onLoggedIn: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                PasswordField(
                     value = password,
                     onValueChange = { password = it },
-                    placeholder = { Text("密码") },
-                    singleLine = true,
+                    placeholder = "密码",
                     enabled = !busy,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                     keyboardActions = KeyboardActions(onDone = { doLogin() }),
                     modifier = Modifier.fillMaxWidth()
                 )
