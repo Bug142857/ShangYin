@@ -389,6 +389,14 @@
   实测：pic 接口 <100ms；pic_id 版网易云封面 200/14KB、JOOX 200/36KB（image.joox.com 与 p2.music.126.net 均无防盗链）。
   ⚠️ 直链接口（types=url）仍然用歌曲 id，与 pic 接口参数不同，别混淆。旧收藏条目（cover 已存空）不会自动补封面。
 
+- **gdstudio 音源全量探测（2026-09-24，用户要求测可用源）**：
+  11 个候选 source 逐一实测（search+url+试流）：**只有 netease 和 joox 还活着，其余 9 个全部 400**——
+  tencent(QQ)/kugou/kuwo/migu/tidal/ytmusic/qobuz/deezer/spotify 接口直接拒绝（两种编码方式验证过，非参数问题）。
+  netease：搜索 530ms、直链 297ms、试流 206 audio/mpeg 4.3MB/s——快、能播、能下，健康。
+  joox：搜索正常 ~600ms，但**直链 0/30 全空**（v0.213 时还是 3/8 时有时无，已恶化到基本无直链）；
+  App 里 JOOX 靠 mvmp3/33ve 兜底才能播。结论：**没有新源可加**（唯一健康的 netease 已在 App 内），
+  App 音乐能力 = mvmp3/33ve（主力）+ gdstudio netease + gdstudio joox（仅搜索/歌词，播放走兜底）。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
