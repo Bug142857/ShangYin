@@ -242,6 +242,15 @@ object SettingsStore {
         sp.edit().remove(KEY_ZLIB_COOKIE).apply()
     }
 
+    // ---------- 吃瓜（51爆料） ----------
+
+    private const val KEY_MELON_BASE = "melon_base"
+
+    /** 吃瓜站点当前可用镜像（自动发现+探活后持久化；失效后由客户端重新选线覆盖） */
+    var melonBase: String
+        get() = sp.getString(KEY_MELON_BASE, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_MELON_BASE, v.trim().trimEnd('/')).apply()
+
     // ---------- 电视（自定义 M3U 源） ----------
 
     private const val KEY_LIVE_SOURCES = "live_sources_json"

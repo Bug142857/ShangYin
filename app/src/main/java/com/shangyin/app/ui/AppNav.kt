@@ -221,8 +221,17 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             // 音乐 = 24bit 无损（里世界第七入口；搜索/直链/歌词均由内置接口提供）
             composable("musicHome") { com.shangyin.app.ui.music.MusicHomeScreen(nav) }
             composable("musicPlayer") { com.shangyin.app.ui.music.MusicPlayerScreen(nav) }
-            // 吃瓜 = 51爆料（里世界第八入口；站点 JS 动态生成线路，必须 WebView 浏览）
-            composable("melonHome") { com.shangyin.app.ui.melon.MelonScreen(nav) }
+            // 吃瓜 = 51爆料（里世界第八入口；原生解析镜像站，广告天然屏蔽，线路自动发现/切换）
+            composable("melonHome") { com.shangyin.app.ui.melon.MelonHomeScreen(nav) }
+            composable(
+                route = "melonDetail/{id}",
+                arguments = listOf(navArgument("id") { type = NavType.StringType })
+            ) { entry ->
+                com.shangyin.app.ui.melon.MelonDetailScreen(
+                    nav,
+                    entry.arguments?.getString("id").orEmpty()
+                )
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })

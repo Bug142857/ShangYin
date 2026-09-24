@@ -421,6 +421,30 @@
   图书/电视/音乐/吃瓜）。README 界面布局/功能/免责声明同步更新（免责声明注明仅为第三方站点的内嵌网页浏览）。
   版本：0.218/1218。
 
+- **v0.219（吃瓜模块 WebView → 原生化 + 全量广告屏蔽，2026-09-24）**：
+  用户对 v0.218  WebView 版吃瓜提两点：①广告太多 ②要像其它模块一样做成原生页面。**实测重做**：
+  ① **站点线路实变**：着陆页线路已轮换为 `{词}.upsqlhlj.cc`（注意拼写：lhlj 而非 hlj）+ CloudFront。
+  本机 curl 直连新镜像 HTTPS **可以通**（CloudFront 香港节点，旧结论「本机必挂」已过时），分析直接抓原始 HTML。
+  ② **站点真实结构（Typecho + Mirages 主题）**：列表 `article > .post-card[id^=post-card-]`（首页 `/`、
+  翻页 `/page/N/`、分类 `/category/{slug}/N/`、搜索 `/search/{kw}/N/`，共 1273 页）；**广告条目是
+  `article.ad-item` / `#ad-card-*`**；卡片封面在卡内脚本 `loadBannerDirect('https://…jpeg',…)` 里
+  （img.src 是占位图）；详情 `h1.post-title` + `ul.post-meta` + `[itemprop=articleBody]`；
+  正文图片真实地址在 img 的 `data-xkrkllgl` 等混淆属性（任意属性值匹配图片扩展名的绝对 URL 即可）；
+  视频 = `div.dplayer[data-config]` JSON 里 `video.url`（HLS m3u8，**auth_key 约 4 小时时效，必须现取现用**）；
+  广告块：`.txt-apps` 按钮墙、开头 blockquote（最新地址/APP 推广）、`table` 分类导航、`.horizontal-banner`；
+  翻页下一页 = `.page-navigator li.next a[href]`（跟随即可，免疫各版块翻页格式差异）。
+  反差吃瓜真实分类是 `/category/fccg/`（`/51dh.html` 是导航页非列表，不能用）。
+  ③ **实现**：新建 `data/melon/MelonClient.kt`（线路管理：着陆页 `Base64.decode('…')` 解码提取镜像候选 +
+  硬编码兜底 → 逐个探活（首页须含 `post-card`）→ 选中持久化 `SettingsStore.melonBase`；请求失败/403/5xx
+  作废重选线再试一次，404 直接抛）+ 重写 `ui/melon/MelonScreen.kt`（`MelonHomeScreen`：搜索框 + 12 分类
+  chips + 封面卡片列表 + 触底自动翻页（snapshotFlow 监听倒数第 4 项）+「上次看到」续看条；
+  `MelonDetailScreen`：图文块渲染 + 图片全屏 `PhotoViewerDialog`（长按保存）+ 视频进内置播放器
+  （PlayerSession 单组多集，itemId=帖子 id → 断点续播免费获得，Referer=当前镜像）+ 相关推荐跳转）。
+  `AppNav` 路由 `melonHome` 改指新页 + 新增 `melonDetail/{id}`。**广告全部不进 App**（原生只挑真实条目解析）。
+  ④ 教训：**别信上一轮的"站点必须 WebView"结论**——着陆页混淆 ≠ 镜像站不可解析，镜像站本身是普通
+  服务端渲染 HTML；先抓镜像 HTML 再下结论。
+  版本：0.219/1219。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
