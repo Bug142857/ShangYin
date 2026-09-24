@@ -88,7 +88,7 @@ import kotlinx.coroutines.launch
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
  *
- * 多音源：顶部 chips 可切换来源（音乐 33ve / mvmp3），每个来源的搜索/歌词/封面都由各自接口提供；
+ * 多音源：顶部 chips 可切换来源（mvmp3 / JOOX / 网易云），每个来源的搜索/歌词/封面都由各自接口提供；
  * 播放直链在播放时现取（直链带时效签名），分派逻辑见 [com.shangyin.app.data.music.MusicRepo.resolvePlay]。
  */
 
@@ -280,8 +280,8 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
 private class SearchTabState {
     var input by mutableStateOf("")
     var keyword by mutableStateOf("")
-    /** 当前搜索来源（chips 可切换：音乐 33ve / mvmp3） */
-    var platform by mutableStateOf(MusicPlatform.S33VE)
+    /** 当前搜索来源（chips 可切换：mvmp3 / JOOX / 网易云） */
+    var platform by mutableStateOf(MusicPlatform.MVMMP3)
     var results by mutableStateOf<List<MusicSong>>(emptyList())
     var page by mutableStateOf(1)
     var loading by mutableStateOf(false)

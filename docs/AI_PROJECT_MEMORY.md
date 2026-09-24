@@ -369,6 +369,16 @@
   清单与条目是 list_items 关联（一条目可挂多清单）；删清单/移出只动关联。⚠️ 但 `removeItemFromList`/`deleteListTree`
   之后有 **pruneOrphans**：不再属于任何清单的条目会被自动清掉——所以"独占条目"实际上会随最后一个清单消失。
 
+- **v0.215（修正 v0.214 对需求②的误解，2026-09-24）**：
+  ⚠️ 用户澄清：「音乐 JOOX 网易云 中的音乐改成 mvmp3」**只是改「音乐」chip 的显示名称**，不是下线 JOOX/网易云！
+  v0.214 把 JOOX/网易云从 chips 移除 + 删 GdStudio.kt 属于过度实现，本轮全部纠正：
+  ① chips 恢复三个：**mvmp3 / JOOX / 网易云**（`MVMMP3` 是默认选中项）；`S33VE` 改 `inSearch=false`（与 mvmp3 同系统内容重复，不进 chips，保留兜底）。
+  ② **GdStudio.kt 从 git 历史（cf05ac8）恢复**：JOOX/网易云搜索/歌词/直链照旧走 gdstudio（`GdStudio.search/lyric/resolveUrl`）。
+  ③ `MusicRepo.search/lyric` 恢复 JOOX/NETEASE 分派；`resolvePlay` 的 JOOX/NETEASE 分支 = 先 `GdStudio.resolveUrl`（原源直链），
+  失败再 `resolveViaSite(useMvmp3=true)` → `(false)`（v0.213 只兜 33ve，现在 mvmp3 优先，比旧版更稳）。
+  ④ mvmp3 音源（MvMp3.kt）与「下载确认弹窗/自动收藏/歌手排序/目录打开修复」等 v0.214 其余改动全部保留不动。
+  教训：**「改成 X」类需求先分清是改显示名还是换实现**，拿不准要问；本轮用户明确说「仅是想显示他的名称而已」。
+
 ## 构建/发版备忘（2026-09-23 复核）
 - 构建必须显式设 `JAVA_HOME=D:\Java\jdk-21.0.12.1+1`（PATH 里的 Android Studio JBR 是 JDK 25，Gradle 8.10.2 会直接失败）。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK

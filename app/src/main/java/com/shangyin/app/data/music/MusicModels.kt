@@ -4,21 +4,23 @@ package com.shangyin.app.data.music
  * 音乐来源。搜索页可以按来源切换（chips），每个来源的歌曲 key 里带自己的 key，
  * 所以同名歌曲在不同来源下是两条收藏记录。
  *
- * - [S33VE] 闪闪音乐网（https://www.33ve.com）：搜索、播放直链、歌词、封面全都免登录免验证、无限频（详见 [Site33]）。
  * - [MVMMP3] 无名音乐网（http://www.mvmp3.com）：与 33ve 同一套建站系统，接口形态一致（详见 [MvMp3]），
- *   搜索结果自带封面，直链走酷我 CDN，实测稳定可用。
- * - [JOOX] / [NETEASE]：历史来源，原先走 gdstudio 聚合接口，该接口已按用户要求整体下线（被 mvmp3 替代）。
- *   枚举值仅为兼容旧收藏条目（key 解析不崩）：这两个来源**不再出现在搜索 chips**，
- *   旧条目点播时由 [MusicRepo.resolvePlay] 自动按"歌名 + 歌手"去 mvmp3 / 33ve 找同名歌播放。
+ *   搜索结果自带封面，直链走酷我 CDN，实测稳定可用。搜索页 chips 里显示为「mvmp3」
+ *   （2026-09-24 用户指定：原「音乐」名称改为「mvmp3」，仅改显示名）。
+ * - [S33VE] 闪闪音乐网（https://www.33ve.com）：接口同样免登录免验证（详见 [Site33]）。
+ *   与 mvmp3 内容几乎一致，为避免 chips 出现两个同义来源，**不再出现在搜索 chips**，
+ *   保留实现供直链兜底（[MusicRepo.resolveViaSite]）。
+ * - [JOOX] / [NETEASE]：gdstudio 聚合接口，直链时有时无（JOOX 内部已多轮重试）；
+ *   拿不到直链时由 [MusicRepo.resolvePlay] 自动按"歌名 + 歌手"去 mvmp3 / 33ve 找同名歌播放。
  *
  * 历史：曾用过 24bit（www.24bit.net）与洛雪音源脚本，因限额/稳定性问题已按用户要求全部移除，
  * 旧收藏里的 `bit24|…` 条目因此不再能播放（用户已确认接受）。
  */
 enum class MusicPlatform(val key: String, val label: String, val inSearch: Boolean = true) {
-    S33VE("33ve", "音乐"),
+    S33VE("33ve", "音乐", inSearch = false),
     MVMMP3("mvmp3", "mvmp3"),
-    JOOX("joox", "JOOX", inSearch = false),
-    NETEASE("netease", "网易云", inSearch = false);
+    JOOX("joox", "JOOX"),
+    NETEASE("netease", "网易云");
 
     companion object {
         fun of(key: String): MusicPlatform? = entries.firstOrNull { it.key == key }

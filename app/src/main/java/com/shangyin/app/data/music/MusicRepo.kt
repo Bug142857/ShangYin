@@ -33,24 +33,24 @@ object MusicRepo {
 
     /**
      * 搜索。搜索页可以按来源切换：
-     * - [MusicPlatform.S33VE] → 33ve（搜索页 HTML 里自带封面，不用额外抓）
-     * - [MusicPlatform.MVMMP3] → 无名音乐网（同样自带封面）
-     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] 已下线，不进搜索
+     * - [MusicPlatform.MVMMP3] → 无名音乐网（搜索页 HTML 里自带封面，不用额外抓）
+     * - [MusicPlatform.S33VE] → 33ve（与 mvmp3 同系统，不进 chips，仅兜底用）
+     * - [MusicPlatform.JOOX] / [MusicPlatform.NETEASE] → gdstudio 聚合接口
      */
     suspend fun search(
         keyword: String,
         page: Int = 1,
-        platform: MusicPlatform = MusicPlatform.S33VE
+        platform: MusicPlatform = MusicPlatform.MVMMP3
     ): List<MusicSong> = when (platform) {
         MusicPlatform.S33VE -> Site33.search(keyword, page)
         MusicPlatform.MVMMP3 -> MvMp3.search(keyword, page)
-        else -> throw MusicResolveException("该来源已下线，请换用其它来源搜索")
+        MusicPlatform.JOOX, MusicPlatform.NETEASE -> GdStudio.search(platform, keyword, page)
     }
 
     suspend fun lyric(song: MusicSong): MusicLyric = when (song.platform) {
         MusicPlatform.S33VE -> Site33.lyric(song)
         MusicPlatform.MVMMP3 -> MvMp3.lyric(song)
-        else -> MusicLyric()
+        MusicPlatform.JOOX, MusicPlatform.NETEASE -> GdStudio.lyric(song.platform, song.id)
     }
 
     /** 清空直链缓存（直链带时效签名，需要强制换新时用） */
@@ -82,18 +82,23 @@ object MusicRepo {
                 MusicPlayInfo(url, MvMp3.PLAY_HEADERS)
             }
 
-            // 历史来源（gdstudio 已下线，存的都是失效 ID）：直接按"歌名 + 歌手"去 mvmp3 / 33ve 找同名歌
-            MusicPlatform.JOOX, MusicPlatform.NETEASE ->
-                resolveViaSite(song, useMvmp3 = true) ?: resolveViaSite(song, useMvmp3 = false)
-                ?: throw MusicResolveException("原来源已下线，mvmp3 / 33ve 里也没找到同名的歌")
+            // JOOX / 网易云（gdstudio 聚合源）：先走原源直链（JOOX 直链时有时无，GdStudio 内部已多轮重试）；
+            // 仍然拿不到就按"歌名 + 歌手"去 mvmp3 / 33ve 找同名歌播放，尽量让用户点得响
+            MusicPlatform.JOOX, MusicPlatform.NETEASE -> {
+                val direct = runCatching { GdStudio.resolveUrl(song.platform, song.id) }.getOrNull()
+                direct?.let { MusicPlayInfo(it, GdStudio.PLAY_HEADERS) }
+                    ?: resolveViaSite(song, useMvmp3 = true)
+                    ?: resolveViaSite(song, useMvmp3 = false)
+                    ?: throw MusicResolveException("没有找到这首歌的可播放资源（mvmp3 / 33ve 里也没有同名的歌）")
+            }
         }
         urlCache[song.key] = info.url to System.currentTimeMillis()
         return info
     }
 
     /**
-     * 回退解析：拿"歌名 歌手"去 33ve 或 mvmp3 搜一次，取同名（或同名同歌手）的第一首解析直链。
-     * 用于已下线来源的旧收藏（JOOX / 网易云）；找不到返回 null，由调用方换下一个站点或报错。
+     * 回退解析：拿"歌名 歌手"去 mvmp3 或 33ve 搜一次，取同名（或同名同歌手）的第一首解析直链。
+     * 用于 JOOX / 网易云直链拿不到时兜底；找不到返回 null，由调用方换下一个站点或报错。
      */
     private suspend fun resolveViaSite(song: MusicSong, useMvmp3: Boolean): MusicPlayInfo? {
         val keyword = listOf(song.name, song.artists).filter { it.isNotBlank() }.joinToString(" ")
