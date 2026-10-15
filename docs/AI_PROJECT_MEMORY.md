@@ -454,6 +454,20 @@
   挂起 `fetch()` + 启动器 `load()`，刷新直接 await fetch 结束再收指示器。
   版本：0.220/1220。
 
+- **吃瓜图床轮换实测 + 拦截分支改模式匹配（2026-10-15，未发版）**：
+  code-review（v0.220...v0.221）发现 Referer 用 `SettingsStore.melonBase`（持久化镜像，可能失效）
+  与规格「当前镜像」语义有偏差，硬编码兜底字面量与 `FALLBACK_BASES` 首项重复。实测推翻部分前提：
+  ① **图床已轮换**：`pic.ndhixj.cn` → `pic.jtzatly.cn`（均为 `pic.{随机词}.cn` 模式），v0.221 的
+  `*.ndhixj.cn` 拦截分支空转成无害死代码（旧域名根路径仍 200 但不再用于图片）。
+  ② **当前图床无防盗链**：5 组合矩阵（无 Referer / 死域名 Referer / 镜像 Referer / 各种 UA / 裸请求）
+  全部 200 同字节数，本机直连也通 → `melonBase vs lastBase` 的语义偏差当前零影响。
+  ③ 修复（防患于未然）：App.kt 拦截分支改 `Regex("pic\\.[a-z]+\\.cn")` 模式匹配（覆盖未来轮换），
+  Referer 改用 `MelonClient.lastBase`（最近成功镜像），删掉重复字面量；分支保留为防御性（注释注明当前无防盗链）。
+  ④ **顺带发现**：`resolveBase()` 直接信任存盘 `melonBase` 不探测（MelonClient.kt:137-141），镜像失效时
+  首次页面请求会失败后才走换线——暂不动，出现实际故障再修。
+  教训：**按单一硬编码域名写的拦截分支追不上站点轮换，审计时先实测「前提还在不在」**（v0.221 修的
+  防盗链在实测时已不复存在）。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
@@ -479,6 +493,15 @@
   处理：提交时内联指定身份，不动全局配置（遵守「不更新 git config」纪律）：
   `git -c user.name=老郑 -c user.email=laozheng@users.noreply.github.com commit -F <msg文件>`；
   直连 github.com:443 会超时，push 加 `-c http.proxy=http://127.0.0.1:7899`（同样内联、不动配置）。
+- ⚠️ **新机构建环境（2026-10-15 实测）**：
+  ① 旧机路径全部失效：`JAVA_HOME=D:\Java\jdk-21.0.12.1+1` 在新机不存在，改用 REA 装的同版本
+  `C:\Users\62496\.local\share\rea-tools\jdk-21.0.12.1+1`（Temurin 21.0.12.1，gradlew 可用）。
+  ② **新机 Android SDK 已装（2026-10-15）**：cmdline-tools 12.0 在
+  `C:\Users\62496\.local\share\android-sdk\cmdline-tools\latest`，已装 platform-35 / build-tools;35.0.0 /
+  platform-tools（license 全接受）；`local.properties` 已写（sdk.dir 指向上目录，gitignore 不入库）。
+  sdkmanager 走代理参数：`--proxy=http --proxy_host=127.0.0.1 --proxy_port=7899`。
+  ③ 新机 Gradle 缓存已预热：`gradlew :app:compileReleaseKotlin` BUILD SUCCESSFUL（6m12s），
+  编译需带代理参数 `"-Dhttps.proxyHost=127.0.0.1" "-Dhttps.proxyPort=7899"`（http 同理）+ JAVA_HOME 指向 REA JDK。
 - APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\zsy\Desktop\老郑分享-X.YYY.apk`。
   ⚠️ 桌面写入需要沙箱白名单：`C:\Users\zsy\.trae-cn\permission\global.json` 的
   `resourceAuthorization.filesystem.readWrite` —— 2026-09-23 已把 `C:\\Users\\zsy\\Desktop` 整目录加入，

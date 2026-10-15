@@ -160,12 +160,15 @@ class App : Application(), ImageLoaderFactory {
                                 .build()
                         } else req
                     } ?: req
-                } else if (host == "pic.ndhixj.cn" || host.endsWith(".ndhixj.cn")) {
-                    // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）
+                } else if (host.matches(Regex("pic\\.[a-z]+\\.cn"))) {
+                    // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）。
+                    // 图床域名会轮换（pic.ndhixj.cn → pic.jtzatly.cn，均为 pic.{词}.cn 模式），按模式匹配而非硬编码；
+                    // 2026-10-15 实测当前图床暂无防盗链，此分支为防御性保留。
+                    // Referer 用 lastBase（最近一次成功镜像）而非 melonBase（持久化镜像，可能已失效）。
                     req.newBuilder()
                         .header(
                             "Referer",
-                            SettingsStore.melonBase.ifBlank { "https://branch.upsqllhj.cc" }.trimEnd('/') + "/"
+                            com.shangyin.app.data.melon.MelonClient.lastBase.trimEnd('/') + "/"
                         )
                         .header("User-Agent", com.shangyin.app.data.melon.MelonClient.UA)
                         .build()
