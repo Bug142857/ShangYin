@@ -471,6 +471,10 @@
   第二次编译纯属浪费。
 - 发版：`gradlew :app:assembleRelease` → `git push origin main` → `git tag vX.Y` + push tag → 用环境变量 `GH_TOKEN` 调 GitHub API 建 Release 并上传 APK
   （本机**没有 gh CLI**，asset 名沿用拼音 `LaoZhengFenXiang-X.YYY.apk`）。
+- ⚠️ **Release 标题/正文含中文必须走 UTF-8 JSON 文件**（2026-10-15 教训）：PowerShell 命令行直接传中文参数
+  会编码丢字，GitHub 上全变 `?`——v0.218～v0.221 四个 release 曾全部乱码（API 回读发现），后经
+  PATCH `name`+`body`（JSON 写盘 `UTF8Encoding($false)` 无 BOM，`-d "@file"` 上传）逐一修复。
+  token 用 `git credential fill` 提取（注意 Trim 掉行尾 `\r`，否则 400）。
 - APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\zsy\Desktop\老郑分享-X.YYY.apk`。
   ⚠️ 桌面写入需要沙箱白名单：`C:\Users\zsy\.trae-cn\permission\global.json` 的
   `resourceAuthorization.filesystem.readWrite` —— 2026-09-23 已把 `C:\\Users\\zsy\\Desktop` 整目录加入，
