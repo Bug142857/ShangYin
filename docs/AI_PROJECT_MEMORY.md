@@ -475,6 +475,10 @@
   会编码丢字，GitHub 上全变 `?`——v0.218～v0.221 四个 release 曾全部乱码（API 回读发现），后经
   PATCH `name`+`body`（JSON 写盘 `UTF8Encoding($false)` 无 BOM，`-d "@file"` 上传）逐一修复。
   token 用 `git credential fill` 提取（注意 Trim 掉行尾 `\r`，否则 400）。
+- ⚠️ **新机 git 全局身份缺失**（2026-10-15）：`git commit` 报 author identity unknown——旧机全局配置未迁移。
+  处理：提交时内联指定身份，不动全局配置（遵守「不更新 git config」纪律）：
+  `git -c user.name=老郑 -c user.email=laozheng@users.noreply.github.com commit -F <msg文件>`；
+  直连 github.com:443 会超时，push 加 `-c http.proxy=http://127.0.0.1:7899`（同样内联、不动配置）。
 - APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\zsy\Desktop\老郑分享-X.YYY.apk`。
   ⚠️ 桌面写入需要沙箱白名单：`C:\Users\zsy\.trae-cn\permission\global.json` 的
   `resourceAuthorization.filesystem.readWrite` —— 2026-09-23 已把 `C:\\Users\\zsy\\Desktop` 整目录加入，
