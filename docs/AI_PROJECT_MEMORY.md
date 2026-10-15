@@ -468,6 +468,22 @@
   教训：**按单一硬编码域名写的拦截分支追不上站点轮换，审计时先实测「前提还在不在」**（v0.221 修的
   防盗链在实测时已不复存在）。
 
+- **TDD 试点：单元测试基建 + 图片拦截器纯函数化（2026-10-15，未发版）**：
+  ① 背景：项目此前零测试基建（无 src/test、无 testImplementation）。评估结论 = 完整红绿循环不适合
+  本项目节奏（单人、UI 重、抓取重、快速发版），采用**回归驱动 TDD**：修 bug 先写失败测试复现再修；
+  值得常驻测试的接缝 = data 层纯逻辑（解析/回退/备份 round-trip），Compose UI 与抓真实站点的
+  Client 不测（mock 掉等于测自己的想象）。
+  ② 基建：`app/build.gradle.kts` 加 `testImplementation("junit:junit:4.13.2")`（仅此一项）。
+  ③ 接缝重构：App.kt OkHttp 拦截器的图片请求改写（豆瓣/Komiic/吃瓜三分支）抽成顶层纯函数
+  `rewriteImageRequest(req, melonRefererBase = MelonClient.lastBase)`，拦截器一行调用，行为不变；
+  吃瓜 Referer 基址参数化——生产默认仍取 lastBase，测试显式传参锁定「Referer 来自最近成功镜像
+  而非持久化旧地址」的 v0.221 语义。
+  ④ 首个测试 `app/src/test/java/com/shangyin/app/ImageRequestRewriteTest.kt`：9 用例（吃瓜 Referer
+  传参/尾斜杠归一/多级域名不误伤、豆瓣 Referer+UA、Komiic fragment 拼 Referer/镜像域/非图路径
+  透传、无关请求透传），期望值全独立字面量防同义反复；`testDebugUnitTest` 全绿（tests=9 failures=0）。
+  ⑤ 跑法：`$env:JAVA_HOME=C:\Users\62496\.local\share\rea-tools\jdk-21.0.12.1+1; .\gradlew.bat testDebugUnitTest`。
+  ⚠️ 规矩：涉及 app/ 源码的 bug 修复，先写失败测试复现再修；下轮发版 code-review 固定点含本次改动。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

@@ -8,11 +8,13 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.douban.DoubanClient
+import com.shangyin.app.data.melon.MelonClient
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
 import okhttp3.Cache
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -136,44 +138,8 @@ class App : Application(), ImageLoaderFactory {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .addInterceptor { chain ->
-                val req = chain.request()
-                val host = req.url.host
-                val newReq = if (host.endsWith("doubanio.com") || host.endsWith("douban.com")) {
-                    req.newBuilder()
-                        .header("Referer", "https://m.douban.com/")
-                        .header(
-                            "User-Agent",
-                            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) " +
-                                "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
-                                "Version/16.0 Mobile/15E148 Safari/604.1"
-                        )
-                        .build()
-                } else if ((host == "komiic.com" || host == "komiic.cc") && req.url.encodedPath.startsWith("/api/image/")) {
-                    // Komiic 章节图防盗链（主/镜像域）：fragment "#c/{comicId}/{chapterId}" → 完整路径 Referer
-                    // （fragment 不会发送到服务器，仅本地编码归属信息）；UA 与 KomiicClient 同款 Chrome/119
-                    req.url.fragment?.takeIf { it.startsWith("c/") }?.let { f ->
-                        val p = f.removePrefix("c/").split('/')
-                        if (p.size == 2) {
-                            req.newBuilder()
-                                .header("Referer", "https://${req.url.host}/comic/${p[0]}/chapter/${p[1]}")
-                                .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
-                                .build()
-                        } else req
-                    } ?: req
-                } else if (host.matches(Regex("pic\\.[a-z]+\\.cn"))) {
-                    // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）。
-                    // 图床域名会轮换（pic.ndhixj.cn → pic.jtzatly.cn，均为 pic.{词}.cn 模式），按模式匹配而非硬编码；
-                    // 2026-10-15 实测当前图床暂无防盗链，此分支为防御性保留。
-                    // Referer 用 lastBase（最近一次成功镜像）而非 melonBase（持久化镜像，可能已失效）。
-                    req.newBuilder()
-                        .header(
-                            "Referer",
-                            com.shangyin.app.data.melon.MelonClient.lastBase.trimEnd('/') + "/"
-                        )
-                        .header("User-Agent", com.shangyin.app.data.melon.MelonClient.UA)
-                        .build()
-                } else req
-                chain.proceed(newReq)
+                // 图片请求改写逻辑已抽出为纯函数 rewriteImageRequest（见文件末尾），便于单元测试
+                chain.proceed(rewriteImageRequest(chain.request()))
             }
             .build()
     }
@@ -247,4 +213,48 @@ class App : Application(), ImageLoaderFactory {
             return if (f.isFile) f.length() else f.listFiles()?.sumOf { dirSize(it) } ?: 0L
         }
     }
+}
+
+/**
+ * 图片请求改写（防盗链 Referer / 反爬 UA）——App 拦截器的纯函数化，供单元测试直接驱动。
+ * 输入原始请求，输出应发送的请求；不读不改任何全局状态。
+ *
+ * @param melonRefererBase 吃瓜图床 Referer 基址。生产路径取默认值 [MelonClient.lastBase]
+ *   （内存中最近一次成功镜像）。v0.221 教训：曾误用持久化的 melonBase（可能早已失效）做
+ *   Referer——回归测试通过显式传参锁定「Referer 来自调用方给的最近成功镜像」这一语义。
+ */
+internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonClient.lastBase): Request {
+    val host = req.url.host
+    return if (host.endsWith("doubanio.com") || host.endsWith("douban.com")) {
+        req.newBuilder()
+            .header("Referer", "https://m.douban.com/")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) " +
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+                    "Version/16.0 Mobile/15E148 Safari/604.1"
+            )
+            .build()
+    } else if ((host == "komiic.com" || host == "komiic.cc") && req.url.encodedPath.startsWith("/api/image/")) {
+        // Komiic 章节图防盗链（主/镜像域）：fragment "#c/{comicId}/{chapterId}" → 完整路径 Referer
+        // （fragment 不会发送到服务器，仅本地编码归属信息）；UA 与 KomiicClient 同款 Chrome/119
+        req.url.fragment?.takeIf { it.startsWith("c/") }?.let { f ->
+            val p = f.removePrefix("c/").split('/')
+            if (p.size == 2) {
+                req.newBuilder()
+                    .header("Referer", "https://${req.url.host}/comic/${p[0]}/chapter/${p[1]}")
+                    .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
+                    .build()
+            } else req
+        } ?: req
+    } else if (host.matches(Regex("pic\\.[a-z]+\\.cn"))) {
+        // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）。
+        // 图床域名会轮换（pic.ndhixj.cn → pic.jtzatly.cn，均为 pic.{词}.cn 模式），按模式匹配而非硬编码；
+        // 2026-10-15 实测当前图床暂无防盗链，此分支为防御性保留。
+        // Referer 用 lastBase（最近一次成功镜像）而非 melonBase（持久化镜像，可能已失效）。
+        req.newBuilder()
+            .header("Referer", melonRefererBase.trimEnd('/') + "/")
+            .header("User-Agent", com.shangyin.app.data.melon.MelonClient.UA)
+            .build()
+    } else req
 }

@@ -125,4 +125,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.7.1")
 
     debugImplementation(libs.androidx.ui.tooling)
+
+    // 单元测试（TDD 试点：data 层纯逻辑回归测试，见 app/src/test）
+    testImplementation("junit:junit:4.13.2")
 }
