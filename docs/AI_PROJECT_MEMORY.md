@@ -502,9 +502,10 @@
   sdkmanager 走代理参数：`--proxy=http --proxy_host=127.0.0.1 --proxy_port=7899`。
   ③ 新机 Gradle 缓存已预热：`gradlew :app:compileReleaseKotlin` BUILD SUCCESSFUL（6m12s），
   编译需带代理参数 `"-Dhttps.proxyHost=127.0.0.1" "-Dhttps.proxyPort=7899"`（http 同理）+ JAVA_HOME 指向 REA JDK。
-- APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\zsy\Desktop\老郑分享-X.YYY.apk`。
-  ⚠️ 桌面写入需要沙箱白名单：`C:\Users\zsy\.trae-cn\permission\global.json` 的
-  `resourceAuthorization.filesystem.readWrite` —— 2026-09-23 已把 `C:\\Users\\zsy\\Desktop` 整目录加入，
+- APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\62496\Desktop\老郑分享-X.YYY.apk`
+  （2026-10-15 随换机修正；旧机路径 C:\Users\zsy\Desktop 已失效）。
+  ⚠️ 桌面写入需要沙箱白名单：`C:\Users\62496\.trae-cn\permission\global.json` 的
+  `resourceAuthorization.filesystem.readWrite` 整目录加入 `C:\\Users\\62496\\Desktop`（新机尚未加，首次拷贝前补），
   **改完立即生效、不用重启**（仅对单文件授权时每个新版本号都要重新批准，所以按目录授权更省事）。
 
 ## 换机迁移 + Trae CN 环境备忘（2026-10-14，新机恢复日）
