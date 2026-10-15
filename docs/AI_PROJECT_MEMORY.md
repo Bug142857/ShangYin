@@ -505,7 +505,7 @@
 - APK 落地位置（用户偏好）：发版后拷到桌面 `C:\Users\62496\Desktop\老郑分享-X.YYY.apk`
   （2026-10-15 随换机修正；旧机路径 C:\Users\zsy\Desktop 已失效）。
   ⚠️ 桌面写入需要沙箱白名单：`C:\Users\62496\.trae-cn\permission\global.json` 的
-  `resourceAuthorization.filesystem.readWrite` 整目录加入 `C:\\Users\\62496\\Desktop`（新机尚未加，首次拷贝前补），
+  `resourceAuthorization.filesystem.readWrite` 整目录加入 `C:\\Users\\62496\\Desktop`（**2026-10-15 用户已手动加好**，桌面拷贝+哈希校验已验证可用），
   **改完立即生效、不用重启**（仅对单文件授权时每个新版本号都要重新批准，所以按目录授权更省事）。
 
 ## 换机迁移 + Trae CN 环境备忘（2026-10-14，新机恢复日）
