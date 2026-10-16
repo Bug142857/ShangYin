@@ -550,19 +550,33 @@ fun PlayerScreen(nav: NavHostController) {
         onDispose { player.removeListener(l) }
     }
     LaunchedEffect(player) {
+        var lastPos = -1L
+        var stuckSince = 0L
         while (true) {
             delay(2000)
-            if (!isLive && bufferingSince > 0 &&
-                System.currentTimeMillis() - bufferingSince > 10_000
+            val now = System.currentTimeMillis()
+            var needReload = !isLive && bufferingSince > 0 &&
+                now - bufferingSince > 10_000
+            // v0.231：READY 却不播——seek 后 STATE_READY、playWhenReady=true 但画面不动
+            //（位置停滞），原自愈只认 STATE_BUFFERING 覆盖不到这种。位置 10s 无变化即重载。
+            val pos = player.currentPosition
+            if (!needReload && !isLive && player.playWhenReady && !player.isPlaying &&
+                !player.isPlayingAd && pos == lastPos
             ) {
+                if (stuckSince == 0L) stuckSince = now
+                else if (now - stuckSince > 10_000) needReload = true
+            } else stuckSince = 0L
+            lastPos = pos
+            if (needReload) {
                 runCatching {
-                    val pos = player.currentPosition
+                    val p = player.currentPosition
                     player.stop()
                     player.prepare()
-                    player.seekTo(pos)
+                    player.seekTo(p)
                     player.playWhenReady = true
                 }
                 bufferingSince = System.currentTimeMillis() // 重置计时避免无限循环
+                stuckSince = 0L
             }
         }
     }

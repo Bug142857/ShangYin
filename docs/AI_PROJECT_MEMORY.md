@@ -682,6 +682,25 @@
   的 ContentDataSource 可播）——疑与 0B 显示误导有关，待 0B 修复后用户复验。
   版本：0.230/1230。
 
+- **v0.231（图片剩余根因=okhttp HTTP 缓存污染 + 播放器自愈补位 + 通知栏下载进度，2026-10-16）**：
+  用户 0.230 实测：图片仍不显示、seek 仍会卡、要求通知栏显示下载进度。**诊断探针给出决定性
+  证据**：设备裸 okhttp 请求真实图床 URL → 200 octet-stream 48KB **成功**——网络通、节点通、
+  Content-Type 就这样标注。App 内唯一差异层 = 共享 client 的 **20MB HTTP 缓存（cacheDir/http）**：
+  0.218-0.220 的垃圾 text/html 就缓存在这层，请求命中垃圾 → 校验拒绝 → 换域也命中缓存垃圾 →
+  全挂。0.226 只清了 Coil 层（image_cache）没清这层 → 0.226-0.230 图片一直挂的剩余根因。
+  修复三件：
+  ①升级清缓存补上 `deleteRecursive(cacheDir/http)`；且图床请求全部 **CacheControl.FORCE_NETWORK**
+  （永不读 HTTP 缓存——Coil 自身磁盘缓存已足够，HTTP 缓存对图床只有害，一劳永逸防再污染）。
+  ②播放器自愈补位：原自愈只认 STATE_BUFFERING 超时；seek 后可能 STATE_READY、playWhenReady=true
+  但画面不动（位置停滞）——自愈永不触发。新增**位置停滞检测**（非直播、playWhenReady、!isPlaying、
+  position 10s 无变化 → stop+prepare+seekTo 强制重载）。
+  ③**状态栏通知显示下载进度**（用户要求）：VideoDownloadManager 加 NotificationChannel
+  「视频下载」（IMPORTANCE_LOW 静音），notifyProgress ~1s 节流（HLS 每片/直链每 512KB 检查），
+  无总大小时转圈；完成/失败终态通知（Toast 保留）；id=URL hash 贯穿进度与终态。
+  POST_NOTIFICATIONS 权限 manifest 已有（音乐模块时代加的），13+ 未授权时静默失败。
+  附：用户手机仍在 0.229（下载进度 0% 是 0.229 行为；0.230 chunked 已转圈）——提醒升级。
+  版本：0.231/1231。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

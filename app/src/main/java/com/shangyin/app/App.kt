@@ -67,6 +67,11 @@ class App : Application(), ImageLoaderFactory {
         if (SettingsStore.cacheClearedVersion != BuildConfig.VERSION_CODE.toLong()) {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 runCatching { deleteRecursive(File(cacheDir, "image_cache")) }
+                // v0.231 关键补充：okhttp 的 20MB HTTP 缓存（cacheDir/http）同样被 0.218-0.220
+                // 时代的垃圾 text/html 污染——0.226 只清了 Coil 层没清这层，请求在 HTTP 缓存
+                // 命中垃圾 → 校验拒绝 → 换域也是缓存垃圾 → 图片全挂。设备诊断证实网络本身
+                // 通（裸 client 拿真图成功），App 内唯一差异就是这层缓存。
+                runCatching { deleteRecursive(File(cacheDir, "http")) }
                 SettingsStore.cacheClearedVersion = BuildConfig.VERSION_CODE.toLong()
             }
         }
@@ -177,20 +182,22 @@ class App : Application(), ImageLoaderFactory {
                     fun isImageResponse(r: okhttp3.Response) =
                         r.header("Content-Type")?.contains("text/html", ignoreCase = true) != true
 
-                    // v0.228 Cookie 直通：设备诊断实证 WebView 拿得到图而 okhttp/Coil 拿到
-                    // 「200 + text/html」（JS 挑战页/风控页嫌疑）。WebView 作为主框架访问过
-                    // 图床域后，通过挑战写入的 Cookie 会存在系统 CookieManager——把它带给
-                    // Coil 的请求，即复刻 WebView 的成功路径；若是 ISP 劫持场景则多带无害。
-                    fun withCookie(r: okhttp3.Request): okhttp3.Request {
+                    // v0.228 Cookie 直通 + v0.231 强制走网络：WebView 通过挑战写入的 Cookie
+                    // 带给 Coil（复刻 WebView 成功路径）；图床请求**永不读 HTTP 缓存**——
+                    // 0.218 时代的垃圾响应就存在 okhttp 20MB HTTP 缓存里，命中垃圾 → 校验
+                    // 拒绝 → 换域也是缓存垃圾 → 全挂。Coil 自身磁盘缓存已足够，HTTP 缓存
+                    // 对图床只有害，FORCE_NETWORK 一劳永逸防再污染。
+                    fun prep(r: okhttp3.Request): okhttp3.Request {
                         val c = runCatching {
                             android.webkit.CookieManager.getInstance()
                                 .getCookie("https://${r.url.host}/")
                         }.getOrNull()
-                        return if (c.isNullOrBlank()) r
-                        else r.newBuilder().header("Cookie", c).build()
+                        val b = if (c.isNullOrBlank()) r.newBuilder()
+                        else r.newBuilder().header("Cookie", c)
+                        return b.cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build()
                     }
                     try {
-                        val resp = chain.proceed(withCookie(primary))
+                        val resp = chain.proceed(prep(primary))
                         if (resp.isSuccessful && isImageResponse(resp)) {
                             // 回写成功域名（resp.request.url 含 301 跟随后的落地域名）
                             com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
@@ -214,7 +221,7 @@ class App : Application(), ImageLoaderFactory {
                     for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(primary.url.host)) {
                         val retry = swapMelonPicHost(primary, h) ?: continue
                         try {
-                            val resp = chain.proceed(withCookie(retry))
+                            val resp = chain.proceed(prep(retry))
                             if (resp.isSuccessful && isImageResponse(resp)) {
                                 com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
                                 return@addInterceptor resp

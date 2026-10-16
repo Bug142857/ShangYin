@@ -127,15 +127,16 @@ object VideoDownloadManager {
         jobs[url] = scope.launch {
             val task = active.value[url] ?: return@launch
             try {
+                notifyProgress(appContext, task.url.hashCode(), task.title, 0f)
                 val video = withContext(Dispatchers.IO) { run(appContext, task, headers) }
                 library.value = library.value + video
                 save(appContext)
-                notifyDone(appContext, task.title, null)
+                notifyDone(appContext, task.url, task.title, null)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 active.value = active.value + (url to task.copy(error = e.message ?: "下载失败"))
-                notifyDone(appContext, task.title, e.message ?: "下载失败")
+                notifyDone(appContext, task.url, task.title, e.message ?: "下载失败")
             } finally {
                 jobs.remove(url)
                 if (active.value[url]?.error == null) {
@@ -173,8 +174,8 @@ object VideoDownloadManager {
 
     // ---------- 内部实现 ----------
 
-    /** 下载完成/失败轻提示（应用级 Toast，无需通知权限） */
-    private fun notifyDone(context: Context, title: String, error: String?) {
+    /** 下载完成/失败轻提示（应用级 Toast + 状态栏通知，v0.231 起进度在通知栏可见） */
+    private fun notifyDone(context: Context, url: String, title: String, error: String?) {
         android.os.Handler(context.mainLooper).post {
             android.widget.Toast.makeText(
                 context,
@@ -182,6 +183,57 @@ object VideoDownloadManager {
                 else "「$title」下载失败：$error",
                 android.widget.Toast.LENGTH_LONG
             ).show()
+        }
+        notifyFinished(context, url.hashCode(), title, error)
+    }
+
+    // ---------- 状态栏通知（v0.231：用户要求后台下滑可见下载进度） ----------
+
+    private const val CH_DL = "video_download"
+
+    private fun notifMgr(context: Context): android.app.NotificationManager? =
+        context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+
+    private fun ensureChannel(context: Context) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            notifMgr(context)?.createNotificationChannel(
+                android.app.NotificationChannel(CH_DL, "视频下载", android.app.NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+    }
+
+    /** 进度通知（id=URL hash；进度刷新 ~1s/次节流，避免通知风暴） */
+    internal fun notifyProgress(context: Context, id: Int, title: String, progress: Float) {
+        runCatching {
+            ensureChannel(context)
+            val b = android.app.Notification.Builder(context, CH_DL)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("正在下载「$title」")
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+            if (progress < 0) b.setProgress(0, 0, true) // 服务器未告知总大小 → 转圈
+            else {
+                val pct = (progress * 100).toInt().coerceIn(0, 100)
+                b.setProgress(100, pct, false).setContentText("已下载 $pct%")
+            }
+            notifMgr(context)?.notify(id, b.build())
+        }
+    }
+
+    /** 终态通知（完成/失败，可划走） */
+    private fun notifyFinished(context: Context, id: Int, title: String, error: String?) {
+        runCatching {
+            ensureChannel(context)
+            val b = android.app.Notification.Builder(context, CH_DL)
+                .setSmallIcon(
+                    if (error == null) android.R.drawable.stat_sys_download_done
+                    else android.R.drawable.stat_notify_error
+                )
+                .setContentTitle(if (error == null) "「$title」下载完成" else "「$title」下载失败")
+                .setContentText(error ?: "已保存到 Download/老郑分享/视频/")
+                .setOngoing(false)
+                .setAutoCancel(true)
+            notifMgr(context)?.notify(id, b.build())
         }
     }
 
@@ -234,7 +286,7 @@ object VideoDownloadManager {
             // 返回 0）。改为先清 pending 再查，且用实际写入字节数兜底（永远可信）
             val written = resolver.openOutputStream(uri)!!.use { out ->
                 if (isHls) downloadHls(context, task, headers, out)
-                else downloadDirect(task, headers, out)
+                else downloadDirect(context, task, headers, out)
             }
             val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
             resolver.update(uri, done, null, null)
@@ -267,7 +319,7 @@ object VideoDownloadManager {
         val out = File(outDir, if (isHls) "$name.ts" else "$name.mp4")
         out.outputStream().use {
             if (isHls) downloadHls(context, task, headers, it)
-            else downloadDirect(task, headers, it)
+            else downloadDirect(context, task, headers, it)
         }
         return DownloadedVideo(
             id = createdAt.toString(),
@@ -297,6 +349,7 @@ object VideoDownloadManager {
         }
         val tmp = tmpDir(context, task.url).apply { mkdirs() }
         var written = 0L
+        var lastNotif = 0L
         try {
             val semaphore = Semaphore(3)
             val total = segments.size
@@ -325,7 +378,13 @@ object VideoDownloadManager {
                             }
                         }
                         val n = done.incrementAndGet()
-                        active.update { it + (task.url to task.copy(progress = n.toFloat() / total)) }
+                        val p = n.toFloat() / total
+                        active.update { it + (task.url to task.copy(progress = p)) }
+                        // 状态栏通知 ~1s 节流
+                        if (System.currentTimeMillis() - lastNotif > 1_000) {
+                            lastNotif = System.currentTimeMillis()
+                            notifyProgress(context, task.url.hashCode(), task.title, p)
+                        }
                     }
                 }
             }.awaitAll()
@@ -357,7 +416,9 @@ object VideoDownloadManager {
     /** mp4 等直链：流式拷贝 + 进度按字节比例。返回写出字节数。
      *  服务器无 Content-Length（chunked，吃瓜直链常见）时 progress=-1（UI 转不确定圈）——
      *  v0.230 修复「进度永远 0% 不动」：此前 total<=0 分支不更新进度 */
-    private fun downloadDirect(task: VideoTask, headers: Map<String, String>, out: java.io.OutputStream): Long {
+    private fun downloadDirect(
+        context: Context, task: VideoTask, headers: Map<String, String>, out: java.io.OutputStream
+    ): Long {
         val req = buildRequest(task.url, headers).build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
@@ -365,6 +426,7 @@ object VideoDownloadManager {
             resp.body!!.byteStream().use { input ->
                 val buf = ByteArray(64 * 1024)
                 var copied = 0L
+                var lastNotif = 0L
                 while (true) {
                     val n = input.read(buf)
                     if (n < 0) break
@@ -373,6 +435,11 @@ object VideoDownloadManager {
                     if (copied % (1024 * 512) < buf.size) { // 每 ~512KB 刷一次进度，别把 StateFlow 刷爆
                         val p = if (total > 0) copied.toFloat() / total else -1f
                         active.update { it + (task.url to task.copy(progress = p)) }
+                        // 状态栏通知 ~1s 节流
+                        if (System.currentTimeMillis() - lastNotif > 1_000) {
+                            lastNotif = System.currentTimeMillis()
+                            notifyProgress(context, task.url.hashCode(), task.title, p)
+                        }
                     }
                 }
                 val p = if (total > 0) copied.toFloat() / total else -1f
