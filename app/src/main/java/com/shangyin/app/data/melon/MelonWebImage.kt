@@ -44,6 +44,14 @@ object MelonWebImage {
     private val starting = AtomicBoolean(false)
     @Volatile private var pageReady = false
     @Volatile private var pageUrl: String = ""
+    /** 25s 未就绪时的 document.readyState（诊断用：loading=HTML没到 / complete=JS没到） */
+    @Volatile var readyState: String = ""
+
+    /** 字符串截取（首次出现 s 之后的剩余部分，无 s 返回空） */
+    private fun String.takeAfter(s: String): String {
+        val i = indexOf(s)
+        return if (i < 0) "" else substring(i + s.length)
+    }
 
     /** 页面上下文是否就绪（站点 JS 已加载，decryptImage 可用） */
     val isReady: Boolean get() = pageReady
@@ -58,10 +66,10 @@ object MelonWebImage {
             onReady(true); return
         }
         if (!starting.compareAndSet(false, true)) {
-            // 已在加载中：轮询等结果
+            // 已在加载中：轮询等结果（v0.238 慢站点首载可达 30s+，等待上限 35s）
             scope.launch {
                 var waited = 0
-                while (!pageReady && waited < 20_000) { delay(300); waited += 300 }
+                while (!pageReady && waited < 35_000) { delay(500); waited += 500 }
                 onReady(pageReady)
             }
             return
@@ -77,28 +85,51 @@ object MelonWebImage {
                     webView = it
                 }
                 // v0.236：不等 onPageFinished（站点页重资源会拖到 20s 超时——0.235 设备实测
-                // 「Timed out waiting for 20000 ms」）。loadUrl 后主动轮询解密函数就绪，
-                // zzz.js 一加载完立刻可用；15s 轮询上限后报告失败。
+                // 「Timed out waiting for 20000 ms」）。loadUrl 后主动轮询解密函数就绪。
+                // v0.238：设备实测镜像站点对「新连接」响应极慢（okhttp 裸 client 8s 拿不到
+                // 首页字节），WebView 首载同理——轮询上限 15s→25s；超时后**继续后台轮询**
+                // 至 60s（onReady(false) 已返回，但 pageReady 置位后下次 ensure 幂等成功），
+                // 并输出 document.readyState 供诊断定位（loading=HTML没到/complete=JS没到）。
                 if (wv.url != page) wv.loadUrl(page)
                 var waited = 0
                 fun pollReady() {
                     runCatching {
                         wv.evaluateJavascript(
-                            "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':'0'"
+                            "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':('0:'+document.readyState)"
                         ) { v ->
+                            val ok = v?.trim()?.removeSurrounding("\"")?.startsWith("1") == true
                             when {
-                                v?.contains("1") == true -> {
+                                ok -> {
                                     pageReady = true
                                     starting.set(false)
                                     onReady(true)
                                 }
-                                waited < 15_000 -> {
-                                    waited += 400
-                                    wv.postDelayed({ pollReady() }, 400)
+                                waited < 25_000 -> {
+                                    waited += 500
+                                    wv.postDelayed({ pollReady() }, 500)
                                 }
                                 else -> {
+                                    // 25s 未就绪：报告失败，但后台继续轮询到 60s——
+                                    // 慢站点首载一次后管线常驻，下次请求直接可用
+                                    readyState = v?.trim()?.removeSurrounding("\"")?.takeAfter("0:")
+                                        ?: "unknown"
                                     starting.set(false)
                                     onReady(false)
+                                    fun slowPoll() {
+                                        runCatching {
+                                            wv.evaluateJavascript(
+                                                "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':'0'"
+                                            ) { vv ->
+                                                if (vv?.contains("1") == true) {
+                                                    pageReady = true
+                                                } else if (waited < 60_000) {
+                                                    waited += 1000
+                                                    wv.postDelayed({ slowPoll() }, 1000)
+                                                }
+                                            }
+                                        }.onFailure { return }
+                                    }
+                                    slowPoll()
                                 }
                             }
                         }

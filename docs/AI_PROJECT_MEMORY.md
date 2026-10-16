@@ -787,6 +787,20 @@
   解密长度），最坏总时长收敛 ~60s，超时输出明确标注「超时(Ns)」。
   版本：0.237/1237。
 
+- **v0.238（慢站点首载适配：预热 + 就绪上限放宽 + readyState 诊断，2026-10-16）**：
+  0.237 诊断数据三大事实：①**首页okhttp 超时(8s)**——probeClient 裸连接 8s 拿不到镜像
+  首页首字节，而 home() 成功（共享 client 连接池热连接复用）→ **镜像站点对新连接响应
+  极慢**（服务器过载或风控限速）；②**WebView管线 ensure超时(10s)**——同一根因，WebView
+  首载页面 10s 内没拿到 HTML/JS，decryptImage 未就绪；③Coil 真身报 BitmapFactory null
+  而非「管线未就绪」（疑缓存残留垃圾字节，次要未深究）。**WebView 管线方案未被证伪，
+  只是首载没等够**。0.238 修复：①**预热**——MelonClient.list() 成功后 fire-and-forget
+  MelonWebImage.ensure（列表能拉到=镜像可达；用户翻到图片时管线多半已就绪）；②就绪
+  轮询 15s→25s，超时后**后台继续轮询至 60s**（onReady(false) 先返回但 pageReady 后续
+  置位，下次 ensure 幂等成功）；③「已在加载中」等待 20s→35s；④诊断 ensure 限时
+  10s→25s + **readyState 输出**（loading=HTML没到 / complete=JS没到，下轮定位），首页
+  WebView ensure 8s→15s。
+  版本：0.238/1238。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

@@ -337,8 +337,18 @@ object MelonClient {
     }
 
     /** 加载任意列表页（firstPath 为首页/分类/搜索的第一页路径；nextPath 直接透传翻页） */
-    private suspend fun list(firstPath: String, nextPath: String? = null): MelonPage =
-        parseList(doc(nextPath ?: firstPath))
+    private suspend fun list(firstPath: String, nextPath: String? = null): MelonPage {
+        val page = parseList(doc(nextPath ?: firstPath))
+        // v0.238 预热：列表能拉到 = 镜像可达；后台开始加载隐藏 WebView 的解密管线页
+        // （慢站点首载 25s+，提前加载——用户往下翻到图片时管线多半已就绪）
+        runCatching {
+            MelonWebImage.ensure(
+                com.shangyin.app.App.instance,
+                lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }
+            ) { }
+        }
+        return page
+    }
 
     /** 最新列表第一页 */
     suspend fun home(): MelonPage = list("/")

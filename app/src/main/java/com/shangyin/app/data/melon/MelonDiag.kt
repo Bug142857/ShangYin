@@ -184,7 +184,7 @@ object MelonDiag {
             val wvTarget = covers.firstOrNull()
             if (wvTarget != null) {
                 val wvRes = try {
-                    val ready = kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                    val ready = kotlinx.coroutines.withTimeoutOrNull(25_000) {
                         kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
                             MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
                                 if (c.isActive) c.resume(r)
@@ -192,8 +192,8 @@ object MelonDiag {
                         }
                     }
                     when {
-                        ready == null -> "ensure超时(10s)"
-                        !ready -> "页面未就绪（站点JS未加载）"
+                        ready == null -> "ensure超时(25s) readyState=${MelonWebImage.readyState.ifBlank { "无" }}"
+                        !ready -> "页面未就绪(25s) readyState=${MelonWebImage.readyState.ifBlank { "无" }}——后台仍在加载"
                         else -> kotlinx.coroutines.withTimeoutOrNull(12_000) { MelonWebImage.probeRaw(wvTarget) }
                             ?.let { "raw: $it" } ?: "probeRaw超时或失败(12s)"
                     }
@@ -225,7 +225,7 @@ object MelonDiag {
                 out.appendLine("首页okhttp: ${e.javaClass.simpleName}: ${e.message?.take(40)}")
             }
             val wvHtml = try {
-                val ready = kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                val ready = kotlinx.coroutines.withTimeoutOrNull(15_000) {
                     kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
                         MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
                             if (c.isActive) c.resume(r)
@@ -233,7 +233,7 @@ object MelonDiag {
                     }
                 }
                 when {
-                    ready == null -> "ensure超时(8s)"
+                    ready == null -> "ensure超时(15s)"
                     !ready -> "未就绪"
                     else -> kotlinx.coroutines.withTimeoutOrNull(8_000) {
                         MelonWebImage.evalJs(
