@@ -75,3 +75,10 @@ app-debug.apk
 .kotlin/
 .trae/
 jstmp/
+zzz2.js
+a.bin
+b.bin
+c.bin
+seg*.bin
+t1.bin
+t2.bin
