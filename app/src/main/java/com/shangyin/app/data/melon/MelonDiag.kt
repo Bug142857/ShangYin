@@ -108,17 +108,23 @@ object MelonDiag {
             if (ep.isNullOrBlank()) out.appendLine("当前视频: 无会话（先进播放页再诊断）")
             else {
                 out.appendLine("当前视频: ${ep.take(90)}")
-                out.appendLine("视频实测: ${async(Dispatchers.IO) { probeVideo(ep) }.await()}")
+                out.appendLine("视频实测: ${async(Dispatchers.IO) { kotlinx.coroutines.withTimeoutOrNull(15_000) { probeVideo(ep) } ?: "超时(15s)" }.await()}")
             }
 
             // 列表封面实测：现场走一遍 MelonClient.home()（App 解析路径本身）——
-            // 解析失败/封面为空也是关键信息
-            val homeRes = runCatching { MelonClient.home() }
+            // 解析失败/封面为空也是关键信息。v0.237：全部环节限时，防串行叠加卡死
+            // （0.236 实测最坏 140s 无反馈=用户以为卡死）
+            val homeRes = runCatching {
+                kotlinx.coroutines.withTimeoutOrNull(20_000) { MelonClient.home() }
+            }
             val covers = homeRes.getOrNull()?.items
                 ?.mapNotNull { it.cover }?.filter { it.startsWith("http") }?.distinct()?.take(3)
                 ?: emptyList()
-            if (homeRes.isFailure) out.appendLine("列表解析: 失败 ${homeRes.exceptionOrNull()?.message?.take(60)}")
-            if (covers.isEmpty() && homeRes.isSuccess) out.appendLine("列表解析: 成功但无封面URL")
+            when {
+                homeRes.isFailure -> out.appendLine("列表解析: 失败 ${homeRes.exceptionOrNull()?.message?.take(60)}")
+                homeRes.getOrNull() == null -> out.appendLine("列表解析: 超时(20s)")
+                covers.isEmpty() -> out.appendLine("列表解析: 成功但无封面URL")
+            }
             var n = 1
             for (c in covers) {
                 val r = async(Dispatchers.IO) {
@@ -140,8 +146,9 @@ object MelonDiag {
                     // 若它 head=FFD8（真图）而 okhttp=混淆字节，「TLS 指纹风控」实锤
                     val viaConn = if (n == 1)
                         httpConnBytes(c, "${MelonClient.lastBase.trimEnd('/')}/") else null
-                    // Coil 真身：走 App 的 ImageLoader 完整路径（共享client+拦截器+缓存+解码），
-                    // 与列表 UI 完全同路——裸成功而 Coil 失败 = 拦截器/缓存/解码层，一次定性
+                    // Coil 真身：走 App 的 ImageLoader 完整路径（共享client+拦截器+缓存+
+                    // v0.235 WebView Fetcher），与列表 UI 完全同路。v0.237：限时 12s——
+                    // 它内部走 WebView 管线，未就绪时会等待，不限制就会拖死整个诊断
                     val viaCoil = if (n == 1) {
                         try {
                             val loader = (context.applicationContext as? coil.ImageLoaderFactory)?.newImageLoader()
@@ -149,8 +156,9 @@ object MelonDiag {
                             else {
                                 val req = coil.request.ImageRequest.Builder(context.applicationContext)
                                     .data(c).allowHardware(false).build()
-                                val res = loader.execute(req)
-                                when (res) {
+                                val res = kotlinx.coroutines.withTimeoutOrNull(12_000) { loader.execute(req) }
+                                if (res == null) "Coil: 超时(12s)"
+                                else when (res) {
                                     is coil.request.SuccessResult ->
                                         "Coil:成功 ${res.drawable.intrinsicWidth}x${res.drawable.intrinsicHeight}"
                                     else -> "Coil:失败 " +
@@ -169,27 +177,25 @@ object MelonDiag {
                 n++
             }
 
-            // WebView 解密管线实况（v0.236）：ensure（主动轮询就绪）→ probeRaw 首封面
-            // （raw 头 + 解密长度一次区分「网络假数据」vs「解密失败」）；封面探针的 Coil
-            // 真身同步走新 Fetcher 一起验证
+            // WebView 解密管线实况：ensure（主动轮询就绪）→ probeRaw 首封面（raw 头 +
+            // 解密长度一次区分「网络假数据」vs「解密失败」）。v0.237：整段限时 15s——
+            // ensure 就绪轮询 + probeRaw fetch/解密都可能各自拖 20s，串行叠加曾把诊断
+            // 拖到 140s（用户以为卡死）；probeRaw 已含解密长度，fetchDecrypted 冗余已删
             val wvTarget = covers.firstOrNull()
             if (wvTarget != null) {
                 val wvRes = try {
-                    val ready = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
-                        MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
-                            if (c.isActive) c.resume(r)
+                    val ready = kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                        kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
+                            MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
+                                if (c.isActive) c.resume(r)
+                            }
                         }
                     }
-                    if (!ready) "页面未就绪（15s内decryptImage未就绪）"
-                    else {
-                        val raw = MelonWebImage.probeRaw(wvTarget)
-                        if (raw == null) "probe失败(null)"
-                        else {
-                            out.appendLine("WebView封面raw: $raw")
-                            val b = MelonWebImage.fetchDecrypted(wvTarget)
-                            if (b == null) "取明文失败(null)"
-                            else "明文 ${b.size}B head=[${b.take(8).joinToString(" ") { "%02X".format(it) }}]"
-                        }
+                    when {
+                        ready == null -> "ensure超时(10s)"
+                        !ready -> "页面未就绪（站点JS未加载）"
+                        else -> kotlinx.coroutines.withTimeoutOrNull(12_000) { MelonWebImage.probeRaw(wvTarget) }
+                            ?.let { "raw: $it" } ?: "probeRaw超时或失败(12s)"
                     }
                 } catch (e: Exception) {
                     "异常 ${e.javaClass.simpleName}: ${e.message?.take(50)}"
@@ -197,32 +203,44 @@ object MelonDiag {
                 out.appendLine("WebView管线: $wvRes")
             } else out.appendLine("WebView管线: 跳过（无封面URL）")
 
-            // 首页 HTML 双栈对照（v0.236）：App 解析的封面 URL 是截断版 .jpe 而 PC 同镜像
-            // 完整——okhttp（FORCE_NETWORK）与 WebView 各拉一次首页，比较首条 loadBannerDirect
+            // 首页 HTML 双栈对照：App 解析的封面 URL 是截断版 .jpe 而 PC 同镜像完整——
+            // okhttp（FORCE_NETWORK）与 WebView 各拉一次首页，比较首条 loadBannerDirect
             // URL 完整性 → 一测定案「HTML 层内容混淆」是否存在及影响哪个栈
             try {
                 val base = MelonClient.lastBase.trimEnd('/')
                 val okHtml = runCatching {
-                    val req = Request.Builder().url("$base/")
-                        .header("User-Agent", MelonClient.UA)
-                        .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build()
-                    probeClient.newCall(req).execute().use { it.body?.string().orEmpty() }
-                }.getOrDefault("")
+                    kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                        val req = Request.Builder().url("$base/")
+                            .header("User-Agent", MelonClient.UA)
+                            .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build()
+                        probeClient.newCall(req).execute().use { it.body?.string().orEmpty() }
+                    }
+                }.getOrNull() ?: ""
                 val okUrl = Regex("""loadBannerDirect\('([^']{10,130})'""").find(okHtml)?.groupValues?.get(1)
-                out.appendLine("首页okhttp: LEN=${okHtml.length} 首条=${okUrl ?: "无"}")
+                out.appendLine(
+                    if (okHtml.isEmpty()) "首页okhttp: 超时(8s)"
+                    else "首页okhttp: LEN=${okHtml.length} 首条=${okUrl ?: "无"}"
+                )
             } catch (e: Exception) {
                 out.appendLine("首页okhttp: ${e.javaClass.simpleName}: ${e.message?.take(40)}")
             }
             val wvHtml = try {
-                val ready = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
-                    MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
-                        if (c.isActive) c.resume(r)
+                val ready = kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                    kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
+                        MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
+                            if (c.isActive) c.resume(r)
+                        }
                     }
                 }
-                if (!ready) "未就绪"
-                else MelonWebImage.evalJs(
-                    "(function(){var m=document.documentElement.innerHTML.match(/loadBannerDirect\\('([^']{10,130})'/);return m?m[1]:'NONE';})()"
-                ) ?: "eval失败"
+                when {
+                    ready == null -> "ensure超时(8s)"
+                    !ready -> "未就绪"
+                    else -> kotlinx.coroutines.withTimeoutOrNull(8_000) {
+                        MelonWebImage.evalJs(
+                            "(function(){var m=document.documentElement.innerHTML.match(/loadBannerDirect\\('([^']{10,130})'/);return m?m[1]:'NONE';})()"
+                        )
+                    } ?: "eval超时(8s)"
+                }
             } catch (e: Exception) {
                 "${e.javaClass.simpleName}: ${e.message?.take(40)}"
             }

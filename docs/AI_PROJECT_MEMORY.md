@@ -777,6 +777,16 @@
   管线（拿真 URL）+ 图片/视频源同理。
   版本：0.236/1236。
 
+- **v0.237（诊断卡死热修：全环节限时，2026-10-16）**：
+  0.236 用户反馈诊断「卡住好久不动」。根因：0.235/0.236 新增探针**串行叠加无限时**——
+  home()（无超时，镜像慢时 25s+）+ Coil 真身（WebView 管线 ensure 轮询 15s +
+  fetchDecrypted 20s）+ WebView 管线段（ensure 15s + probeRaw 20s + fetchDecrypted
+  20s）+ 首页双栈（okhttp 无限时 + evalJs 15s），最坏 140s 无任何输出=用户以为卡死。
+  修复：每段 withTimeoutOrNull 独立限时（home 20s/Coil 12s/ensure 10s/probeRaw 12s/
+  首页okhttp 8s/evalJs 8s/probeVideo 15s），删冗余 fetchDecrypted 调用（probeRaw 已含
+  解密长度），最坏总时长收敛 ~60s，超时输出明确标注「超时(Ns)」。
+  版本：0.237/1237。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
