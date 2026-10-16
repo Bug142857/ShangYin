@@ -528,6 +528,30 @@
   先 curl -I 看镜像是否 301。
   版本：0.223/1223。
 
+- **v0.224（五连发：镜像随备份迁移 + 图床DoH/超时修正 + seek卡住 + 视频下载全套，2026-10-16）**：
+  用户装机反馈 0.223 五点需求。逐项：
+  ①**镜像信息随数据导入导出**：ConfigBackup.KEYS 加 `melon_base`——换设备导入备份直接用活线，
+  不用再吃一次 301/重新探活。注意视频/文件本体不随备份走（跨设备无意义）。
+  ②**图片（第三轮修复）**：装机实测 0.222/0.223 的换域 fallback「看起来无效」的隐藏原因——
+  **okio Timeout 的 deadline 只在 enter() 时算一次**：`chain.call().timeout().timeout(6s)` 第一次
+  proceed 超时耗尽 deadline 后，fallback 再 proceed 立刻超时，备用域名从来没真正跑过。修复：
+  每次尝试前 `clearTimeout().timeout(6s)`（armTimeout 闭包）。另加 DoH 兜底：PicDns（阿里
+  223.5.5.5 JSON API，仅 pic.{词}.cn 域名，系统解析失败才走 DoH，缓存 10min），App.kt 共享
+  client `.dns(PicDns)`——Coil 图片与业务请求都生效。
+  ③**seek 后画面卡住**：吃瓜视频是 TS 切片流，ExoPlayer 默认 EXACT seek 要回退关键帧再解码到
+  精确位置，切片加载慢就卡住转圈。修复：`ExoPlayer.Builder.setSeekParameters(CLOSEST_SYNC)`
+  （跳最近关键帧秒出画面，误差几秒可接受）。
+  ④⑤**视频下载全套**：播放器顶部右上角加下载按钮（非直播显示；吃瓜/在线观影通用）→
+  `VideoDownloadManager`（data/download）：HLS 解析 master→媒体清单（AES-128 加密流明确报错
+  不支持）、切片并发 3 下载重试 3 次→顺序拼接 .ts；mp4 直链流式拷贝（.part→rename）。
+  存储 = 应用私有外存「视频/」（getExternalFilesDir(MOVIES)，无权限、file:// 直接播）。
+  记录持久化 SettingsStore.videoDownloadsJson（refresh 时过滤文件已删的记录）。
+  下载管理页（DownloadScreen）加「视频」节：进行中任务卡（进度/取消/失败+移除）+ 完成列表
+  （点击播放=塞 PlayerSession 复用播放页 file:// + 删除确认）+ 目录卡。
+  ⚠️ 技术坑：awaitAll 是 suspend，宿主函数链必须 suspend（withContext(IO) 内调用）；
+  StateFlow 并发更新用 `.update{}`；okhttp Request.Builder 忘 .build() 编译器报类型错。
+  版本：0.224/1224。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

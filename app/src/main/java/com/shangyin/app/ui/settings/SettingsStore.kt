@@ -251,6 +251,13 @@ object SettingsStore {
         get() = sp.getString(KEY_MELON_BASE, "").orEmpty()
         set(v) = sp.edit().putString(KEY_MELON_BASE, v.trim().trimEnd('/')).apply()
 
+    private const val KEY_VIDEO_DOWNLOADS = "video_downloads_json"
+
+    /** 已下载视频记录（JSON 数组；文件本体在应用私有外存「视频/」目录，不随备份导出） */
+    var videoDownloadsJson: String
+        get() = sp.getString(KEY_VIDEO_DOWNLOADS, "[]").orEmpty()
+        set(v) = sp.edit().putString(KEY_VIDEO_DOWNLOADS, v).apply()
+
     // ---------- 电视（自定义 M3U 源） ----------
 
     private const val KEY_LIVE_SOURCES = "live_sources_json"

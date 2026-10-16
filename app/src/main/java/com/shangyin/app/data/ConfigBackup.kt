@@ -39,6 +39,8 @@ object ConfigBackup {
         "zlib_cookie",
         "zlib_host",
         "live_sources_json",
+        // 吃瓜当前可用镜像（v0.224）：换设备导入备份后直接用活线，不用再吃一次 301/重新探活
+        "melon_base",
         "theme"
     )
 

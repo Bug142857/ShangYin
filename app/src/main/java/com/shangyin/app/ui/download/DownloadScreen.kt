@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,8 +65,14 @@ import com.shangyin.app.data.ReadProgressStore
 import com.shangyin.app.data.download.ComicDownloadManager
 import com.shangyin.app.data.download.ComicDownloadStore
 import com.shangyin.app.data.download.DownloadedComic
+import com.shangyin.app.data.download.DownloadedVideo
 import com.shangyin.app.data.download.MediaFileStore
+import com.shangyin.app.data.download.VideoDownloadManager
+import com.shangyin.app.data.download.VideoTask
+import com.shangyin.app.data.vod.VodEpisode
+import com.shangyin.app.data.vod.VodPlayGroup
 import com.shangyin.app.ui.common.PhotoViewerDialog
+import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -82,14 +89,22 @@ fun DownloadScreen(nav: NavHostController) {
     val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
     val active by ComicDownloadManager.active.collectAsStateWithLifecycle()
 
+    // 视频下载（v0.224）：进行中任务 + 已完成列表
+    val videoLibrary by VideoDownloadManager.library.collectAsStateWithLifecycle()
+    val videoTasks by VideoDownloadManager.active.collectAsStateWithLifecycle()
+
     var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
     // 离线阅读：漫画 + 章节 key + 页面（支持"下一章"继续阅读已下载章节）
     var viewer by remember { mutableStateOf<Triple<DownloadedComic, String, List<String>>?>(null) }
     // 删除确认（避免误触直接删除文件）
     var pendingComicDelete by remember { mutableStateOf<DownloadedComic?>(null) }
     var pendingChapterDelete by remember { mutableStateOf<Pair<DownloadedComic, String>?>(null) }
+    var pendingVideoDelete by remember { mutableStateOf<DownloadedVideo?>(null) }
 
-    LaunchedEffect(Unit) { ComicDownloadManager.refresh(context) }
+    LaunchedEffect(Unit) {
+        ComicDownloadManager.refresh(context)
+        VideoDownloadManager.refresh(context)
+    }
 
     // 音乐 / 书籍：文件系统枚举（Android 10+ 走 MediaStore，8/9 走私有目录），IO 放后台线程
     val music by produceState(MediaFileStore.EMPTY, context) {
@@ -227,6 +242,46 @@ fun DownloadScreen(nav: NavHostController) {
                     else openPrivateDir(context, MediaFileStore.bookAppDir(context))
                 }
             )
+
+            // ---------- 视频（v0.224：播放器右上角下载按钮 → 存这里，可离线播放） ----------
+
+            item(key = "video-header") {
+                SectionHeader(
+                    "视频",
+                    "${videoLibrary.size} 个" +
+                        if (videoLibrary.isNotEmpty())
+                            " · ${ComicDownloadStore.formatSize(videoLibrary.sumOf { it.sizeBytes })}" else ""
+                )
+            }
+            item(key = "video-dir") {
+                DirCard(
+                    title = PRIVATE_DIR_TITLE,
+                    path = remember { VideoDownloadManager.dirInfo(context) },
+                    onClick = { openPrivateDir(context, VideoDownloadManager.videosDir(context)) }
+                )
+            }
+            if (videoTasks.isNotEmpty()) {
+                items(videoTasks.values.toList(), key = { "video-task-${it.url}" }) { t ->
+                    VideoTaskCard(
+                        task = t,
+                        onCancel = { VideoDownloadManager.cancel(context, t.url) },
+                        onDismiss = { VideoDownloadManager.dismiss(t.url) }
+                    )
+                }
+            }
+            if (videoLibrary.isEmpty() && videoTasks.isEmpty()) {
+                item(key = "video-empty") {
+                    EmptyHint("还没有下载视频，播放器右上角点下载按钮试试（吃瓜/在线观影都支持）")
+                }
+            } else {
+                items(videoLibrary.asReversed(), key = { "video-${it.id}" }) { v ->
+                    VideoRow(
+                        video = v,
+                        onPlay = { playLocalVideo(nav, v) },
+                        onDelete = { pendingVideoDelete = v }
+                    )
+                }
+            }
         }
     }
 
@@ -295,6 +350,121 @@ fun DownloadScreen(nav: NavHostController) {
                 TextButton(onClick = { pendingChapterDelete = null }) { Text("取消") }
             }
         )
+    }
+    // 删除已下载视频确认
+    pendingVideoDelete?.let { v ->
+        AlertDialog(
+            onDismissRequest = { pendingVideoDelete = null },
+            title = { Text("删除视频") },
+            text = { Text("确定删除「${v.title}」（${ComicDownloadStore.formatSize(v.sizeBytes)}）吗？此操作不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    VideoDownloadManager.delete(context, v)
+                    Toast.makeText(context, "已删除「${v.title}」", Toast.LENGTH_SHORT).show()
+                    pendingVideoDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingVideoDelete = null }) { Text("取消") }
+            }
+        )
+    }
+}
+
+/** 播放本地已下载视频：file:// 塞进 PlayerSession 复用播放页（DefaultDataSource 支持 file） */
+private fun playLocalVideo(nav: NavHostController, v: DownloadedVideo) {
+    PlayerSession.itemId = -1L
+    PlayerSession.title = v.title
+    PlayerSession.sourceName = "本地下载"
+    PlayerSession.subTitle = ""
+    PlayerSession.isLive = false
+    PlayerSession.streamHeaders = emptyMap()
+    PlayerSession.liveQualities = emptyList()
+    PlayerSession.liveRoom = null
+    PlayerSession.startPosMs = 0L
+    PlayerSession.groupIndex = 0
+    PlayerSession.startIndex = 0
+    PlayerSession.groups = listOf(
+        VodPlayGroup("本地", listOf(VodEpisode(v.title, "file://" + v.filePath)))
+    )
+    nav.navigate("player")
+}
+
+/** 视频下载进行中任务卡：进度条 / 失败信息 + 取消、移除 */
+@Composable
+private fun VideoTaskCard(task: VideoTask, onCancel: () -> Unit, onDismiss: () -> Unit) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp)) {
+            Text(
+                task.title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(6.dp))
+            if (task.error != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "失败：${task.error}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    TextButton(onClick = onDismiss) { Text("移除") }
+                }
+            } else {
+                LinearProgressIndicator(
+                    progress = { task.progress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(4.dp))
+                Row {
+                    Text(
+                        "${(task.progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onCancel) { Text("取消") }
+                }
+            }
+        }
+    }
+}
+
+/** 已下载视频行：点击播放 + 删除 */
+@Composable
+private fun VideoRow(video: DownloadedVideo, onPlay: () -> Unit, onDelete: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clickable { onPlay() }) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Rounded.PlayArrow,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    video.title,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${ComicDownloadStore.formatSize(video.sizeBytes)} · 点击播放",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Rounded.Delete, contentDescription = "删除视频")
+            }
+        }
     }
 }
 

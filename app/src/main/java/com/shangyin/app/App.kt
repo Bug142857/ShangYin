@@ -137,6 +137,8 @@ class App : Application(), ImageLoaderFactory {
             .cache(cache)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
+            // 图床域名 DoH 兜底（v0.224）：仅 pic.{词}.cn 生效，DNS 污染/解析失败时走阿里 DoH
+            .dns(com.shangyin.app.data.melon.PicDns)
             .addInterceptor { chain ->
                 val req = chain.request()
                 // 图片请求改写逻辑已抽出为纯函数 rewriteImageRequest（见文件末尾），便于单元测试
@@ -145,8 +147,12 @@ class App : Application(), ImageLoaderFactory {
                 // 「图全挂」的根因，实测 Referer/UA 均无防盗链）。新旧图床回源同一存储、
                 // 路径通用 → 失败自动换域名重试（候选来自页面解析自动收集，见 MelonClient）。
                 if (out.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
-                    // 图床单图失败就换域，per-call 限时 6s，避免一张图卡死整个列表
-                    chain.call().timeout().timeout(6, TimeUnit.SECONDS)
+                    // 图床单图限时 6s。⚠️ okio Timeout 的 deadline 只在 enter() 时算一次：
+                    // 第一次 proceed 超时后 deadline 已耗尽，fallback 再 proceed 会「立刻超时」
+                    // ——0.222/0.223 换域重试看起来无效的隐藏原因。每次尝试前必须 clearTimeout 重置。
+                    fun armTimeout() {
+                        chain.call().timeout().clearTimeout().timeout(6, TimeUnit.SECONDS)
+                    }
                     // 熔断直达（v0.223）：会话内已有成功域名 → 发出前直接改写，
                     // 不再每张图都从死域名开始试错（每张最坏 18s，Coil 排队下全列表拖死）
                     val preferred = com.shangyin.app.data.melon.MelonClient.activePicHost
@@ -155,6 +161,7 @@ class App : Application(), ImageLoaderFactory {
                     var lastErr: java.io.IOException? = null
                     var contentError = false
                     try {
+                        armTimeout()
                         val resp = chain.proceed(primary)
                         if (resp.isSuccessful) {
                             // 回写成功域名（resp.request.url 含 301 跟随后的落地域名）
@@ -174,6 +181,7 @@ class App : Application(), ImageLoaderFactory {
                     for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(primary.url.host)) {
                         val retry = swapMelonPicHost(primary, h) ?: continue
                         try {
+                            armTimeout()
                             val resp = chain.proceed(retry)
                             if (resp.isSuccessful) {
                                 com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)

@@ -38,6 +38,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
@@ -195,6 +196,10 @@ fun PlayerScreen(nav: NavHostController) {
                     )
             )
             .setLoadControl(loadControl)
+            // seek 稳定性（v0.224）：TS/HLS 切片流默认 EXACT seek 要回退到前一关键帧再解码到
+            // 精确位置，切片加载稍慢（超时/慢源）画面就卡住转圈。CLOSEST_SYNC 直接跳最近
+            // 关键帧，秒出画面（位置误差最多几秒，点进度条选点场景完全可接受）
+            .setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
             .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
             .build()
     }
@@ -683,19 +688,58 @@ fun PlayerScreen(nav: NavHostController) {
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
-                            IconButton(
-                                onClick = { toggleFullscreen() },
-                                modifier = Modifier
-                                    .size(36.dp)
-                                    .background(Color.Black.copy(alpha = 0.4f), CircleShape)
-                            ) {
-                                Icon(
-                                    if (isLandscape) Icons.Rounded.FullscreenExit
-                                    else Icons.Rounded.Fullscreen,
-                                    contentDescription = if (isLandscape) "退出全屏" else "进入全屏",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                            Row {
+                                // 下载当前视频（v0.224，非直播）：HLS 切片合并 / mp4 直链拷贝
+                                if (!isLive) {
+                                    IconButton(
+                                        onClick = {
+                                            val ep = groups.getOrNull(groupIndex)?.episodes?.getOrNull(currentEp)
+                                            val url = ep?.url
+                                            if (url.isNullOrBlank()) {
+                                                Toast.makeText(context, "没有可下载的地址", Toast.LENGTH_SHORT).show()
+                                            } else if (com.shangyin.app.data.download.VideoDownloadManager.isDownloading(url)) {
+                                                Toast.makeText(context, "该视频已在下载列表", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val eps = groups.getOrNull(groupIndex)?.episodes
+                                                val label = if ((eps?.size ?: 0) > 1)
+                                                    "${PlayerSession.title} ${ep.name}".trim()
+                                                else PlayerSession.title.ifBlank { "视频" }
+                                                com.shangyin.app.data.download.VideoDownloadManager.start(
+                                                    context, label, url, PlayerSession.streamHeaders
+                                                )
+                                                Toast.makeText(
+                                                    context,
+                                                    "已开始下载「$label」，可在「我的下载 → 视频」查看",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.Download,
+                                            contentDescription = "下载视频",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                                IconButton(
+                                    onClick = { toggleFullscreen() },
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                ) {
+                                    Icon(
+                                        if (isLandscape) Icons.Rounded.FullscreenExit
+                                        else Icons.Rounded.Fullscreen,
+                                        contentDescription = if (isLandscape) "退出全屏" else "进入全屏",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
                     }

@@ -1,5 +1,7 @@
 package com.shangyin.app
 
+import com.shangyin.app.data.download.parseHlsMaster
+import com.shangyin.app.data.download.parseHlsSegments
 import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.melon.adoptedBase
 import com.shangyin.app.data.melon.demoted
@@ -8,7 +10,9 @@ import com.shangyin.app.data.melon.mergePicHosts
 import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
+import java.io.IOException
 
 /**
  * [rewriteImageRequest] 回归测试（TDD 试点，v0.222 轮引入）。
@@ -218,5 +222,55 @@ class ImageRequestRewriteTest {
         // 不在池中的域名不新增（降级只重排池内已有项）
         assertEquals(listOf("a", "b", "c"), demoted(listOf("a", "b", "c"), "z"))
         assertEquals(emptyList<String>(), demoted(emptyList(), "a"))
+    }
+
+    // ---- HLS 解析（v0.224 视频下载）----
+
+    @Test
+    fun parse_hls_segments_relative_and_absolute() {
+        val m3u8 = """
+            #EXTM3U
+            #EXT-X-VERSION:3
+            #EXTINF:9.5,
+            seg-1.ts
+            #EXTINF:9.0,
+            ./seg-2.ts
+            #EXTINF:8.0,
+            https://cdn.other.cc/seg-3.ts
+            #EXT-X-ENDLIST
+        """.trimIndent()
+        assertEquals(
+            listOf(
+                "https://pic.mmcdns.cc/hls/video/seg-1.ts",
+                "https://pic.mmcdns.cc/hls/video/seg-2.ts",
+                "https://cdn.other.cc/seg-3.ts"
+            ),
+            parseHlsSegments(m3u8, "https://pic.mmcdns.cc/hls/video/index.m3u8?sign=abc")
+        )
+    }
+
+    @Test
+    fun parse_hls_segments_rejects_aes128() {
+        val m3u8 = """
+            #EXTM3U
+            #EXT-X-KEY:METHOD=AES-128,URI="key.key"
+            #EXTINF:9.5,
+            seg-1.ts
+        """.trimIndent()
+        assertThrows(IOException::class.java) { parseHlsSegments(m3u8, "https://a.cc/v.m3u8") }
+    }
+
+    @Test
+    fun parse_hls_master_picks_child_playlist() {
+        val master = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=1280000
+            720p.m3u8
+            #EXT-X-STREAM-INF:BANDWIDTH=640000
+            480p.m3u8
+        """.trimIndent()
+        assertEquals("https://a.cc/v/720p.m3u8", parseHlsMaster(master, "https://a.cc/v/index.m3u8"))
+        // 普通媒体清单不是 master
+        assertNull(parseHlsMaster("#EXTM3U\n#EXTINF:9.5,\nseg-1.ts", "https://a.cc/v.m3u8"))
     }
 }
