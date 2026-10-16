@@ -420,6 +420,17 @@ private fun VideoTaskCard(task: VideoTask, onCancel: () -> Unit, onDismiss: () -
                     )
                     TextButton(onClick = onDismiss) { Text("移除") }
                 }
+            } else if (task.progress < 0) {
+                // v0.230：服务器未告知总大小（chunked）→ 不确定进度（转圈）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    LinearProgressIndicator(
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    TextButton(onClick = onCancel) { Text("取消") }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text("下载中…", style = MaterialTheme.typography.labelSmall)
             } else {
                 LinearProgressIndicator(
                     progress = { task.progress },

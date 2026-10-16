@@ -165,15 +165,26 @@ fun PlayerScreen(nav: NavHostController) {
     var released by remember { mutableStateOf(false) }
 
     val player = remember {
-        // 采集站多数校验 UA 且常见 http↔https 302 跳转：
-        // 带浏览器 UA + 允许跨协议重定向，修复部分线路（如 ukyun）直链 403 打不开的问题
-        val httpFactory = androidx.media3.datasource.DefaultHttpDataSource.Factory()
-            .setUserAgent(VodClient.UA)
-            .setConnectTimeoutMs(8000)
-            .setReadTimeoutMs(15000)
-            .setAllowCrossProtocolRedirects(true)
-            // 直播防盗链：个别源要求带 Referer（进播放页前由 PlayerSession 传好；电视源通常为空）
-            .setDefaultRequestProperties(PlayerSession.streamHeaders)
+        // v0.230：数据源从 DefaultHttpDataSource 换 OkHttpDataSource。
+        // 「有的视频点未缓冲位置就卡住」与「部分视频下载失败」同根因：其切片域名的
+        // 系统 DNS 解析到的 CDN 节点在本运营商网内不可达（个别坏节点）。ExoPlayer 内建
+        // HTTP 栈无法接自定义 DNS；okhttp 栈 + GeneralDohDns（系统+DoH 合并解析）让
+        // 坏节点被逐 IP 试连自动跳过。采集站校验 UA 的 http↔https 跳转 okhttp 默认跟随。
+        val okhttpClient = okhttp3.OkHttpClient.Builder()
+            .dns(com.shangyin.app.data.melon.GeneralDohDns)
+            .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            // 直播防盗链 / 站点 Referer：进播放页前由 PlayerSession 传好（每请求动态读，
+            // 本地播放为空表），UA 固定浏览器指纹
+            .addInterceptor { chain ->
+                val b = chain.request().newBuilder().header("User-Agent", VodClient.UA)
+                PlayerSession.streamHeaders.forEach { (k, v) ->
+                    if (k.isNotBlank() && v.isNotBlank()) b.header(k, v)
+                }
+                chain.proceed(b.build())
+            }
+            .build()
+        val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okhttpClient)
         val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
         // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms

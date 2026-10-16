@@ -72,6 +72,7 @@ object VideoDownloadManager {
         .readTimeout(20, TimeUnit.SECONDS)
         // v0.226：切片域名（mts.hhjd.mobi 等）与图床同遭运营商 DNS 污染（解析成功但指向
         // 不可达 IP），下载一直失败的根因之一 → 全域名 DoH 优先、系统解析回退
+        // （v0.230 GeneralDohDns 已改为系统+DoH 合并、试连跳过坏节点）
         .dns(com.shangyin.app.data.melon.GeneralDohDns)
         .build()
 
@@ -229,17 +230,19 @@ object VideoDownloadManager {
         }
         val uri = resolver.insert(collection, values) ?: throw IOException("无法创建下载文件")
         try {
-            resolver.openOutputStream(uri)!!.use { out ->
+            // v0.230 修复「下载完成显示 0B」：此前在 IS_PENDING=1 未清时查 SIZE（部分设备
+            // 返回 0）。改为先清 pending 再查，且用实际写入字节数兜底（永远可信）
+            val written = resolver.openOutputStream(uri)!!.use { out ->
                 if (isHls) downloadHls(context, task, headers, out)
                 else downloadDirect(task, headers, out)
             }
+            val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            resolver.update(uri, done, null, null)
             val size = runCatching {
                 resolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null)?.use {
                     if (it.moveToFirst()) it.getLong(0) else 0L
                 } ?: 0L
-            }.getOrDefault(0L)
-            val done = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
-            resolver.update(uri, done, null, null)
+            }.getOrDefault(0L).coerceAtLeast(written)
             return DownloadedVideo(
                 id = createdAt.toString(),
                 title = task.title,
@@ -277,8 +280,8 @@ object VideoDownloadManager {
         )
     }
 
-    /** HLS：解析清单 →（master 取子清单）→（AES-128 时下载密钥）→ 并发下载（解密）切片 → 顺序拼接写入 out */
-    private suspend fun downloadHls(context: Context, task: VideoTask, headers: Map<String, String>, out: java.io.OutputStream) {
+    /** HLS：解析清单 →（master 取子清单）→（AES-128 时下载密钥）→ 并发下载（解密）切片 → 顺序拼接写入 out。返回写出字节数 */
+    private suspend fun downloadHls(context: Context, task: VideoTask, headers: Map<String, String>, out: java.io.OutputStream): Long {
         var playlist = parseHlsPlaylist(httpGet(task.url, headers), task.url)
         if (playlist.segments.isEmpty() && playlist.masterChild != null) {
             val child = playlist.masterChild!!
@@ -293,10 +296,12 @@ object VideoDownloadManager {
             }
         }
         val tmp = tmpDir(context, task.url).apply { mkdirs() }
+        var written = 0L
         try {
             val semaphore = Semaphore(3)
             val total = segments.size
-            var done = 0
+            // v0.230：并发切片下 ++done 局部变量有竞态（丢计数、进度跳动/卡住）→ AtomicInteger
+            val done = java.util.concurrent.atomic.AtomicInteger()
             segments.mapIndexed { idx, seg ->
                 scope.async {
                     semaphore.withPermit {
@@ -319,18 +324,18 @@ object VideoDownloadManager {
                                 if (attempt == 2) throw lastErr ?: IOException("切片下载失败: $seg")
                             }
                         }
-                        val n = ++done
+                        val n = done.incrementAndGet()
                         active.update { it + (task.url to task.copy(progress = n.toFloat() / total)) }
                     }
                 }
             }.awaitAll()
-            segments.indices.forEach { idx -> File(tmp, "seg-%05d".format(idx)).inputStream().use { it.copyTo(out) } }
-        } finally {
-            if (jobs[task.url] == null || active.value[task.url]?.error != null) {
-                // 失败/取消时清临时片；成功路径由 cancel/正常结束统一清
+            segments.indices.forEach { idx ->
+                File(tmp, "seg-%05d".format(idx)).inputStream().use { written += it.copyTo(out) }
             }
+        } finally {
             tmp.deleteRecursively()
         }
+        return written
     }
 
     /** AES-128-CBC/PKCS5 解密：显式 IV 优先；无 IV 按 HLS 规范 = 媒体序号 64bit 大端 */
@@ -349,8 +354,10 @@ object VideoDownloadManager {
         return cipher.doFinal(data)
     }
 
-    /** mp4 等直链：流式拷贝 + 进度按字节比例 */
-    private fun downloadDirect(task: VideoTask, headers: Map<String, String>, out: java.io.OutputStream) {
+    /** mp4 等直链：流式拷贝 + 进度按字节比例。返回写出字节数。
+     *  服务器无 Content-Length（chunked，吃瓜直链常见）时 progress=-1（UI 转不确定圈）——
+     *  v0.230 修复「进度永远 0% 不动」：此前 total<=0 分支不更新进度 */
+    private fun downloadDirect(task: VideoTask, headers: Map<String, String>, out: java.io.OutputStream): Long {
         val req = buildRequest(task.url, headers).build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IOException("HTTP ${resp.code}")
@@ -363,10 +370,14 @@ object VideoDownloadManager {
                     if (n < 0) break
                     out.write(buf, 0, n)
                     copied += n
-                    if (total > 0) {
-                        active.update { it + (task.url to task.copy(progress = copied.toFloat() / total)) }
+                    if (copied % (1024 * 512) < buf.size) { // 每 ~512KB 刷一次进度，别把 StateFlow 刷爆
+                        val p = if (total > 0) copied.toFloat() / total else -1f
+                        active.update { it + (task.url to task.copy(progress = p)) }
                     }
                 }
+                val p = if (total > 0) copied.toFloat() / total else -1f
+                active.update { it + (task.url to task.copy(progress = p)) }
+                return copied
             }
         }
     }

@@ -659,6 +659,29 @@
   Content-Type+字节数；根路径 200 空 HTML 属边缘节点正常行为，此前误导了两轮）。
   版本：0.229/1229。
 
+- **v0.230（下载体验四连修 + 播放器数据源换 okhttp 栈，2026-10-16）**：
+  用户实测 0.229 反馈五点，逐一修复：
+  ①**下载完成显示 0B**：Q+ 路径在 IS_PENDING=1 未清时 query SIZE 部分设备返回 0 →
+  改为先清 pending 再查，且用 downloadHls/downloadDirect 的**实际写入字节数兜底**
+  （coerceAtLeast）——两下载函数改返回 Long。
+  ②**下载进度不动**：MP4 直链 chunked 无 Content-Length → total<=0 分支从不更新
+  progress（HLS 侧另有 ++done 并发竞态）→ 直链无长度时 progress=-1（UI 转不确定圈
+  「下载中…」），HLS 计数改 AtomicInteger；进度刷新节流 ~512KB/次防 StateFlow 刷爆。
+  ③**「有的视频点未缓冲位置卡住 + 下载失败」**：与 ①② 不同根因 = 切片域名系统 DNS
+  解析到的 CDN 节点**个别坏**（同域名有的视频好有的坏）。两处修：GeneralDohDns 改
+  **系统+DoH 合并解析**（okhttp 逐 IP 试连跳过坏节点，单 IP 代价一次握手超时）；播放器
+  数据源 DefaultHttpDataSource → **OkHttpDataSource + GeneralDohDns**（ExoPlayer 内建
+  HTTP 栈无法接自定义 DNS；headers/UA 改拦截器每请求动态读 PlayerSession.streamHeaders，
+  本地播放空表不受影响）。新增依赖 media3-datasource-okhttp:1.7.1。
+  ④**吃瓜列表返回后回到最新**：Navigation 返回普通 remember 重置 → 新增 MelonHomeCache
+  模块级单例（分类/关键词/列表/分页/loadedKey），fetch onSuccess 同步写缓存，重进恢复
+  现场且 loadedKey 命中不重载、LazyListState 恢复滚动位置。
+  ⑤**相关推荐移除**（用户要求）。
+  附：MelonDiag 真实图片探针补 IO 线程（上一轮 NetworkOnMainThreadException）。
+  「点击下载的视频打不开本地」playLocalVideo 本身正确（content:// + DefaultDataSource
+  的 ContentDataSource 可播）——疑与 0B 显示误导有关，待 0B 修复后用户复验。
+  版本：0.230/1230。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

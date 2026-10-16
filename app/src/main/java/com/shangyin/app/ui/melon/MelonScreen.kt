@@ -99,21 +99,34 @@ import kotlinx.coroutines.launch
  * 详情页按钮墙（.txt-apps）、横幅、播放器贴片全部不进 App。
  * 线路自动发现 + 探活 + 失效自动换线（着陆页解码出镜像列表）。
  */
+/** 吃瓜列表现场缓存（进程内）：保存分类/关键词/列表/分页锚点，返回再进原地继续 */
+private object MelonHomeCache {
+    var catPath: String = ""
+    var keyword: String = ""
+    var items: List<MelonPost> = emptyList()
+    var nextPath: String? = null
+    var loadedKey: String? = null
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MelonHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
 
-    var catPath by remember { mutableStateOf("") }      // ""=最新
-    var keyword by remember { mutableStateOf("") }      // 非空=搜索模式
+    // 列表现场缓存（v0.230）：Navigation 返回时普通 remember 全部重置 → 表现为
+    // 「从文章返回后回到最新」。模块级单例保存 (分类/关键词/列表/分页/已加载键)，
+    // 重进时先恢复现场，LaunchedEffect 的 loadedKey 比对命中即不重新加载，
+    // LazyListState（rememberSaveable 实现）恢复滚动位置 → 原地继续。
+    var catPath by remember { mutableStateOf(MelonHomeCache.catPath) }      // ""=最新
+    var keyword by remember { mutableStateOf(MelonHomeCache.keyword) }      // 非空=搜索模式
     var input by remember { mutableStateOf("") }
-    var items by remember { mutableStateOf<List<MelonPost>>(emptyList()) }
-    var nextPath by remember { mutableStateOf<String?>(null) }
+    var items by remember { mutableStateOf(MelonHomeCache.items) }
+    var nextPath by remember { mutableStateOf(MelonHomeCache.nextPath) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
-    var loadedKey by remember { mutableStateOf<String?>(null) }
+    var loadedKey by remember { mutableStateOf(MelonHomeCache.loadedKey) }
     val lastSeen = remember { MelonCache.last }
     // 列表状态须在 fetch 之前定义：reset 加载成功后要 scrollToItem(0) 回第一条
     val listState = rememberLazyListState()
@@ -133,6 +146,12 @@ fun MelonHomeScreen(nav: NavHostController) {
             // 重置加载（进模块/切分类/搜索/下拉刷新）后强制回到第一条：
             // 任何来源的历史滚动锚点（状态恢复/触底加载残留）都不该把首屏停在中间
             if (reset) listState.scrollToItem(0)
+            // 成功后同步现场缓存（返回再进不重载、不丢位置）
+            MelonHomeCache.catPath = catPath
+            MelonHomeCache.keyword = keyword
+            MelonHomeCache.items = items
+            MelonHomeCache.nextPath = nextPath
+            MelonHomeCache.loadedKey = "$catPath|$keyword"
         }.onFailure { e ->
             if (reset || next == null) items = emptyList()
             error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
@@ -702,31 +721,7 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
                             }
                         }
                     }
-                    if (d.related.isNotEmpty()) {
-                        item {
-                            Text(
-                                "相关推荐",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                            )
-                        }
-                        itemsIndexed(d.related) { _, r ->
-                            Text(
-                                r.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        nav.safeNavigate("melonDetail/${r.id}")
-                                    }
-                                    .padding(horizontal = 16.dp, vertical = 8.dp)
-                            )
-                        }
-                    }
+                    // v0.230：相关推荐已按用户要求移除（推荐位与正片无关且含导流内容）
                 }
 
                 // 全屏图片查看（含长按保存）

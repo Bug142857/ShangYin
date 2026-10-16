@@ -103,19 +103,20 @@ object PicDns : Dns {
 }
 
 /**
- * 通用 DNS（v0.227）：**系统 DNS 优先**（保留运营商就近调度），系统解析失败才走 DoH。
+ * 通用 DNS（v0.230）：**系统 + DoH 两路结果合并**，交给 okhttp 依次试连（连接失败
+ * 自动换下一个 IP，单 IP 代价仅一次握手超时）。
  *
- * v0.226 教训：下载器曾用「DoH 优先」——阿里 DoH 返回的是权威/全局节点而非本运营商
- * 调度节点，设备实测连上即被 reset（「下载 Connection reset 而同域名播放器正常」，
- * 播放器走系统 DNS）。切片域名的系统解析从未发现污染（污染的是图床域名），所以
- * 这里与播放器对齐：系统优先；DoH 只做系统解析抛异常时的兜底。
- * 图床域名走 [PicDns]（DoH 优先，那边的系统解析污染是实锤），两者策略刻意不同。
+ * 演进史：v0.226 DoH 优先（阿里 DoH 的全局节点非本运营商调度，设备实测连上即被
+ * reset）→ v0.227 改系统优先 → v0.230 实证「有的视频能播/能下、有的不行」是
+ * **CDN 多节点里个别节点对特定运营商网内不可达**：系统解析给的就近节点可能是坏的，
+ * 而 DoH 给的另一批节点是好的——单选哪一路都会踩坑，合并后坏节点被试连自然跳过。
  */
 object GeneralDohDns : Dns {
 
     override fun lookup(hostname: String): List<InetAddress> {
         val sys = runCatching { Dns.SYSTEM.lookup(hostname) }.getOrDefault(emptyList())
-        val ips = sys.ifEmpty { DohResolver.resolve(hostname) }.filterNot { it.isSiteLocalAddress }
+        val doh = DohResolver.resolve(hostname)
+        val ips = (sys + doh).distinct().filterNot { it.isSiteLocalAddress }
         if (ips.isEmpty()) throw java.net.UnknownHostException("域名解析失败: $hostname")
         return ips
     }

@@ -17,8 +17,8 @@ android {
         // 版本号规则（2026-09-22 用户指定）：versionName = 上一版 + 1（不补零），从 0.190 起
         // （不再读 git 提交次数——那条规则会因"每轮 2 个提交"而每次 +2）
         // ⚠️ versionCode 固定取 1000 + N（0.190 → 1190）：必须单调递增，否则系统拒绝覆盖安装
-        versionCode = 1229
-        versionName = "0.229"
+        versionCode = 1230
+        versionName = "0.230"
 
         // FFmpeg 解码扩展（NextLib）带了 4 个 ABI 的原生库：只保留真机在用的两个，控制体积
         ndk {
@@ -116,6 +116,7 @@ dependencies {
     // 1.7.1 是 NextLib 预编译 FFmpeg 扩展（nextlib-media3ext:1.7.1-0.9.0）所对应的 media3 版本，两者必须配套
     implementation("androidx.media3:media3-exoplayer:1.7.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.7.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.7.1")
     implementation("androidx.media3:media3-ui:1.7.1")
 
     // FFmpeg 软件解码扩展（NextLib，预编译 AAR）：系统没有 MP2（audio/mpeg-L2）等解码器的机型靠它出声

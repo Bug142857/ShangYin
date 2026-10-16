@@ -81,7 +81,7 @@ object MelonDiag {
             out.appendLine("okhttp: ${okPlain.await()}")
             out.appendLine("okhttp+Cookie: ${okCookie.await()}")
             out.appendLine("HttpConn: ${urlConnRes.await()}")
-            if (isPic) out.appendLine("真实图片: ${imageProbe()}")
+            if (isPic) out.appendLine("真实图片: ${async(Dispatchers.IO) { imageProbe() }.await()}")
         }
         out.appendLine("镜像: ${MelonClient.lastBase}  图床池: ${MelonClient.fallbackPicHosts("")}")
         out.appendLine("判读: 真实图片octet-stream=正常(CDN就这样标注); 真实图片text/html=风控/劫持; 403(/)=CDN对裸路径正常行为")
