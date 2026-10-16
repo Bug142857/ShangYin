@@ -24,6 +24,9 @@ object MediaFileStore {
     /** 书籍公共目录 */
     const val BOOK_RELATIVE = "Download/老郑分享/书籍/"
 
+    /** 视频公共目录（v0.225：与音乐/书籍统一） */
+    const val VIDEO_RELATIVE = "Download/老郑分享/视频/"
+
     /** 单个文件 */
     data class Entry(val name: String, val size: Long, val modified: Long)
 
@@ -45,6 +48,10 @@ object MediaFileStore {
     fun musicSummary(context: Context): Summary = summary(context, MUSIC_RELATIVE, musicAppDir(context))
 
     fun bookSummary(context: Context): Summary = summary(context, BOOK_RELATIVE, bookAppDir(context))
+
+    /** 视频目录摘要（v0.225；Android 8/9 私有目录与 VideoDownloadManager.videosDir 一致） */
+    fun videoSummary(context: Context): Summary =
+        summary(context, VIDEO_RELATIVE, File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: context.filesDir, "视频"))
 
     /** Android 8/9 音乐落盘目录（与 MusicDownloader 一致） */
     fun musicAppDir(context: Context): File =

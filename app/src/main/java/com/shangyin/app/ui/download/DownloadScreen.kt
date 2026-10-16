@@ -106,12 +106,15 @@ fun DownloadScreen(nav: NavHostController) {
         VideoDownloadManager.refresh(context)
     }
 
-    // 音乐 / 书籍：文件系统枚举（Android 10+ 走 MediaStore，8/9 走私有目录），IO 放后台线程
+    // 音乐 / 书籍 / 视频：文件系统枚举（Android 10+ 走 MediaStore，8/9 走私有目录），IO 放后台线程
     val music by produceState(MediaFileStore.EMPTY, context) {
         value = withContext(Dispatchers.IO) { MediaFileStore.musicSummary(context) }
     }
     val books by produceState(MediaFileStore.EMPTY, context) {
         value = withContext(Dispatchers.IO) { MediaFileStore.bookSummary(context) }
+    }
+    val videos by produceState(MediaFileStore.EMPTY, context) {
+        value = withContext(Dispatchers.IO) { MediaFileStore.videoSummary(context) }
     }
 
     // 漫画 / 本子按来源拆分：bika = 本子（独立目录），其余 = 漫画
@@ -149,6 +152,48 @@ fun DownloadScreen(nav: NavHostController) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(pad).fillMaxSize()
         ) {
+            // ---------- 视频（v0.225 置顶：下载进度与结果第一眼可见） ----------
+
+            item(key = "video-header") {
+                SectionHeader(
+                    "视频",
+                    "${videos.count} 个" +
+                        if (videos.count > 0) " · ${ComicDownloadStore.formatSize(videos.totalBytes)}" else ""
+                )
+            }
+            item(key = "video-dir") {
+                DirCard(
+                    title = PUBLIC_DIR_TITLE,
+                    path = videos.path,
+                    onClick = {
+                        if (videos.isPublic) openPublicDir(context, videos.path)
+                        else openPrivateDir(context, File(videos.path))
+                    }
+                )
+            }
+            if (videoTasks.isNotEmpty()) {
+                items(videoTasks.values.sortedBy { it.title }, key = { "video-task-${it.url}" }) { t ->
+                    VideoTaskCard(
+                        task = t,
+                        onCancel = { VideoDownloadManager.cancel(context, t.url) },
+                        onDismiss = { VideoDownloadManager.dismiss(t.url) }
+                    )
+                }
+            }
+            if (videoLibrary.isEmpty() && videoTasks.isEmpty()) {
+                item(key = "video-empty") {
+                    EmptyHint("还没有下载视频，播放器右上角点下载按钮试试（吃瓜/在线观影都支持）")
+                }
+            } else {
+                items(videoLibrary.sortedByDescending { it.createdAt }, key = { "video-${it.id}" }) { v ->
+                    VideoRow(
+                        video = v,
+                        onPlay = { playLocalVideo(nav, v) },
+                        onDelete = { pendingVideoDelete = v }
+                    )
+                }
+            }
+
             // 下载中（保持原有功能）
             if (tasks.isNotEmpty()) {
                 item(key = "tasks-header") {
@@ -242,46 +287,6 @@ fun DownloadScreen(nav: NavHostController) {
                     else openPrivateDir(context, MediaFileStore.bookAppDir(context))
                 }
             )
-
-            // ---------- 视频（v0.224：播放器右上角下载按钮 → 存这里，可离线播放） ----------
-
-            item(key = "video-header") {
-                SectionHeader(
-                    "视频",
-                    "${videoLibrary.size} 个" +
-                        if (videoLibrary.isNotEmpty())
-                            " · ${ComicDownloadStore.formatSize(videoLibrary.sumOf { it.sizeBytes })}" else ""
-                )
-            }
-            item(key = "video-dir") {
-                DirCard(
-                    title = PRIVATE_DIR_TITLE,
-                    path = remember { VideoDownloadManager.dirInfo(context) },
-                    onClick = { openPrivateDir(context, VideoDownloadManager.videosDir(context)) }
-                )
-            }
-            if (videoTasks.isNotEmpty()) {
-                items(videoTasks.values.toList(), key = { "video-task-${it.url}" }) { t ->
-                    VideoTaskCard(
-                        task = t,
-                        onCancel = { VideoDownloadManager.cancel(context, t.url) },
-                        onDismiss = { VideoDownloadManager.dismiss(t.url) }
-                    )
-                }
-            }
-            if (videoLibrary.isEmpty() && videoTasks.isEmpty()) {
-                item(key = "video-empty") {
-                    EmptyHint("还没有下载视频，播放器右上角点下载按钮试试（吃瓜/在线观影都支持）")
-                }
-            } else {
-                items(videoLibrary.asReversed(), key = { "video-${it.id}" }) { v ->
-                    VideoRow(
-                        video = v,
-                        onPlay = { playLocalVideo(nav, v) },
-                        onDelete = { pendingVideoDelete = v }
-                    )
-                }
-            }
         }
     }
 
@@ -371,8 +376,9 @@ fun DownloadScreen(nav: NavHostController) {
     }
 }
 
-/** 播放本地已下载视频：file:// 塞进 PlayerSession 复用播放页（DefaultDataSource 支持 file） */
+/** 播放本地已下载视频：content://（Q+ 公共目录）或 file://（8/9 私有目录）塞进 PlayerSession 复用播放页 */
 private fun playLocalVideo(nav: NavHostController, v: DownloadedVideo) {
+    val playUri = if (v.location.startsWith("content:")) v.location else "file://" + v.location
     PlayerSession.itemId = -1L
     PlayerSession.title = v.title
     PlayerSession.sourceName = "本地下载"
@@ -385,7 +391,7 @@ private fun playLocalVideo(nav: NavHostController, v: DownloadedVideo) {
     PlayerSession.groupIndex = 0
     PlayerSession.startIndex = 0
     PlayerSession.groups = listOf(
-        VodPlayGroup("本地", listOf(VodEpisode(v.title, "file://" + v.filePath)))
+        VodPlayGroup("本地", listOf(VodEpisode(v.title, playUri)))
     )
     nav.navigate("player")
 }

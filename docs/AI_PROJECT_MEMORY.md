@@ -552,6 +552,32 @@
   StateFlow 并发更新用 `.update{}`；okhttp Request.Builder 忘 .build() 编译器报类型错。
   版本：0.224/1224。
 
+- **v0.225（装机反馈六连修：图片DoH优先 + seek自愈 + 下载体验 + AES解密，2026-10-16）**：
+  用户装 0.224 反馈六点。实测与修复：
+  ①**图片（第四轮）**：本地实测图床全组合（UA×Referer）均 200、域名未变 → 设备端「图片全挂」
+  唯一合理解释 = **运营商 DNS 污染（解析成功但 IP 不可达）**——0.224 的 DoH 只在系统解析**抛异常**
+  时触发，此场景永远不触发。修复：PicDns 改为**图床域名强制 DoH 优先**（阿里 223.5.5.5 拿腾讯 CDN
+  真实 IP，多 IP 交 okhttp 依次连），系统解析降为回退。若 0.225 后图片仍全挂 → 运营商层面封 CDN，
+  下一步只能做镜像中转（暂不做）。
+  ②**seek 卡住**：实测定案 = 吃瓜视频是 **AES-128 加密 TS 切片流**（hls.tpbbwcc.cn → mts.hhjd.mobi，
+  71 片×5s，auth_key 签名切片）。慢源下 seek 后重新拉切片长时间 STATE_BUFFERING = 画面卡住。
+  修复：**缓冲自愈**——监听 STATE_BUFFERING 超 10s 自动原地重 seek（重新触发切片加载，等价
+  「再点一下当前进度」），每 2s 轮询一次；CLOSEST_SYNC 保留。
+  ③**下载确认**：下载按钮点击先弹 AlertDialog（显示保存位置说明），确认后才 start。
+  ④**进度可见**：下载管理「视频」节**移到页面最顶**（任务卡带进度条/百分比/取消/失败移除）；
+  完成/失败发应用级 Toast（Handler 主线程，无需通知权限）。
+  ⑤**目录统一**：视频从应用私有外存改为**公共目录 Download/老郑分享/视频/**（MediaStore.Downloads
+  RELATIVE_PATH，MIME video/mp2t，文件管理器可见；8/9 私有兜底）。DownloadedVideo.filePath →
+  location（content:// 或绝对路径）+ displayPath；播放 content 原样、file 加前缀；删除走
+  resolver.delete；MediaFileStore 加 VIDEO_RELATIVE/videoSummary。记录刷新时校验存在性。
+  ⑥**AES-128 解密下载**：实测清单有显式 IV → parseHlsSegments 抛异常方案废弃，改
+  **parseHlsPlaylist 返回结构化 HlsPlaylist(key, segments, masterChild)**；下载 key（16B）→
+  aesDecrypt（AES/CBC/PKCS5Padding；无显式 IV 按 HLS 规范用媒体序号大端）→ 解密后切片拼接。
+  master 清单（#EXT-X-STREAM-INF）解析出子清单地址重解析。测试 +5 共 25 用例全绿（AES
+  round-trip 测试注意：加密端 IV 必须与 ivHex 一致，第一版测试加密用零 IV 解密传非零 IV 必然失败）。
+  交付坑：suspend 函数链（awaitAll 宿主）整链要 suspend；StateFlow 并发更新用 .update{}。
+  版本：0.225/1225。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

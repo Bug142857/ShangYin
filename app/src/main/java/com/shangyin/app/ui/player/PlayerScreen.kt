@@ -43,6 +43,7 @@ import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -150,6 +151,8 @@ fun PlayerScreen(nav: NavHostController) {
     val groups = PlayerSession.groups
     // 直播模式：不记忆进度、不显示选集/线路/倍速（由里世界「电视」模块进入）
     val isLive = PlayerSession.isLive
+    // 下载确认弹窗（v0.225）：title to url；null = 不显示
+    var pendingDownload by remember { mutableStateOf<Pair<String, String>?>(null) }
     var groupIndex by remember {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
     }
@@ -520,6 +523,31 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
+    // seek 缓冲自愈（v0.225）：点进度条跳到未缓冲区后，慢源/签名切片地址下重新拉切片
+    // 可能长时间卡在 STATE_BUFFERING（TS 加密流尤其如此，用户实测"选进度后画面卡住"）。
+    // 缓冲超 10s 自动原地重 seek（重新触发切片加载，等价"再点一下当前进度"），多数直接恢复。
+    var bufferingSince by remember { mutableLongStateOf(0L) }
+    DisposableEffect(player) {
+        val l = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                bufferingSince = if (playbackState == Player.STATE_BUFFERING) System.currentTimeMillis() else 0L
+            }
+        }
+        player.addListener(l)
+        onDispose { player.removeListener(l) }
+    }
+    LaunchedEffect(player) {
+        while (true) {
+            delay(2000)
+            if (!isLive && bufferingSince > 0 &&
+                System.currentTimeMillis() - bufferingSince > 10_000
+            ) {
+                player.seekTo(player.currentPosition)
+                bufferingSince = System.currentTimeMillis() // 重置计时避免无限循环
+            }
+        }
+    }
+
     // 倍速应用
     LaunchedEffect(speed) {
         player.setPlaybackSpeed(speed)
@@ -689,7 +717,7 @@ fun PlayerScreen(nav: NavHostController) {
                                 )
                             }
                             Row {
-                                // 下载当前视频（v0.224，非直播）：HLS 切片合并 / mp4 直链拷贝
+                                // 下载当前视频（v0.225）：先确认再下载（用户反馈不要静默开下）
                                 if (!isLive) {
                                     IconButton(
                                         onClick = {
@@ -704,14 +732,7 @@ fun PlayerScreen(nav: NavHostController) {
                                                 val label = if ((eps?.size ?: 0) > 1)
                                                     "${PlayerSession.title} ${ep.name}".trim()
                                                 else PlayerSession.title.ifBlank { "视频" }
-                                                com.shangyin.app.data.download.VideoDownloadManager.start(
-                                                    context, label, url, PlayerSession.streamHeaders
-                                                )
-                                                Toast.makeText(
-                                                    context,
-                                                    "已开始下载「$label」，可在「我的下载 → 视频」查看",
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
+                                                pendingDownload = label to url
                                             }
                                         },
                                         modifier = Modifier
@@ -1197,5 +1218,31 @@ fun PlayerScreen(nav: NavHostController) {
                 }
             }
         }
+    }
+
+    // 下载确认弹窗（v0.225）：用户反馈"点下载没询问就直接下载了"
+    pendingDownload?.let { (dlTitle, dlUrl) ->
+        AlertDialog(
+            onDismissRequest = { pendingDownload = null },
+            title = { Text("下载视频") },
+            text = {
+                Text(
+                    "「$dlTitle」\n\n下载后将保存到「下载管理 → 视频」（Download/老郑分享/视频/），" +
+                        "已加密的切片会自动解密合并为本地文件，可离线播放。\n\n确定开始下载吗？"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.shangyin.app.data.download.VideoDownloadManager.start(
+                        context, dlTitle, dlUrl, PlayerSession.streamHeaders
+                    )
+                    Toast.makeText(context, "已开始下载，可在「我的下载 → 视频」查看进度", Toast.LENGTH_SHORT).show()
+                    pendingDownload = null
+                }) { Text("开始下载") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDownload = null }) { Text("取消") }
+            }
+        )
     }
 }

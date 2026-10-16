@@ -1,18 +1,17 @@
 package com.shangyin.app
 
-import com.shangyin.app.data.download.parseHlsMaster
-import com.shangyin.app.data.download.parseHlsSegments
+import com.shangyin.app.data.download.VideoDownloadManager
+import com.shangyin.app.data.download.parseHlsPlaylist
 import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.melon.adoptedBase
 import com.shangyin.app.data.melon.demoted
 import com.shangyin.app.data.melon.extractMelonPicHosts
 import com.shangyin.app.data.melon.mergePicHosts
 import okhttp3.Request
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertThrows
 import org.junit.Test
-import java.io.IOException
 
 /**
  * [rewriteImageRequest] 回归测试（TDD 试点，v0.222 轮引入）。
@@ -224,53 +223,84 @@ class ImageRequestRewriteTest {
         assertEquals(emptyList<String>(), demoted(emptyList(), "a"))
     }
 
-    // ---- HLS 解析（v0.224 视频下载）----
+    // ---- HLS 解析（v0.225 视频下载：结构化清单 + AES-128 解密）----
 
     @Test
-    fun parse_hls_segments_relative_and_absolute() {
+    fun parse_hls_playlist_segments_and_key() {
+        // 结构来自 2026-10-16 实测的吃瓜视频清单（AES-128 + 显式 IV + 绝对切片地址）
         val m3u8 = """
             #EXTM3U
+            #EXT-X-WJ-T:-0
             #EXT-X-VERSION:3
-            #EXTINF:9.5,
-            seg-1.ts
-            #EXTINF:9.0,
-            ./seg-2.ts
-            #EXTINF:8.0,
-            https://cdn.other.cc/seg-3.ts
+            #EXT-X-KEY:METHOD=AES-128,URI="https://mts.hhjd.mobi/videos5/x/crypt.key?auth_key=1",IV=0x84c4e341735f20781f6ebf73a7de1aad
+            #EXT-X-MEDIA-SEQUENCE:0
+            #EXT-X-TARGETDURATION:5
+            #EXTINF:5.000,
+            https://mts.hhjd.mobi/videos5/x/v0.ts?auth_key=a
+            #EXTINF:5.000,
+            https://mts.hhjd.mobi/videos5/x/v1.ts?auth_key=b
             #EXT-X-ENDLIST
         """.trimIndent()
+        val p = parseHlsPlaylist(m3u8, "https://hls.tpbbwcc.cn/videos5/x/index.m3u8")
+        assertEquals(2, p.segments.size)
+        assertEquals("https://mts.hhjd.mobi/videos5/x/crypt.key?auth_key=1", p.key?.uri)
+        assertEquals("0x84c4e341735f20781f6ebf73a7de1aad", p.key?.ivHex)
+    }
+
+    @Test
+    fun parse_hls_playlist_without_key_has_null_key() {
+        val p = parseHlsPlaylist("#EXTM3U\n#EXTINF:9.5,\nseg-1.ts", "https://a.cc/v.m3u8")
+        assertNull(p.key)
+        assertEquals(listOf("https://a.cc/seg-1.ts"), p.segments)
+    }
+
+    @Test
+    fun parse_hls_playlist_relative_segments_resolve() {
+        val p = parseHlsPlaylist(
+            "#EXTM3U\n#EXTINF:9.0,\n./seg-2.ts\n#EXTINF:8.0,\nhttps://cdn.other.cc/seg-3.ts",
+            "https://a.cc/hls/video/index.m3u8?sign=abc"
+        )
         assertEquals(
-            listOf(
-                "https://pic.mmcdns.cc/hls/video/seg-1.ts",
-                "https://pic.mmcdns.cc/hls/video/seg-2.ts",
-                "https://cdn.other.cc/seg-3.ts"
-            ),
-            parseHlsSegments(m3u8, "https://pic.mmcdns.cc/hls/video/index.m3u8?sign=abc")
+            listOf("https://a.cc/hls/video/seg-2.ts", "https://cdn.other.cc/seg-3.ts"),
+            p.segments
         )
     }
 
     @Test
-    fun parse_hls_segments_rejects_aes128() {
-        val m3u8 = """
-            #EXTM3U
-            #EXT-X-KEY:METHOD=AES-128,URI="key.key"
-            #EXTINF:9.5,
-            seg-1.ts
-        """.trimIndent()
-        assertThrows(IOException::class.java) { parseHlsSegments(m3u8, "https://a.cc/v.m3u8") }
+    fun aes_decrypt_roundtrip() {
+        val key = "0123456789abcdef".toByteArray() // 16B
+        val ivHex = "0x84c4e341735f20781f6ebf73a7de1aad"
+        // 加密与解密必须用同一 IV：由 ivHex 构造加密端 IV（模拟站点切片加密）
+        val ivBytes = ByteArray(16).also { b ->
+            val h = ivHex.removePrefix("0x")
+            for (i in 0 until 16) b[i] = ((h[i * 2].digitToInt(16) shl 4) or h[i * 2 + 1].digitToInt(16)).toByte()
+        }
+        val plain = ByteArray(188 * 4) { (it % 251).toByte() } // 模拟 TS 切片（188 倍数）
+        val c = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        c.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(key, "AES"),
+            javax.crypto.spec.IvParameterSpec(ivBytes)
+        )
+        val encrypted = c.doFinal(plain)
+        // 显式 IV 解密还原
+        val decrypted = VideoDownloadManager.aesDecrypt(encrypted, key, ivHex, 0)
+        assertArrayEquals(plain, decrypted)
     }
 
     @Test
-    fun parse_hls_master_picks_child_playlist() {
-        val master = """
-            #EXTM3U
-            #EXT-X-STREAM-INF:BANDWIDTH=1280000
-            720p.m3u8
-            #EXT-X-STREAM-INF:BANDWIDTH=640000
-            480p.m3u8
-        """.trimIndent()
-        assertEquals("https://a.cc/v/720p.m3u8", parseHlsMaster(master, "https://a.cc/v/index.m3u8"))
-        // 普通媒体清单不是 master
-        assertNull(parseHlsMaster("#EXTM3U\n#EXTINF:9.5,\nseg-1.ts", "https://a.cc/v.m3u8"))
+    fun aes_decrypt_default_iv_uses_sequence() {
+        // 无显式 IV：按 HLS 规范 IV = 64bit 媒体序号大端（sequence=3 → 高 8 字节最后一位 0x03）
+        val key = "0123456789abcdef".toByteArray()
+        val seqIv = ByteArray(16).also { it[15] = 3 }
+        val c = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        c.init(
+            javax.crypto.Cipher.ENCRYPT_MODE,
+            javax.crypto.spec.SecretKeySpec(key, "AES"),
+            javax.crypto.spec.IvParameterSpec(seqIv)
+        )
+        val encrypted = c.doFinal(ByteArray(376) { 7 })
+        val decrypted = VideoDownloadManager.aesDecrypt(encrypted, key, null, 3)
+        assertArrayEquals(ByteArray(376) { 7 }, decrypted)
     }
 }
