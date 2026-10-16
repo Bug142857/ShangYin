@@ -1,6 +1,8 @@
 package com.shangyin.app
 
 import com.shangyin.app.data.komiic.KomiicClient
+import com.shangyin.app.data.melon.extractMelonPicHosts
+import com.shangyin.app.data.melon.mergePicHosts
 import okhttp3.Request
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -106,5 +108,61 @@ class ImageRequestRewriteTest {
         assertEquals(req.url, out.url)
         assertNull(out.header("Referer"))
         assertNull(out.header("User-Agent"))
+    }
+
+    // ---- 吃瓜图床 fallback 域名替换（v0.222：设备直连图床不可达 → 换域名重试，路径通用）----
+
+    @Test
+    fun swap_pic_host_keeps_path_and_query() {
+        val req = get("https://pic.jtzatly.cn/upload_01/x/2026.jpeg?v=2")
+        val out = swapMelonPicHost(req, "pic.ndhixj.cn")
+        assertEquals("pic.ndhixj.cn", out!!.url.host)
+        assertEquals("/upload_01/x/2026.jpeg", out.url.encodedPath)
+        assertEquals("2", out.url.queryParameter("v"))
+    }
+
+    @Test
+    fun swap_pic_host_rejects_non_pic_host() {
+        // pic.example.com 不匹配 pic.{词}.cn 模式，绝不能被换域（防误伤其它站点图片）
+        val req = get("https://pic.example.com/a.jpg")
+        assertNull(swapMelonPicHost(req, "pic.ndhixj.cn"))
+    }
+
+    @Test
+    fun extract_pic_hosts_from_html_dedup() {
+        // 站点实测（2026-10-15）图床 URL 均为完整 https://（loadBannerDirect / data-* 属性）
+        val html = """
+            <script>loadBannerDirect('https://pic.jtzatly.cn/a.jpeg', 1)</script>
+            <img data-x="https://pic.jtzatly.cn/b.png" src="https://pic.ndhixj.cn/c.gif">
+            <p>https://pic.jtzatly.cn/a.jpeg</p>
+        """.trimIndent()
+        assertEquals(listOf("pic.jtzatly.cn", "pic.ndhixj.cn"), extractMelonPicHosts(html))
+    }
+
+    @Test
+    fun extract_pic_hosts_ignores_non_pic_and_plain_words() {
+        val html = "https://cdn.example.com/a.jpg pic.fake.cn img.picabc.com https://pic.abc.cn:8080/x.jpg"
+        // pic.fake.cn 无协议不算；img.picabc.com 非 pic.{词}.cn 形态；pic.abc.cn 带端口路径也提取 host
+        assertEquals(listOf("pic.abc.cn"), extractMelonPicHosts(html))
+    }
+
+    @Test
+    fun merge_pic_hosts_puts_new_found_first_and_dedups() {
+        val merged = mergePicHosts(
+            existing = listOf("pic.ndhixj.cn", "pic.old.cn"),
+            found = listOf("pic.jtzatly.cn", "pic.ndhixj.cn")
+        )
+        assertEquals(listOf("pic.jtzatly.cn", "pic.ndhixj.cn", "pic.old.cn"), merged)
+    }
+
+    @Test
+    fun merge_pic_hosts_capped_and_keeps_existing_when_nothing_found() {
+        val merged = mergePicHosts(
+            existing = listOf("pic.a.cn", "pic.b.cn", "pic.c.cn", "pic.d.cn", "pic.e.cn"),
+            found = listOf("pic.f.cn")
+        )
+        // 上限 5：新发现的最前，末尾旧的被挤掉
+        assertEquals(listOf("pic.f.cn", "pic.a.cn", "pic.b.cn", "pic.c.cn", "pic.d.cn"), merged)
+        assertEquals(listOf("pic.a.cn"), mergePicHosts(listOf("pic.a.cn"), emptyList()))
     }
 }

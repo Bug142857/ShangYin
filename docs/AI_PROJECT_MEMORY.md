@@ -484,6 +484,27 @@
   ⑤ 跑法：`$env:JAVA_HOME=C:\Users\62496\.local\share\rea-tools\jdk-21.0.12.1+1; .\gradlew.bat testDebugUnitTest`。
   ⚠️ 规矩：涉及 app/ 源码的 bug 修复，先写失败测试复现再修；下轮发版 code-review 固定点含本次改动。
 
+- **v0.222（吃瓜三连修：图片fallback + 回顶 + 分类统一，2026-10-16）**：
+  用户反馈：①进去停在列表中间 ②分类与游戏模块不统一 ③封面图/正文图全看不到。
+  ①**图片根因（实测推翻 v0.221 方向）**：解析层完好（封面 47 个 `loadBannerDirect`、正文
+  `data-xkrkllgl` 均正常）、图床无防盗链（裸请求也 200）。真根因 = **图床域名频繁轮换**
+  （`pic.ndhixj.cn` → `pic.jtzatly.cn`），设备上 0.221 的 `*.ndhixj.cn` 拦截分支对新图床完全不生效，
+  且设备直连当前图床可能不可达（域名频繁轮换本身就说明经常被打死；本机测试全走代理 fake-ip，
+  无法复现设备端）。**关键实测：新旧图床回源同一存储、同路径同字节 200 → 域名可互换**。
+  修复：MelonClient 每次页面请求自动收集 HTML 里的图床域名进候选池（新发现排最前、去重、上限 5，
+  初始含历史图床 `pic.ndhixj.cn` 兜底）；App.kt 拦截器对 `pic.{词}.cn` 请求失败（异常/非 2xx）自动
+  换域名重试（最多 2 个备选，per-call `chain.call().timeout()` 限时 6s，okhttp 4.12 无
+  `Chain.withCallTimeout`，用 okio Timeout 设置）。纯函数：`extractMelonPicHosts`（须带协议 +
+  negative lookahead 防子域误提取）/`mergePicHosts`/`swapMelonPicHost`（path/query 保留，
+  非 pic 域名返回 null 绝不换域），测试 15 用例全绿（+6）。
+  ②**回顶**：`fetch(reset=true)` 成功后 `listState.scrollToItem(0)`（进模块/切分类/搜索/下拉刷新
+  都回第一条；`rememberLazyListState` 提前到 fetch 之前定义）。触底翻页不 reset 不受影响。
+  ③**分类统一**：删 `DropdownMenu` 下拉，改为游戏模块同款——收起=横滑 chips 行+ArrowDropDown，
+  展开=「全部分类」+ArrowDropUp+`FlowRow`+`heightIn(max=260.dp)`；搜索态=「关键词的搜索结果」+
+  返回浏览按钮。catExpanded 用 `rememberSaveable`。
+  **⚠️ 发版流程变更（2026-10-16 用户指定）：不再跑 code-review，完成后直接升版本号编译发版 + APK 拷桌面**。
+  版本：0.222/1222。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

@@ -138,8 +138,36 @@ class App : Application(), ImageLoaderFactory {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .addInterceptor { chain ->
+                val req = chain.request()
                 // 图片请求改写逻辑已抽出为纯函数 rewriteImageRequest（见文件末尾），便于单元测试
-                chain.proceed(rewriteImageRequest(chain.request()))
+                val out = rewriteImageRequest(req)
+                // 吃瓜图床：域名频繁轮换 + 设备直连当前图床可能不可达（v0.220/0.221 时代
+                // 「图全挂」的根因，实测 Referer/UA 均无防盗链）。新旧图床回源同一存储、
+                // 路径通用 → 失败自动换域名重试（候选来自页面解析自动收集，见 MelonClient）。
+                if (out.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
+                    // 图床单图失败就换域，per-call 限时 6s，避免一张图卡死整个列表
+                    chain.call().timeout().timeout(6, TimeUnit.SECONDS)
+                    var lastErr: java.io.IOException? = null
+                    try {
+                        val resp = chain.proceed(out)
+                        if (resp.isSuccessful) return@addInterceptor resp
+                        resp.close()
+                    } catch (e: java.io.IOException) {
+                        lastErr = e
+                    }
+                    for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(out.url.host)) {
+                        val retry = swapMelonPicHost(out, h) ?: continue
+                        try {
+                            val resp = chain.proceed(retry)
+                            if (resp.isSuccessful) return@addInterceptor resp
+                            resp.close()
+                        } catch (e: java.io.IOException) {
+                            lastErr = e
+                        }
+                    }
+                    throw lastErr ?: java.io.IOException("吃瓜图床加载失败")
+                }
+                chain.proceed(out)
             }
             .build()
     }
@@ -247,7 +275,7 @@ internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonC
                     .build()
             } else req
         } ?: req
-    } else if (host.matches(Regex("pic\\.[a-z]+\\.cn"))) {
+    } else if (req.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
         // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）。
         // 图床域名会轮换（pic.ndhixj.cn → pic.jtzatly.cn，均为 pic.{词}.cn 模式），按模式匹配而非硬编码；
         // 2026-10-15 实测当前图床暂无防盗链，此分支为防御性保留。
@@ -257,4 +285,16 @@ internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonC
             .header("User-Agent", com.shangyin.app.data.melon.MelonClient.UA)
             .build()
     } else req
+}
+
+/**
+ * 吃瓜图床 fallback 域名替换（v0.222）：把 pic.{词}.cn 请求整体换到备用图床域名，
+ * path/query 原样保留（实测新旧图床同源存储、路径通用）。host 不匹配图床形态时返回 null
+ * ——绝不允许换域逻辑波及其它站点的图片请求。
+ */
+internal fun swapMelonPicHost(req: Request, newHost: String): Request? {
+    if (!req.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) return null
+    return req.newBuilder()
+        .url(req.url.newBuilder().host(newHost).build())
+        .build()
 }

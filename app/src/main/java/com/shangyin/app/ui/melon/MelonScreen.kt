@@ -8,12 +8,15 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,18 +27,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -45,6 +48,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -54,6 +58,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -94,7 +99,7 @@ import kotlinx.coroutines.launch
  * 详情页按钮墙（.txt-apps）、横幅、播放器贴片全部不进 App。
  * 线路自动发现 + 探活 + 失效自动换线（着陆页解码出镜像列表）。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MelonHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
@@ -110,6 +115,8 @@ fun MelonHomeScreen(nav: NavHostController) {
     var refreshing by remember { mutableStateOf(false) }
     var loadedKey by remember { mutableStateOf<String?>(null) }
     val lastSeen = remember { MelonCache.last }
+    // 列表状态须在 fetch 之前定义：reset 加载成功后要 scrollToItem(0) 回第一条
+    val listState = rememberLazyListState()
 
     suspend fun fetch(reset: Boolean, next: String? = null) {
         runCatching {
@@ -123,6 +130,9 @@ fun MelonHomeScreen(nav: NavHostController) {
             items = (if (reset || next == null) page.items else items + page.items)
                 .distinctBy { it.id }
             nextPath = page.nextPath
+            // 重置加载（进模块/切分类/搜索/下拉刷新）后强制回到第一条：
+            // 任何来源的历史滚动锚点（状态恢复/触底加载残留）都不该把首屏停在中间
+            if (reset) listState.scrollToItem(0)
         }.onFailure { e ->
             if (reset || next == null) items = emptyList()
             error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
@@ -149,7 +159,6 @@ fun MelonHomeScreen(nav: NavHostController) {
     }
 
     // 触底自动加载更多（倒数第 4 个条目进入可视区）
-    val listState = rememberLazyListState()
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
             .map { idx -> items.isNotEmpty() && idx >= items.size - 3 }
@@ -202,49 +211,79 @@ fun MelonHomeScreen(nav: NavHostController) {
                     keyword = input.trim()
                 })
             )
-            // 分类下拉（类目多，横滑费事 → 下拉一次看全）
-            var catExpanded by remember { mutableStateOf(false) }
-            val currentCat = MelonClient.CATEGORIES.first { it.path == catPath }
-            Box(Modifier.padding(horizontal = 16.dp, vertical = 2.dp)) {
-                FilterChip(
-                    selected = catPath.isNotEmpty() && keyword.isBlank(),
-                    onClick = { catExpanded = true },
-                    label = {
-                        Text(
-                            if (keyword.isNotBlank()) "搜索：$keyword" else "分类：${currentCat.name}",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    },
-                    trailingIcon = {
-                        Icon(
-                            Icons.Rounded.ArrowDropDown,
-                            contentDescription = "选择分类",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                )
-                DropdownMenu(
-                    expanded = catExpanded,
-                    onDismissRequest = { catExpanded = false }
+            // 分类：与游戏模块同款——收起=横滑一行 + 下拉箭头；展开=换行 chips（限高可滚）
+            var catExpanded by rememberSaveable { mutableStateOf(false) }
+            if (keyword.isNotBlank()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MelonClient.CATEGORIES.forEach { c ->
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    c.name,
-                                    fontWeight = if (c.path == catPath && keyword.isBlank())
-                                        FontWeight.Bold else null
-                                )
-                            },
-                            onClick = {
-                                catExpanded = false
-                                if (c.path != catPath || keyword.isNotBlank()) {
-                                    keyword = ""
-                                    input = ""
-                                    catPath = c.path
-                                }
-                            }
+                    Text(
+                        "「$keyword」的搜索结果",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { input = ""; keyword = "" }) { Text("返回浏览") }
+                }
+            } else if (!catExpanded) {
+                Row(
+                    Modifier.padding(start = 12.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState())
+                    ) {
+                        MelonClient.CATEGORIES.forEach { c ->
+                            FilterChip(
+                                selected = catPath == c.path,
+                                onClick = { catPath = c.path },
+                                label = { Text(c.name) },
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                        }
+                    }
+                    IconButton(onClick = { catExpanded = true }) {
+                        Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开分类")
+                    }
+                }
+            } else {
+                Column(
+                    Modifier
+                        .padding(horizontal = 12.dp, vertical = 2.dp)
+                        .heightIn(max = 260.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "全部分类",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
                         )
+                        IconButton(onClick = { catExpanded = false }) {
+                            Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起分类")
+                        }
+                    }
+                    FlowRow(
+                        Modifier
+                            .verticalScroll(rememberScrollState())
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        MelonClient.CATEGORIES.forEach { c ->
+                            FilterChip(
+                                selected = catPath == c.path,
+                                onClick = { catPath = c.path; catExpanded = false },
+                                label = { Text(c.name) }
+                            )
+                        }
                     }
                 }
             }

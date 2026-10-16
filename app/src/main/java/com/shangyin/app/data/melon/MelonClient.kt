@@ -114,6 +114,25 @@ object MelonClient {
     var lastBase: String = FALLBACK_BASES.first()
         private set
 
+    /**
+     * 吃瓜图床域名池（v0.222）：页面解析时自动收集，新发现排最前，上限 5。
+     * 图床域名频繁轮换（pic.ndhixj.cn → pic.jtzatly.cn），设备直连当前图床可能不可达
+     * ——实测新旧图床回源同一存储、路径通用，加载失败时可换域名重试（App.kt 拦截器调用）。
+     * 初始含历史图床兜底（根路径实测仍 200）。
+     */
+    @Volatile
+    private var picHosts: List<String> = listOf("pic.ndhixj.cn")
+
+    /** fallback 用：除当前域名外的候选图床域名（最多取 2 个，避免单图重试拖太久） */
+    fun fallbackPicHosts(current: String): List<String> =
+        picHosts.filter { it != current }.take(2)
+
+    /** 页面 HTML 到手后顺手收集图床域名（线程安全：整体替换快照） */
+    private fun collectPicHosts(html: String) {
+        val found = extractMelonPicHosts(html)
+        if (found.isNotEmpty()) picHosts = mergePicHosts(picHosts, found)
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -217,6 +236,7 @@ object MelonClient {
                 val url = if (path.startsWith("http")) path else "$base$path"
                 val html = httpGet(url)
                 if (html.isBlank()) throw IOException("站点返回空内容")
+                collectPicHosts(html) // 顺手收集页面里的图床域名（图片 fallback 候选）
                 return@withContext Jsoup.parse(html, url)
             } catch (e: HttpError) {
                 if (e.code != 403 && e.code !in 500..599) throw e
@@ -357,4 +377,28 @@ object MelonClient {
         }
         return null
     }
+}
+
+/** 吃瓜图床域名形态（host 整体匹配，App.kt 拦截器与 [extractMelonPicHosts] 共用同一语义） */
+val MELON_PIC_HOST = Regex("""pic\.[a-z0-9-]+\.cn""", RegexOption.IGNORE_CASE)
+
+/** HTML 提取边界：URL 后面不能再跟域名/路径字符，防 "pic.abc.cn.evil.com" 这类子域误提取 */
+private val PIC_HOST_IN_HTML = Regex(
+    """https?://pic\.[A-Za-z0-9-]+\.cn(?![A-Za-z0-9.-])""",
+    RegexOption.IGNORE_CASE
+)
+
+/** 从页面 HTML 提取吃瓜图床域名（pic.{词}.cn，必须带协议防普通文本误伤；按出现顺序去重） */
+fun extractMelonPicHosts(html: String): List<String> =
+    PIC_HOST_IN_HTML.findAll(html)
+        .map { it.value.substringAfter("//").lowercase() }
+        .distinct()
+        .toList()
+
+/** 合并图床域名池：新发现排最前（最新鲜），去重，上限 5 个 */
+fun mergePicHosts(existing: List<String>, found: List<String>): List<String> {
+    val merged = ArrayList<String>(existing.size + found.size)
+    found.forEach { if (it !in merged) merged.add(it) }
+    existing.forEach { if (it !in merged) merged.add(it) }
+    return merged.take(5)
 }
