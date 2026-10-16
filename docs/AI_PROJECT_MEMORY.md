@@ -578,6 +578,30 @@
   交付坑：suspend 函数链（awaitAll 宿主）整链要 suspend；StateFlow 并发更新用 .update{}。
   版本：0.225/1225。
 
+- **v0.226（装机反馈三连修定案：Coil缓存污染 + seek实质重载 + 下载DoH，2026-10-16）**：
+  用户装 0.225 后三问题依旧，本地无法复现（图床 200 全绿），用户点破「难道是记住了我第一次加载」
+  → 顺藤定案：
+  ①**图片（第五轮，根因定案 = Coil 磁盘缓存污染）**：0.218-0.220 图床域名轮换期，风控页/垃圾响应
+  以 HTTP 200 返回，被 Coil 当成功图片缓存进磁盘（respectCacheHeaders=false + 缓存键只认 URL →
+  永不过期）→ 此后这些 URL「加载成功但解码失败」永远显示占位图——命中磁盘缓存根本不走网络，
+  换域/DoH 全无效（完全吻合「本地永远 200、设备永远挂」）。修复双管：**版本升级自动清一次 Coil
+  磁盘缓存**（SettingsStore.cacheClearedVersion 存 versionCode，不一致删 image_cache 目录，幂等，
+  Coil 自动重建）+ **拦截器校验 Content-Type 必须 image/***（200 非图片视为该域失败走换域重试，
+  垃圾响应从此进不了缓存）。
+  ②**armTimeout 退役**：okio Timeout 的 deadline 在 enter() 时固定，call().timeout() 中途改 6s
+  行为未定义 → 删整段，靠 client 级 connectTimeout(10s)/readTimeout(15s)。
+  ③**seek 自愈失效定案 = seekTo(当前精确位置) 是 no-op**：media3 认为目标位置就是当前位置，
+  复用现有请求不重新加载（v0.225 的原地重 seek 白做）。修复：捕获 pos 后 **stop() + prepare() +
+  seekTo(pos) + playWhenReady=true**——强制丢弃已加载 MediaPeriod 重新拉清单/切片（media3 的
+  stop() 保留 playlist 与位置，prepare 后从原位恢复；runCatching 包裹防极端态崩溃）。
+  ④**下载失败修复 = 通用 DoH**：切片域名（mts.hhjd.mobi 等）与图床同遭运营商 DNS 污染（解析
+  成功但 IP 不可达），下载器此前走系统 DNS。PicDns 提取 **DohResolver** 公共逻辑（DoH 优先/
+  系统回退/10min 缓存），新增 **GeneralDohDns**（全域名），VideoDownloadManager client 挂
+  .dns(GeneralDohDns)。
+  ⚠️ 技术坑：AGP 8 默认 buildConfig=false，首次用 BuildConfig.VERSION_CODE 需 buildFeatures
+  显式开启（buildConfig = true）。
+  版本：0.226/1226。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

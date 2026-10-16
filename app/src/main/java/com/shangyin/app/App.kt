@@ -58,6 +58,18 @@ class App : Application(), ImageLoaderFactory {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching { Repo.pruneOrphans() }
         }
+        // 版本升级清一次 Coil 磁盘缓存（v0.226，图片"永久占位图"的定案修复）：
+        // 0.218-0.220 图床域名轮换期，风控页/垃圾响应以 HTTP 200 返回，被 Coil 当成功
+        // 图片缓存进磁盘（respectCacheHeaders=false + 缓存键只认 URL → 永不过期）。
+        // 此后这些 URL「加载成功但解码失败」→ 永远显示占位图，换域名/DoH 均无效
+        // （命中磁盘缓存根本不走网络）。清缓存让图片重新下载；配合拦截器的
+        // Content-Type 校验，垃圾响应今后进不了缓存。删除目录是幂等操作，Coil 会自动重建。
+        if (SettingsStore.cacheClearedVersion != BuildConfig.VERSION_CODE.toLong()) {
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                runCatching { deleteRecursive(File(cacheDir, "image_cache")) }
+                SettingsStore.cacheClearedVersion = BuildConfig.VERSION_CODE.toLong()
+            }
+        }
     }
 
     /**
@@ -147,12 +159,6 @@ class App : Application(), ImageLoaderFactory {
                 // 「图全挂」的根因，实测 Referer/UA 均无防盗链）。新旧图床回源同一存储、
                 // 路径通用 → 失败自动换域名重试（候选来自页面解析自动收集，见 MelonClient）。
                 if (out.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
-                    // 图床单图限时 6s。⚠️ okio Timeout 的 deadline 只在 enter() 时算一次：
-                    // 第一次 proceed 超时后 deadline 已耗尽，fallback 再 proceed 会「立刻超时」
-                    // ——0.222/0.223 换域重试看起来无效的隐藏原因。每次尝试前必须 clearTimeout 重置。
-                    fun armTimeout() {
-                        chain.call().timeout().clearTimeout().timeout(6, TimeUnit.SECONDS)
-                    }
                     // 熔断直达（v0.223）：会话内已有成功域名 → 发出前直接改写，
                     // 不再每张图都从死域名开始试错（每张最坏 18s，Coil 排队下全列表拖死）
                     val preferred = com.shangyin.app.data.melon.MelonClient.activePicHost
@@ -160,19 +166,28 @@ class App : Application(), ImageLoaderFactory {
                         swapMelonPicHost(out, preferred) ?: out else out
                     var lastErr: java.io.IOException? = null
                     var contentError = false
+                    // 200 但不是图片（v0.226 根因修复）：图床风控会返回 HTTP 200 的 HTML/风控页，
+                    // 以前被 Coil 当成功图片缓存 → URL 永久"占位图"。必须校验 Content-Type，
+                    // 非图片视为该域失败，走换域重试；也确保垃圾响应永远进不了磁盘缓存。
+                    fun isImageResponse(r: okhttp3.Response) =
+                        r.header("Content-Type")?.startsWith("image", ignoreCase = true) == true
                     try {
-                        armTimeout()
                         val resp = chain.proceed(primary)
-                        if (resp.isSuccessful) {
+                        if (resp.isSuccessful && isImageResponse(resp)) {
                             // 回写成功域名（resp.request.url 含 301 跟随后的落地域名）
                             com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
                             return@addInterceptor resp
                         }
-                        val code = resp.code
-                        resp.close()
-                        // 单图内容问题（图被删），换域也无用 → 不降级不试备选
-                        if (code == 404 || code == 410) contentError = true
-                        else lastErr = java.io.IOException("HTTP $code")
+                        if (resp.isSuccessful) {
+                            resp.close()
+                            lastErr = java.io.IOException("HTTP 200 但非图片响应")
+                        } else {
+                            val code = resp.code
+                            resp.close()
+                            // 单图内容问题（图被删），换域也无用 → 不降级不试备选
+                            if (code == 404 || code == 410) contentError = true
+                            else lastErr = java.io.IOException("HTTP $code")
+                        }
                     } catch (e: java.io.IOException) {
                         lastErr = e
                     }
@@ -181,12 +196,12 @@ class App : Application(), ImageLoaderFactory {
                     for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(primary.url.host)) {
                         val retry = swapMelonPicHost(primary, h) ?: continue
                         try {
-                            armTimeout()
                             val resp = chain.proceed(retry)
-                            if (resp.isSuccessful) {
+                            if (resp.isSuccessful && isImageResponse(resp)) {
                                 com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
                                 return@addInterceptor resp
                             }
+                            if (resp.isSuccessful) lastErr = java.io.IOException("HTTP 200 但非图片响应")
                             resp.close()
                         } catch (e: java.io.IOException) {
                             lastErr = e

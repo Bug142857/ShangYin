@@ -70,6 +70,9 @@ object VideoDownloadManager {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        // v0.226：切片域名（mts.hhjd.mobi 等）与图床同遭运营商 DNS 污染（解析成功但指向
+        // 不可达 IP），下载一直失败的根因之一 → 全域名 DoH 优先、系统解析回退
+        .dns(com.shangyin.app.data.melon.GeneralDohDns)
         .build()
 
     val library = MutableStateFlow<List<DownloadedVideo>>(emptyList())

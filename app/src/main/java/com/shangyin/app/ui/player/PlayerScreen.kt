@@ -523,9 +523,11 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // seek 缓冲自愈（v0.225）：点进度条跳到未缓冲区后，慢源/签名切片地址下重新拉切片
+    // seek 缓冲自愈（v0.226）：点进度条跳到未缓冲区后，慢源/签名切片地址下重新拉切片
     // 可能长时间卡在 STATE_BUFFERING（TS 加密流尤其如此，用户实测"选进度后画面卡住"）。
-    // 缓冲超 10s 自动原地重 seek（重新触发切片加载，等价"再点一下当前进度"），多数直接恢复。
+    // 缓冲超 10s 自动原地重载。⚠️ v0.225 教训：seekTo(当前精确位置) 是 no-op——media3
+    // 认为目标位置就是当前位置，复用现有请求不重新加载，卡死照旧。必须 stop()+prepare()
+    // 强制丢弃已加载的 MediaPeriod 重新拉清单/切片，seekTo 只用于钉住进度，再恢复播放。
     var bufferingSince by remember { mutableLongStateOf(0L) }
     DisposableEffect(player) {
         val l = object : Player.Listener {
@@ -542,7 +544,13 @@ fun PlayerScreen(nav: NavHostController) {
             if (!isLive && bufferingSince > 0 &&
                 System.currentTimeMillis() - bufferingSince > 10_000
             ) {
-                player.seekTo(player.currentPosition)
+                runCatching {
+                    val pos = player.currentPosition
+                    player.stop()
+                    player.prepare()
+                    player.seekTo(pos)
+                    player.playWhenReady = true
+                }
                 bufferingSince = System.currentTimeMillis() // 重置计时避免无限循环
             }
         }

@@ -17,6 +17,7 @@ object SettingsStore {
     private const val KEY_WEBDAV_PASS = "webdav_pass"
     private const val KEY_LAST_CLOUD_SYNC = "last_cloud_sync"
     private const val KEY_DOWNLOAD_INTERNAL = "download_internal"
+    private const val KEY_CACHE_CLEARED_VERSION = "cache_cleared_version"
 
     const val THEME_FOLLOW = "follow"
     const val THEME_LIGHT = "light"
@@ -84,6 +85,14 @@ object SettingsStore {
     var downloadInternal: Boolean
         get() = sp.getBoolean(KEY_DOWNLOAD_INTERNAL, false)
         set(v) = sp.edit().putBoolean(KEY_DOWNLOAD_INTERNAL, v).apply()
+
+    /**
+     * 已清过 Coil 磁盘缓存的应用版本号（versionCode）。启动时与当前版本比对，
+     * 不一致则清一次图片磁盘缓存（v0.226：历史上污染的 200 垃圾响应被永久缓存）。
+     */
+    var cacheClearedVersion: Long
+        get() = sp.getLong(KEY_CACHE_CLEARED_VERSION, 0L)
+        set(v) = sp.edit().putLong(KEY_CACHE_CLEARED_VERSION, v).apply()
 
     private const val KEY_CHAPTER_SORT_DESC = "chapter_sort_desc"
 
