@@ -38,8 +38,8 @@ object DohResolver {
         return ips
     }
 
-    /** 阿里 DoH JSON API：{"Status":0,"Answer":[{"type":1,"data":"1.2.3.4"},...]} */
-    private fun dohLookup(hostname: String): List<InetAddress> {
+    /** 阿里 DoH JSON API：{"Status":0,"Answer":[{"type":1,"data":"1.2.3.4"},...]}（公开供诊断使用） */
+    fun dohLookup(hostname: String): List<InetAddress> {
         val url = DOH.format(hostname).toHttpUrl()
         val req = Request.Builder().url(url).header("Accept", "application/dns-json").build()
         return runCatching {
@@ -71,16 +71,19 @@ object PicDns : Dns {
 }
 
 /**
- * 通用 DNS（v0.226）：所有域名 DoH 优先、系统回退（见 [DohResolver]）。
+ * 通用 DNS（v0.227）：**系统 DNS 优先**（保留运营商就近调度），系统解析失败才走 DoH。
  *
- * 用于视频下载：吃瓜视频切片域名（mts.hhjd.mobi 等）与图床同源遭遇运营商 DNS 污染，
- * 下载器此前直连系统 DNS → 解析到不可达 IP → 「下载一直失败」。播放器侧媒体3走自己的
- * 数据源不受此处影响；此处只替换 VideoDownloadManager 的 OkHttp client DNS。
+ * v0.226 教训：下载器曾用「DoH 优先」——阿里 DoH 返回的是权威/全局节点而非本运营商
+ * 调度节点，设备实测连上即被 reset（「下载 Connection reset 而同域名播放器正常」，
+ * 播放器走系统 DNS）。切片域名的系统解析从未发现污染（污染的是图床域名），所以
+ * 这里与播放器对齐：系统优先；DoH 只做系统解析抛异常时的兜底。
+ * 图床域名走 [PicDns]（DoH 优先，那边的系统解析污染是实锤），两者策略刻意不同。
  */
 object GeneralDohDns : Dns {
 
     override fun lookup(hostname: String): List<InetAddress> {
-        val ips = DohResolver.resolve(hostname)
+        val sys = runCatching { Dns.SYSTEM.lookup(hostname) }.getOrDefault(emptyList())
+        val ips = sys.ifEmpty { DohResolver.resolve(hostname) }.filterNot { it.isSiteLocalAddress }
         if (ips.isEmpty()) throw java.net.UnknownHostException("域名解析失败: $hostname")
         return ips
     }

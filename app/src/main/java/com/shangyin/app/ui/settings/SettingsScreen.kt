@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -68,6 +70,8 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
     var showClearCache by remember { mutableStateOf(false) }
     var cacheSize by remember { mutableStateOf("计算中…") }
+    var diagRunning by remember { mutableStateOf(false) }
+    var diagResult by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         cacheSize = runCatching {
@@ -272,6 +276,38 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }
             }
 
+            // 吃瓜网络诊断（v0.227）：图床/切片域名设备端实测
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        if (!diagRunning) {
+                            diagRunning = true
+                            scope.launch {
+                                diagResult = runCatching {
+                                    com.shangyin.app.data.melon.MelonDiag.run(context)
+                                }.getOrElse { "诊断失败: ${it.message ?: it.javaClass.simpleName}" }
+                                diagRunning = false
+                            }
+                        }
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.OndemandVideo, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("吃瓜网络诊断", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "图片/视频加载不出来时点这个，把结果截图发给开发者",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
             // 图片缓存清理
             Card {
                 Row(
@@ -319,6 +355,42 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }) { Text("清理") }
             },
             dismissButton = { TextButton(onClick = { showClearCache = false }) { Text("取消") } }
+        )
+    }
+
+    // 网络诊断进行中
+    if (diagRunning) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在诊断") },
+            text = { Text("正在实测图床/切片域名的连通性（DNS、OkHttp、系统连接、WebView 四路对比），约 10-30 秒…") },
+            confirmButton = {}
+        )
+    }
+
+    // 网络诊断结果
+    diagResult?.let { result ->
+        AlertDialog(
+            onDismissRequest = { diagResult = null },
+            title = { Text("诊断结果") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    SelectionContainer { Text(result, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as? android.content.ClipboardManager
+                    cm?.setPrimaryClip(android.content.ClipData.newPlainText("diag", result))
+                    Toast.makeText(context, "已复制，可粘贴发给开发者", Toast.LENGTH_SHORT).show()
+                }) { Text("复制") }
+            },
+            dismissButton = { TextButton(onClick = { diagResult = null }) { Text("关闭") } }
         )
     }
 
