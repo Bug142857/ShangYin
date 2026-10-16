@@ -711,6 +711,19 @@
   cover URL 逐个探测状态/类型/字节数）。用户下轮贴回结果即可三案同判。
   版本：0.232/1232。
 
+- **v0.233（诊断 v5 终极定性：Coil 真身对照 + 字节头 + KEY/切片实测，2026-10-16）**：
+  0.232 App 实况数据：①当前视频 m3u8 清单 99 片可达、KEY=AES-128 @tx.doudou520.online
+  ②封面 URL 形态完全正常（pic.jtzatly.cn/upload_01/...jpeg）③UA 完全相同（MelonClient.UA
+  字面量==CHROME_UA）④Coil 确实接了共享 client（.okHttpClient(getOrCreateOkHttpClient()) ✓）
+  → 网络层/URL/UA/客户端配置全部排除。诊断 v5 收口三测：
+  ①**裸 HTTP 字节头**：响应体前 8 字节十六进制（FFD8=JPEG/3C21=HTML）——字节层面定性
+  ②**Coil 真身执行**：imageLoader.execute 走完整 UI 路径，裸成功+Coil失败=拦截器/缓存/
+  解码层，一测定案
+  ③**KEY+切片实测**：从 m3u8 解析 KEY URI 与前 2 切片逐个 GET（seek 卡死/下载 0% 同链路）
+  probeVideo 改 suspend+withContext(IO)；封面探针修 NetworkOnMainThreadException（0.232
+  的 probeExact 直接在主线程调用的低级错误）。
+  版本：0.233/1233。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

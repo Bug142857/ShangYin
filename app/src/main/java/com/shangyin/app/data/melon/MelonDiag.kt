@@ -121,8 +121,47 @@ object MelonDiag {
             if (covers.isEmpty() && homeRes.isSuccess) out.appendLine("列表解析: 成功但无封面URL")
             var n = 1
             for (c in covers) {
-                val r = probeExact(c)
-                out.appendLine("封面$n: $r (${c.take(70)})")
+                val r = async(Dispatchers.IO) {
+                    // 裸 HTTP：输出响应体前 8 字节十六进制——FFD8=JPEG/8950=PNG/RIFF=WEBP，
+                    // 全 00 或 3C3F(<?xml)/3C21(<!--)=HTML，字节层面定性拿到的是不是图
+                    val bare = try {
+                        val req = Request.Builder().url(c)
+                            .header("User-Agent", MelonClient.UA)
+                            .header("Referer", "${MelonClient.lastBase.trimEnd('/')}/").build()
+                        probeClient.newCall(req).execute().use { resp ->
+                            val bytes = resp.body?.bytes() ?: ByteArray(0)
+                            val head = bytes.take(8).joinToString(" ") { "%02X".format(it) }
+                            "HTTP ${resp.code} ${resp.header("Content-Type")} ${bytes.size}B head=[$head]"
+                        }
+                    } catch (e: Exception) {
+                        "${e.javaClass.simpleName}: ${e.message?.take(50)}"
+                    }
+                    // Coil 真身：走 App 的 ImageLoader 完整路径（共享client+拦截器+缓存+解码），
+                    // 与列表 UI 完全同路——裸成功而 Coil 失败 = 拦截器/缓存/解码层，一次定性
+                    val viaCoil = if (n == 1) {
+                        try {
+                            val loader = (context as? coil.ImageLoaderFactory)?.newImageLoader()
+                            if (loader == null) "Coil: loader不可用"
+                            else {
+                                val req = coil.request.ImageRequest.Builder(context.applicationContext)
+                                    .data(c).allowHardware(false).build()
+                                val res = loader.execute(req)
+                                when (res) {
+                                    is coil.request.SuccessResult ->
+                                        "Coil:成功 ${res.drawable.intrinsicWidth}x${res.drawable.intrinsicHeight}"
+                                    else -> "Coil:失败 " +
+                                        ((res as? coil.request.ErrorResult)?.throwable
+                                            ?.let { "${it.javaClass.simpleName}: ${it.message?.take(60)}" }
+                                            ?: res.javaClass.simpleName)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            "Coil异常: ${e.javaClass.simpleName}: ${e.message?.take(50)}"
+                        }
+                    } else null
+                    listOfNotNull(bare, viaCoil).joinToString("  ||  ")
+                }.await()
+                out.appendLine("封面$n: $r")
                 n++
             }
         }
@@ -142,22 +181,61 @@ object MelonDiag {
         "${e.javaClass.simpleName}: ${e.message?.take(60) ?: ""}"
     }
 
-    /** 播放地址探测：m3u8 输出清单头（KEY/切片行一眼可辨），其余输出状态与类型 */
-    private fun probeVideo(url: String): String = try {
-        val req = Request.Builder().url(url).header("User-Agent", MelonClient.UA).build()
-        probeClient.newCall(req).execute().use { r ->
-            if (!r.isSuccessful) "HTTP ${r.code} ${r.header("Content-Type")}"
-            else {
-                val body = r.body?.string().orEmpty()
-                if (body.contains("#EXTM3U")) {
-                    val segs = body.lines().count { it.isNotBlank() && !it.startsWith("#") }
-                    val keyLine = body.lines().firstOrNull { it.contains("EXT-X-KEY") }?.take(90)
-                    "m3u8 OK: $segs 行切片 KEY=${keyLine ?: "无"}"
-                } else "HTTP 200 ${r.header("Content-Type")} 非清单(直链?)"
+    /** 播放地址探测：m3u8 → KEY 实测 + 前 2 个切片实测（seek 卡死/下载失败的同链路定性） */
+    private suspend fun probeVideo(url: String): String = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder().url(url).header("User-Agent", MelonClient.UA).build()
+            probeClient.newCall(req).execute().use { r ->
+                if (!r.isSuccessful) "清单 HTTP ${r.code} ${r.header("Content-Type")}"
+                else {
+                    val body = r.body?.string().orEmpty()
+                    if (!body.contains("#EXTM3U")) "HTTP 200 非清单(直链?)"
+                    else {
+                        val segs = body.lines().count { it.isNotBlank() && !it.startsWith("#") }
+                        val sb = StringBuilder("m3u8 OK: $segs 片")
+                        val base = url.substringBeforeLast('/')
+                        // KEY 实测（AES-128 的密钥拉不到 = 播放黑屏/下载解不开）
+                        body.lines().firstOrNull { it.contains("EXT-X-KEY") }?.let { kl ->
+                            val ku = Regex("URI=\"([^\"]+)\"").find(kl)?.groupValues?.get(1)
+                            if (ku != null) {
+                                val abs = if (ku.startsWith("http")) ku else "$base/$ku"
+                                try {
+                                    probeClient.newCall(
+                                        Request.Builder().url(abs).header("User-Agent", MelonClient.UA).build()
+                                    ).execute().use { kr ->
+                                        val kb = kr.body?.bytes() ?: ByteArray(0)
+                                        sb.append(" | KEY:HTTP ${kr.code} ${kb.size}B" + if (kb.size == 16) "(正确16B)" else "")
+                                    }
+                                } catch (e: Exception) {
+                                    sb.append(" | KEY:${e.javaClass.simpleName}")
+                                }
+                            }
+                        }
+                        // 前 2 个切片实测（卡 seek/下载 0% 多半是切片请求失败）
+                        val segUrls = body.lines()
+                            .filter { it.isNotBlank() && !it.startsWith("#") }
+                            .take(2).map { s ->
+                                if (s.startsWith("http")) s else "$base/$s"
+                            }
+                        segUrls.forEachIndexed { i, su ->
+                            try {
+                                probeClient.newCall(
+                                    Request.Builder().url(su).header("User-Agent", MelonClient.UA).build()
+                                ).execute().use { sr ->
+                                    val sb2 = sr.body?.bytes() ?: ByteArray(0)
+                                    sb.append(" | 片$i:HTTP ${sr.code} ${sb2.size}B")
+                                }
+                            } catch (e: Exception) {
+                                sb.append(" | 片$i:${e.javaClass.simpleName}: ${e.message?.take(40)}")
+                            }
+                        }
+                        sb.toString()
+                    }
+                }
             }
+        } catch (e: Exception) {
+            "${e.javaClass.simpleName}: ${e.message?.take(60)}"
         }
-    } catch (e: Exception) {
-        "${e.javaClass.simpleName}: ${e.message?.take(60) ?: ""}"
     }
 
     /** 共用裸探测 client（系统 DNS，与 App 内图床路径一致） */
