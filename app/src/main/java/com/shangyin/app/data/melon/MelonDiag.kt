@@ -169,8 +169,9 @@ object MelonDiag {
                 n++
             }
 
-            // WebView 解密管线实况（v0.235 修复路径）：ensure→fetchDecrypted 首封面，
-            // 明文头 FFD8(JPEG)=整条管线成功；此时封面探针的 Coil 真身也走新 Fetcher
+            // WebView 解密管线实况（v0.236）：ensure（主动轮询就绪）→ probeRaw 首封面
+            // （raw 头 + 解密长度一次区分「网络假数据」vs「解密失败」）；封面探针的 Coil
+            // 真身同步走新 Fetcher 一起验证
             val wvTarget = covers.firstOrNull()
             if (wvTarget != null) {
                 val wvRes = try {
@@ -179,17 +180,53 @@ object MelonDiag {
                             if (c.isActive) c.resume(r)
                         }
                     }
-                    if (!ready) "页面未就绪（站点JS加载失败）"
+                    if (!ready) "页面未就绪（15s内decryptImage未就绪）"
                     else {
-                        val b = MelonWebImage.fetchDecrypted(wvTarget)
-                        if (b == null) "失败(null)——fetch或decryptImage环节"
-                        else "成功 ${b.size}B head=[${b.take(8).joinToString(" ") { "%02X".format(it) }}]"
+                        val raw = MelonWebImage.probeRaw(wvTarget)
+                        if (raw == null) "probe失败(null)"
+                        else {
+                            out.appendLine("WebView封面raw: $raw")
+                            val b = MelonWebImage.fetchDecrypted(wvTarget)
+                            if (b == null) "取明文失败(null)"
+                            else "明文 ${b.size}B head=[${b.take(8).joinToString(" ") { "%02X".format(it) }}]"
+                        }
                     }
                 } catch (e: Exception) {
                     "异常 ${e.javaClass.simpleName}: ${e.message?.take(50)}"
                 }
                 out.appendLine("WebView管线: $wvRes")
             } else out.appendLine("WebView管线: 跳过（无封面URL）")
+
+            // 首页 HTML 双栈对照（v0.236）：App 解析的封面 URL 是截断版 .jpe 而 PC 同镜像
+            // 完整——okhttp（FORCE_NETWORK）与 WebView 各拉一次首页，比较首条 loadBannerDirect
+            // URL 完整性 → 一测定案「HTML 层内容混淆」是否存在及影响哪个栈
+            try {
+                val base = MelonClient.lastBase.trimEnd('/')
+                val okHtml = runCatching {
+                    val req = Request.Builder().url("$base/")
+                        .header("User-Agent", MelonClient.UA)
+                        .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build()
+                    probeClient.newCall(req).execute().use { it.body?.string().orEmpty() }
+                }.getOrDefault("")
+                val okUrl = Regex("""loadBannerDirect\('([^']{10,130})'""").find(okHtml)?.groupValues?.get(1)
+                out.appendLine("首页okhttp: LEN=${okHtml.length} 首条=${okUrl ?: "无"}")
+            } catch (e: Exception) {
+                out.appendLine("首页okhttp: ${e.javaClass.simpleName}: ${e.message?.take(40)}")
+            }
+            val wvHtml = try {
+                val ready = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
+                    MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
+                        if (c.isActive) c.resume(r)
+                    }
+                }
+                if (!ready) "未就绪"
+                else MelonWebImage.evalJs(
+                    "(function(){var m=document.documentElement.innerHTML.match(/loadBannerDirect\\('([^']{10,130})'/);return m?m[1]:'NONE';})()"
+                ) ?: "eval失败"
+            } catch (e: Exception) {
+                "${e.javaClass.simpleName}: ${e.message?.take(40)}"
+            }
+            out.appendLine("首页WebView: 首条=$wvHtml")
         }
         out.toString()
     }

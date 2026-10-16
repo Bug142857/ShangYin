@@ -252,6 +252,11 @@ object MelonClient {
             .header("User-Agent", UA)
             .header("Accept-Language", "zh-CN,zh;q=0.9")
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            // v0.236：HTML/清单永不读 HTTP 缓存。0.235 设备诊断发现 App 解析的封面 URL
+            // 是截断版（.jpe），而 PC 同镜像同 UA 拿到的是完整 .jpeg——共享 client 的
+            // 20MB HTTP 缓存曾在多轮修复期间存入混淆版 HTML，命中即全列表 URL 错。
+            // 站点内容动态轮换（镜像/图床），HTML 层缓存收益本来就低，一禁了之。
+            .cacheControl(okhttp3.CacheControl.FORCE_NETWORK)
             .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw HttpError(resp.code)

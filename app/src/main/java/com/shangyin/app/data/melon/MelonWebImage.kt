@@ -3,7 +3,6 @@ package com.shangyin.app.data.melon
 import android.annotation.SuppressLint
 import android.content.Context
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -75,22 +74,40 @@ object MelonWebImage {
                     it.settings.javaScriptEnabled = true
                     it.settings.domStorageEnabled = true
                     it.settings.blockNetworkImage = true // 只借 JS/网络，不渲染图片（省流量）
-                    it.webViewClient = object : WebViewClient() {
-                        override fun onPageFinished(view: WebView?, url: String?) {
-                            super.onPageFinished(view, url)
-                            // 检查解密函数是否真的可用（外链 JS 加载失败时页面照样 finish）
-                            view?.evaluateJavascript(
-                                "(typeof decryptImage==='function' && typeof ab2b64==='function')?'1':'0'"
-                            ) { v ->
-                                pageReady = v?.contains("1") == true
-                                starting.set(false)
-                                onReady(pageReady)
-                            }
-                        }
-                    }
                     webView = it
                 }
+                // v0.236：不等 onPageFinished（站点页重资源会拖到 20s 超时——0.235 设备实测
+                // 「Timed out waiting for 20000 ms」）。loadUrl 后主动轮询解密函数就绪，
+                // zzz.js 一加载完立刻可用；15s 轮询上限后报告失败。
                 if (wv.url != page) wv.loadUrl(page)
+                var waited = 0
+                fun pollReady() {
+                    runCatching {
+                        wv.evaluateJavascript(
+                            "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':'0'"
+                        ) { v ->
+                            when {
+                                v?.contains("1") == true -> {
+                                    pageReady = true
+                                    starting.set(false)
+                                    onReady(true)
+                                }
+                                waited < 15_000 -> {
+                                    waited += 400
+                                    wv.postDelayed({ pollReady() }, 400)
+                                }
+                                else -> {
+                                    starting.set(false)
+                                    onReady(false)
+                                }
+                            }
+                        }
+                    }.onFailure {
+                        starting.set(false)
+                        onReady(false)
+                    }
+                }
+                pollReady()
             } catch (t: Throwable) {
                 starting.set(false)
                 onReady(false)
@@ -151,6 +168,81 @@ object MelonWebImage {
                     wv.postDelayed({ poll() }, 300)
                 }
             }
+        }
+    }
+
+    /** 页面上下文内直接求值（诊断用；表达式同步出结果，无需轮询） */
+    suspend fun evalJs(js: String): String? = withContext(Dispatchers.Main) {
+        val wv = webView ?: return@withContext null
+        if (!pageReady) return@withContext null
+        runCatching {
+            withTimeout(15_000) {
+                suspendCancellableCoroutine { cont ->
+                    wv.evaluateJavascript(js) { v ->
+                        if (cont.isActive) {
+                            cont.resume(
+                                v?.trim()?.removeSurrounding("\"")
+                                    ?.replace("\\\"", "\"")?.replace("\\\\", "\\")
+                            )
+                        }
+                    }
+                }
+            }
+        }.getOrNull()
+    }
+
+    /**
+     * 诊断探针（v0.236）：WebView fetch 拿 raw 字节头（判定 Chromium 是否也被下发假数据）
+     * + decryptImage 输出长度（判定解密环节）。一次区分「网络层混淆」vs「解密失败」。
+     */
+    suspend fun probeRaw(url: String): String = withContext(Dispatchers.Main) {
+        val wv = webView ?: return@withContext "未初始化"
+        if (!pageReady) return@withContext "页面未就绪"
+        withTimeout(20_000) {
+            mutex.withLock {
+                suspendCancellableCoroutine { cont ->
+                    wv.evaluateJavascript(
+                        """
+                        (function(){
+                          window.__mj_out=null; window.__mj_err=null;
+                          fetch('$url')
+                            .then(function(r){return r.arrayBuffer()})
+                            .then(function(ab){
+                              var b=new Uint8Array(ab); var h='';
+                              for(var i=0;i<8&&i<b.length;i++){h+=(b[i]<16?'0':'')+b[i].toString(16).toUpperCase(); if(i<7)h+=' ';}
+                              var raw=ab2b64(ab); window.__mj_rawHead=h; window.__mj_rawLen=b.length;
+                              try{var p=decryptImage(raw); window.__mj_out='plainLen='+(p?p.length:0);}catch(e){window.__mj_err='dec:'+e}
+                            })
+                            .catch(function(e){window.__mj_err=''+e});
+                        })();
+                        """.trimIndent(), null
+                    )
+                    var waited = 0
+                    fun poll() {
+                        wv.evaluateJavascript(
+                            "(window.__mj_err?('ERR:'+window.__mj_err):((window.__mj_out===null)?null:(window.__mj_rawHead+' raw='+window.__mj_rawLen+' '+window.__mj_out)))"
+                        ) { v ->
+                            val s = v?.trim().orEmpty()
+                            when {
+                                s == "null" && waited < 15_000 -> {
+                                    waited += 250
+                                    wv.postDelayed({ poll() }, 250)
+                                }
+                                s.contains("\"ERR") -> if (cont.isActive) cont.resume(null)
+                                s.length > 4 -> {
+                                    if (cont.isActive) {
+                                        val out = s.removeSurrounding("\"")
+                                            .replace("\\\"", "\"").replace("\\\\", "\\")
+                                        cont.resume(out)
+                                    }
+                                }
+                                else -> if (cont.isActive) cont.resume(null)
+                            }
+                        }
+                    }
+                    wv.postDelayed({ poll() }, 300)
+                }
+            } ?: "超时/失败"
         }
     }
 

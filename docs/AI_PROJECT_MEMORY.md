@@ -760,6 +760,23 @@
   err=unexpected end of stream 与假切片/CDN 行为相关，待视频管线验证）。
   版本：0.235/1235。
 
+- **v0.236（URL 截断实锤 + HTML 双栈对照 + WebView 管线修超时，2026-10-16）**：
+  0.235 设备实测：封面仍挂，**App 解析出的封面 URL 是截断版 .jpe**（正确 .jpeg），诊断
+  探针的 .p 同理；WebView 管线 ensure 超时（onPageFinished 等重资源 20s 不触发）。PC
+  侧系列对照：同镜像同 UA 的 HTML loadBannerDirect **完整 .jpeg**（手机 UA、App 同款
+  Accept 头都完整）；两个旧镜像（h37xz1/boy）PC 直连 0 字节（App 却能访问）；播放器/
+  下载器 okhttp 均**无** HTTP 缓存（TS 假数据=服务器层混淆而非缓存）。两大嫌疑：
+  ①HTML 内容层混淆按客户端分档（App okhttp 拿截断版 HTML）；②HTML 命中共享 client
+  HTTP 缓存的坏版本（FORCE_NETWORK 之前只对图床域名）。0.236 修复+分辨器三件：
+  ①**MelonClient.httpGet 全部 FORCE_NETWORK**（HTML/清单永不读缓存）——若缓存是元凶
+  则直接修复；②**MelonWebImage.ensure 主动轮询**（300ms 间隔查 typeof decryptImage，
+  15s 上限）替代 onPageFinished 等待——修 0.235 的 20s 超时；③**诊断双栈对照**：okhttp
+  FORCE_NETWORK vs WebView 各拉首页比较首条 loadBannerDirect 完整性 + probeRaw（WebView
+  fetch raw 头 + decryptImage 输出长度）一次区分「网络假数据」vs「解密失败」。
+  若双栈对照显示 okhttp 截断而 WebView 完整 → 0.237 计划：列表/详情 HTML 改走 WebView
+  管线（拿真 URL）+ 图片/视频源同理。
+  版本：0.236/1236。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
