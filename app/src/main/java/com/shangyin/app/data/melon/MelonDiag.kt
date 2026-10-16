@@ -168,6 +168,28 @@ object MelonDiag {
                 out.appendLine("封面$n: $r")
                 n++
             }
+
+            // WebView 解密管线实况（v0.235 修复路径）：ensure→fetchDecrypted 首封面，
+            // 明文头 FFD8(JPEG)=整条管线成功；此时封面探针的 Coil 真身也走新 Fetcher
+            val wvTarget = covers.firstOrNull()
+            if (wvTarget != null) {
+                val wvRes = try {
+                    val ready = kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
+                        MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
+                            if (c.isActive) c.resume(r)
+                        }
+                    }
+                    if (!ready) "页面未就绪（站点JS加载失败）"
+                    else {
+                        val b = MelonWebImage.fetchDecrypted(wvTarget)
+                        if (b == null) "失败(null)——fetch或decryptImage环节"
+                        else "成功 ${b.size}B head=[${b.take(8).joinToString(" ") { "%02X".format(it) }}]"
+                    }
+                } catch (e: Exception) {
+                    "异常 ${e.javaClass.simpleName}: ${e.message?.take(50)}"
+                }
+                out.appendLine("WebView管线: $wvRes")
+            } else out.appendLine("WebView管线: 跳过（无封面URL）")
         }
         out.toString()
     }

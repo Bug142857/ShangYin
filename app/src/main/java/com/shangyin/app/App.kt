@@ -255,6 +255,12 @@ class App : Application(), ImageLoaderFactory {
             .crossfade(true)
             .respectCacheHeaders(false)
             .addLastModifiedToFileCacheKey(false)
+            // v0.235 吃瓜图床「内容级风控」修复：图床只对 Chromium TLS 指纹下发真密文，
+            // 其它所有栈拿到 200+混淆假字节（四栈实测）。自定义 Fetcher 走 WebView 管线
+            // （借站点 JS fetch+decryptImage 解密），明文字节交给 Coil 缓存/解码。
+            .components {
+                add(com.shangyin.app.data.melon.MelonWebFetcher.Factory())
+            }
             .diskCache {
                 DiskCache.Builder()
                     .directory(File(cacheDir, "image_cache"))
@@ -285,6 +291,8 @@ class App : Application(), ImageLoaderFactory {
             // 直接删缓存子目录：OkHttp 和 Coil 都会在下次请求时重建
             runCatching { deleteRecursive(File(ctx.cacheDir, "http")) }
             runCatching { deleteRecursive(File(ctx.cacheDir, "image_cache")) }
+            // v0.235：吃瓜 WebView 解密管线的明文缓存（MelonWebFetcher 自建层）
+            runCatching { deleteRecursive(com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(ctx)) }
             // 兜底：清理 Coil 内存缓存
             runCatching {
                 (ctx as? coil.ImageLoaderFactory)?.newImageLoader()?.memoryCache?.clear()

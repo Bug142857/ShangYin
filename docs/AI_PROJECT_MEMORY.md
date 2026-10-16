@@ -739,6 +739,27 @@
   未覆盖国内域名时会干扰直连）。
   版本：0.234/1234。
 
+- **v0.235（图片终极修复：WebView 解密管线 + Coil Fetcher，2026-10-16）**：
+  0.234 字节级终审三大事实：①**Conscrypt 也拿假字节**（关代理后 片0conn 与 okhttp 同样
+  62 D9...）→「TLS指纹=Chromium白名单」终极定性，唯一真客户端=App 内 WebView；②**两张
+  不同图共享同一 8 字节头 3E AA**（封面1=封面3）→ 固定加密封装头（非真图）；③**TS 切片
+  对齐错乱**（62 D9 05 4B 非 0x47）→ 视频源也被混淆（另一套封装，KEY 是真的 16B）。
+  PC 侧再验证：**Sec-Fetch 全套头无效**（curl 带头仍 3E AA）；**Node undici 也是假**；
+  站点首页 JS 实锤完整解密管线 `fetch → ab2b64 → decryptImage(base64) → 渲染`，
+  decryptImage = CryptoJS.AES.decrypt(passphrase 模式)，混淆表实测
+  passphrase=f5d965d1f753362750 / iv=97b60394abc2fbe1（fromCharCode 解出），node 复现
+  解密为空 = 密文非 Salted__ 格式（假数据）→ 侧面证明**真密文只给 Chromium**。
+  **修复（0.235）**：`MelonWebImage`（隐藏 WebView 加载镜像站首页一次 → 借站点页上下文
+  evaluateJavascript 执行站点自己的 `fetch→ab2b64→decryptImage` 管线 → 明文 base64
+  回传 Kotlin，串行 mutex + 20s 超时 + ERR 快速失败）+ `MelonWebFetcher`（Coil 自定义
+  Fetcher，仅接管 pic.{词}.cn 域，明文字节交 Coil 缓存/解码，App.kt components 注册）。
+  密钥轮换无需关心（JS 现场取）。诊断加「WebView管线」实况段（ensure→fetchDecrypted
+  首封面，FFD8=成功；封面探针 Coil 真身同步走新管线一起验证）。
+  **视频/下载（TS 混淆）未在本版处理**——待 WebView 管线验证成功后，0.236 用同思路
+  处理（可能为切片套 WebView 管线或找站点视频解密 JS）。进度 0% 问题暂无新线索（
+  err=unexpected end of stream 与假切片/CDN 行为相关，待视频管线验证）。
+  版本：0.235/1235。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
