@@ -78,6 +78,9 @@ import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
+import com.shangyin.app.ui.player.PlayerSession
+import com.shangyin.app.data.vod.VodEpisode
+import com.shangyin.app.data.vod.VodPlayGroup
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -644,9 +647,22 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             )
         }
 
-        // 预告片本地播放
+        // 预告片：统一走主播放器 PlayerScreen（v0.240，与吃瓜视频/在线观影同一播放器，
+        // 复用进度条/手势/倍速/全屏；此前独立的 VideoView 弹窗无控制条且每次重组强制
+        // start() 把暂停又拉起，用户无法控制——直接退役）
         videoUrl?.let { url ->
-            VideoPlayerDialog(url, onClose = { videoUrl = null })
+            PlayerSession.itemId = 0L
+            PlayerSession.title = entity.title.ifBlank { "预告片" }
+            PlayerSession.subTitle = "预告片"
+            PlayerSession.sourceName = "豆瓣"
+            PlayerSession.groups = listOf(VodPlayGroup("预告片", listOf(VodEpisode("预告片", url))))
+            PlayerSession.groupIndex = 0
+            PlayerSession.startIndex = 0
+            PlayerSession.startPosMs = 0L
+            PlayerSession.isLive = false
+            PlayerSession.streamHeaders = emptyMap()
+            videoUrl = null
+            nav.safeNavigate("player")
         }
 
         // 在线观影弹层（按标题搜片源）
@@ -1002,68 +1018,4 @@ private fun ReviewSection(entity: com.shangyin.app.data.db.CollectionItemEntity)
     }
 }
 
-/** 预告片本地播放 Dialog：用 Android VideoView + MediaPlayer */
-@Composable
-private fun VideoPlayerDialog(videoUrl: String, onClose: () -> Unit) {
-    val context = LocalContext.current
-    Dialog(
-        onDismissRequest = onClose,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(Color.Black),
-            contentAlignment = Alignment.Center
-        ) {
-            AndroidView(
-                factory = { ctx ->
-                    VideoView(ctx).apply {
-                        setVideoURI(videoUrl.toUri())
-                        setOnPreparedListener { mp ->
-                            mp.isLooping = false
-                            start()
-                        }
-                        setOnErrorListener { _, what, extra ->
-                            Toast.makeText(ctx, "视频加载失败", Toast.LENGTH_SHORT).show()
-                            onClose()
-                            true
-                        }
-                        // v0.239：系统媒体控制器——进度条/暂停/快进（此前裸 VideoView 无控制，
-                        // 且 update 每次重组强制 start() 把暂停又拉起=「不能控制」）
-                        val mc = android.widget.MediaController(ctx)
-                        mc.setAnchorView(this)
-                        setMediaController(mc)
-                    }
-                },
-                update = { vv ->
-                    // 不再每帧 start()：prepared 时已启动，重组期间保持用户操作的状态
-                    if (!vv.isPlaying && vv.currentPosition == 0 && vv.duration == 0) vv.start()
-                },
-                modifier = Modifier.fillMaxSize(),
-                onRelease = { vv ->
-                    // 关闭弹窗时停止播放（v0.239：防后台继续拉流）
-                    runCatching { vv.stopPlayback() }
-                }
-            )
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(16.dp)
-                    .background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.large)
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.ArrowBack,
-                    contentDescription = "关闭",
-                    tint = Color.White
-                )
-            }
-            DisposableEffect(videoUrl) {
-                onDispose {
-                    // 关闭弹窗时停止播放并释放（v0.239：防后台继续拉流）
-                }
-            }
-        }
-    }
-}
+// v0.240：VideoPlayerDialog 退役——预告片统一走主播放器 PlayerScreen

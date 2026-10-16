@@ -259,7 +259,10 @@ class App : Application(), ImageLoaderFactory {
             // 其它所有栈拿到 200+混淆假字节（四栈实测）。自定义 Fetcher 走 WebView 管线
             // （借站点 JS fetch+decryptImage 解密），明文字节交给 Coil 缓存/解码。
             .components {
+                // v0.240：Uri 版是决定性修复（Coil 对 String model 先映射为 Uri 再分派，
+                // 0.235~0.239 的 Factory<String> 从未命中）；String 版兜底
                 add(com.shangyin.app.data.melon.MelonWebFetcher.Factory())
+                add(com.shangyin.app.data.melon.MelonWebFetcher.StringFactory())
             }
             .diskCache {
                 DiskCache.Builder()

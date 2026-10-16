@@ -815,6 +815,23 @@
   关弹窗后后台拉流。
   版本：0.239/1239。
 
+- **v0.240（决定性修复：Coil Fetcher 从未生效 + 预告片统一主播放器，2026-10-16）**：
+  用户怒斥「十多个版本没解决是不是思路错了」促成彻查，0.239 轮诊断炸出铁证：Coil
+  报错是内部 IllegalStateException「BitmapFactory returned a null bitmap」而非本管线
+  抛的 IOException——说明 **MelonWebFetcher 从 0.235 起一次都没执行过**。根因：Coil
+  2.x 对 String model 先经 StringMapper 映射为 Uri 再分派 Fetcher，而注册的
+  Factory<String> 类型永不命中 → 内置 UriFetcher 拉混淆假字节 → 解码 null。五轮
+  「图片还是不显示」全部源于这一行。修复：①**Factory<Uri>**（决定性）+ StringFactory
+  兜底双注册（App.kt components）；②MelonWebFetcher.ensureReady 失败后轮询 isReady
+  兜底 30s（预热 slowPoll 至 60s 期间首次图片请求不再永久挂掉）；③**预告片统一主播放
+  器**（ItemDetailScreen videoUrl → PlayerSession 单集 VodPlayGroup → nav"player"，
+  与 51爆料同模式；VideoPlayerDialog/VideoView 整体退役——此前无控制条且每重组强制
+  start() 拉起暂停）。诊断 readyState=无之谜：withTimeoutOrNull(25s) 与 pollReady(25s)
+  race，诊断超时时 readyState 尚未写入（非环境失效）。教训固化：**自定义 Coil Fetcher
+  必须 Factory<Uri>（String model 会被映射），注册后必须用运行时探针验证 Fetcher
+  真被调用**（如 fetch() 首行打日志），不能只看「图片还挂着」归因网络。
+  版本：0.240/1240。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

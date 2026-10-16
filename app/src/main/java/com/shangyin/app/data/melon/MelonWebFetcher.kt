@@ -71,14 +71,37 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
         }
     }
 
-    private suspend fun ensureReady(context: android.content.Context): Boolean =
-        suspendCancellableCoroutine { c ->
+    private suspend fun ensureReady(context: android.content.Context): Boolean {
+        val first = suspendCancellableCoroutine { c ->
             MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { ok ->
                 if (c.isActive) c.resume(ok)
             }
         }
+        if (first) return true
+        // v0.240 兜底：ensure 的 25s 内未就绪但预热仍在后台跑（slowPoll 至 60s）——
+        // 此处继续等待 pageReady 至多 30s，慢站点首图会晚几秒出现而不是永远挂掉
+        return kotlinx.coroutines.withTimeoutOrNull(30_000) {
+            while (!MelonWebImage.isReady) kotlinx.coroutines.delay(500)
+            true
+        } ?: false
+    }
 
-    class Factory : Fetcher.Factory<String> {
+    /**
+     * Uri 版 Factory（v0.240 决定性修复）：Coil 2.x 对 String model 会先经 StringMapper
+     * 映射为 [android.net.Uri] 再做 Fetcher 分派——v0.235~0.239 的 Factory<String> 从未
+     * 命中过（诊断里 Coil 报「BitmapFactory null」= 内置 UriFetcher 拉到混淆假字节后
+     * 解码失败，本 Fetcher 一次都没执行）。改为接管 Uri，图片加载路径才真正走进管线。
+     */
+    class Factory : Fetcher.Factory<android.net.Uri> {
+        override fun create(data: android.net.Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
+            if (data.scheme != "http" && data.scheme != "https") return null
+            val host = runCatching { data.toString().toHttpUrl().host }.getOrNull() ?: return null
+            return if (host.matches(MELON_PIC_HOST)) MelonWebFetcher(data.toString(), options) else null
+        }
+    }
+
+    /** String 版兜底：model 显式以 String/ByteArray 等形式传入时仍能命中（与 Uri 版同逻辑） */
+    class StringFactory : Fetcher.Factory<String> {
         override fun create(data: String, options: Options, imageLoader: ImageLoader): Fetcher? {
             val host = runCatching { data.toHttpUrl().host }.getOrNull() ?: return null
             return if (host.matches(MELON_PIC_HOST)) MelonWebFetcher(data, options) else null
