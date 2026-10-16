@@ -8,6 +8,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -85,7 +86,78 @@ object MelonDiag {
         }
         out.appendLine("镜像: ${MelonClient.lastBase}  图床池: ${MelonClient.fallbackPicHosts("")}")
         out.appendLine("判读: 真实图片octet-stream=正常(CDN就这样标注); 真实图片text/html=风控/劫持; 403(/)=CDN对裸路径正常行为")
+
+        // ---- v0.232 App 实况：此前探针测「网络通不通」，这段测「App 实际用的 URL/数据」——
+        // 列表封面=Coil 拿到的真实 URL；当前视频=PlayerSession 真实播放地址；下载=任务真实进度值
+        out.appendLine("")
+        out.appendLine("――― App 实况 ―――")
+        kotlinx.coroutines.coroutineScope {
+            val dl = com.shangyin.app.data.download.VideoDownloadManager.active.value
+            if (dl.isEmpty()) out.appendLine("下载任务: 无进行中")
+            else dl.forEach { (_, t) ->
+                out.appendLine(
+                    "下载任务: ${t.title.take(14)} progress=${"%.3f".format(t.progress)} err=${t.error ?: "无"}"
+                )
+            }
+            out.appendLine("已下载记录: ${com.shangyin.app.data.download.VideoDownloadManager.library.value.size} 条")
+
+            val ep = runCatching {
+                val g = com.shangyin.app.ui.player.PlayerSession.groups[com.shangyin.app.ui.player.PlayerSession.groupIndex]
+                g.episodes[com.shangyin.app.ui.player.PlayerSession.startIndex].url
+            }.getOrNull()
+            if (ep.isNullOrBlank()) out.appendLine("当前视频: 无会话（先进播放页再诊断）")
+            else {
+                out.appendLine("当前视频: ${ep.take(90)}")
+                out.appendLine("视频实测: ${async(Dispatchers.IO) { probeVideo(ep) }.await()}")
+            }
+
+            // 列表封面实测：现场走一遍 MelonClient.home()（App 解析路径本身）——
+            // 解析失败/封面为空也是关键信息
+            val homeRes = runCatching { MelonClient.home() }
+            val covers = homeRes.getOrNull()?.items
+                ?.mapNotNull { it.cover }?.filter { it.startsWith("http") }?.distinct()?.take(3)
+                ?: emptyList()
+            if (homeRes.isFailure) out.appendLine("列表解析: 失败 ${homeRes.exceptionOrNull()?.message?.take(60)}")
+            if (covers.isEmpty() && homeRes.isSuccess) out.appendLine("列表解析: 成功但无封面URL")
+            var n = 1
+            for (c in covers) {
+                val r = probeExact(c)
+                out.appendLine("封面$n: $r (${c.take(70)})")
+                n++
+            }
+        }
         out.toString()
+    }
+
+    /** 精确探测 App 内真实使用的 URL（不带缓存、UA/Referer 与图床路径一致） */
+    private fun probeExact(url: String): String = try {
+        val req = Request.Builder().url(url)
+            .header("User-Agent", MelonClient.UA)
+            .header("Referer", "${MelonClient.lastBase.trimEnd('/')}/").build()
+        probeClient.newCall(req).execute().use { r ->
+            val size = r.body?.bytes()?.size ?: 0
+            "HTTP ${r.code} ${r.header("Content-Type")} ${size}B"
+        }
+    } catch (e: Exception) {
+        "${e.javaClass.simpleName}: ${e.message?.take(60) ?: ""}"
+    }
+
+    /** 播放地址探测：m3u8 输出清单头（KEY/切片行一眼可辨），其余输出状态与类型 */
+    private fun probeVideo(url: String): String = try {
+        val req = Request.Builder().url(url).header("User-Agent", MelonClient.UA).build()
+        probeClient.newCall(req).execute().use { r ->
+            if (!r.isSuccessful) "HTTP ${r.code} ${r.header("Content-Type")}"
+            else {
+                val body = r.body?.string().orEmpty()
+                if (body.contains("#EXTM3U")) {
+                    val segs = body.lines().count { it.isNotBlank() && !it.startsWith("#") }
+                    val keyLine = body.lines().firstOrNull { it.contains("EXT-X-KEY") }?.take(90)
+                    "m3u8 OK: $segs 行切片 KEY=${keyLine ?: "无"}"
+                } else "HTTP 200 ${r.header("Content-Type")} 非清单(直链?)"
+            }
+        }
+    } catch (e: Exception) {
+        "${e.javaClass.simpleName}: ${e.message?.take(60) ?: ""}"
     }
 
     /** 共用裸探测 client（系统 DNS，与 App 内图床路径一致） */
