@@ -169,8 +169,13 @@ class App : Application(), ImageLoaderFactory {
                     // 200 但不是图片（v0.226 根因修复）：图床风控会返回 HTTP 200 的 HTML/风控页，
                     // 以前被 Coil 当成功图片缓存 → URL 永久"占位图"。必须校验 Content-Type，
                     // 非图片视为该域失败，走换域重试；也确保垃圾响应永远进不了磁盘缓存。
+                    // v0.229 关键修正：PC 直连联通边缘节点实测，图床对图片返回的 Content-Type
+                    // 是 binary/octet-stream 而非 image/*（293KB 图片字节完整可解码）——
+                    // 0.226 的 startsWith("image") 过严，把真图全拦成占位图，是 0.226-0.228
+                    // 图片仍挂的真凶。改为只拒绝 text/html（风控/挑战页）；其余放行交给
+                    // Coil 解码自证——解码失败 Coil 不会写缓存，不会重现污染。
                     fun isImageResponse(r: okhttp3.Response) =
-                        r.header("Content-Type")?.startsWith("image", ignoreCase = true) == true
+                        r.header("Content-Type")?.contains("text/html", ignoreCase = true) != true
 
                     // v0.228 Cookie 直通：设备诊断实证 WebView 拿得到图而 okhttp/Coil 拿到
                     // 「200 + text/html」（JS 挑战页/风控页嫌疑）。WebView 作为主框架访问过

@@ -81,17 +81,50 @@ object MelonDiag {
             out.appendLine("okhttp: ${okPlain.await()}")
             out.appendLine("okhttp+Cookie: ${okCookie.await()}")
             out.appendLine("HttpConn: ${urlConnRes.await()}")
+            if (isPic) out.appendLine("真实图片: ${imageProbe()}")
         }
         out.appendLine("镜像: ${MelonClient.lastBase}  图床池: ${MelonClient.fallbackPicHosts("")}")
-        out.appendLine("判读: HTML片段=挑战页/劫持页(看内容定性); 若okhttp+Cookie返回200 image=Cookie直通已解; 三栈全挂=域名阻断; 切片域名403属CDN对裸路径的正常行为")
+        out.appendLine("判读: 真实图片octet-stream=正常(CDN就这样标注); 真实图片text/html=风控/劫持; 403(/)=CDN对裸路径正常行为")
         out.toString()
     }
 
+    /** 共用裸探测 client（系统 DNS，与 App 内图床路径一致） */
+    private val probeClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(5, TimeUnit.SECONDS)
+            .readTimeout(5, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /**
+     * 真实图片探测（v0.229）：根路径 / 的空 HTML 是误导（边缘节点对 / 就是 200 空页），
+     * 必须测真图。从最近成功镜像的首页抓第一个图床 URL，实测 Content-Type + 字节数——
+     * 0.229 前所有误判的教训：只看 Content-Type 定生死，而 CDN 对图片实际返回
+     * binary/octet-stream。
+     */
+    private fun imageProbe(): String {
+        val base = MelonClient.lastBase.trimEnd('/')
+        if (base.isBlank()) return "跳过（先在吃瓜里打开一篇文章再来诊断）"
+        return try {
+            val home = probeClient.newCall(
+                Request.Builder().url("$base/").header("User-Agent", MelonClient.UA).build()
+            ).execute().use { it.body?.string().orEmpty() }
+            val img = Regex("""pic\.[a-z0-9]+\.cn/[^\s"'<>]+?\.(?:jpg|jpeg|png|webp)""")
+                .find(home)?.value ?: return "首页未找到图床URL"
+            probeClient.newCall(
+                Request.Builder().url("https://$img")
+                    .header("User-Agent", MelonClient.UA)
+                    .header("Referer", "$base/").build()
+            ).execute().use { r ->
+                val size = r.body?.bytes()?.size ?: 0
+                "HTTP ${r.code} ${r.header("Content-Type")} ${size}B (${img.take(60)})"
+            }
+        } catch (e: Exception) {
+            "${e.javaClass.simpleName}: ${e.message?.take(50) ?: ""}"
+        }
+    }
+
     private fun probeOkhttp(host: String, referer: String?, withCookie: Boolean): String {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(4, TimeUnit.SECONDS)
-            .readTimeout(4, TimeUnit.SECONDS)
-            .build() // 故意裸 client（系统 DNS），与 App 内图床路径一致
         val b = Request.Builder().url("https://$host/").header("User-Agent", MelonClient.UA)
         referer?.let { b.header("Referer", it) }
         if (withCookie) {
@@ -102,7 +135,7 @@ object MelonDiag {
             b.header("Cookie", c)
         }
         return try {
-            client.newCall(b.build()).execute().use { resp ->
+            probeClient.newCall(b.build()).execute().use { resp ->
                 val ct = resp.header("Content-Type") ?: ""
                 if (resp.isSuccessful && ct.startsWith("text/html")) {
                     // 抓 HTML 片段定性：JS 挑战页（script+setTimeout） / 运营商劫持（广告） / CDN 默认页
