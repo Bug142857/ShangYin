@@ -505,6 +505,29 @@
   **⚠️ 发版流程变更（2026-10-16 用户指定）：不再跑 code-review，完成后直接升版本号编译发版 + APK 拷桌面**。
   版本：0.222/1222。
 
+- **v0.223（吃瓜装机反馈修复：镜像301轮换是「慢+图挂」总根因，2026-10-16）**：
+  用户装 0.222 后反馈：列表一直转圈极慢 + 图片依然全挂。
+  **实测定案（推翻 0.222 的部分判断）**：镜像站又轮换了——`branch.upsqllhj.cc` 现在对每个请求
+  返回 **301 → branch.ftnrqerm.cc**（跳转 TTFB 5.6s，跟随全链 11.7s）。okhttp followRedirects
+  让内容能拿到，但 `cachedBase`/`SettingsStore.melonBase` 永远停在旧域名 → **设备上每个请求都吃一遍
+  5.6s 跳转 = 转圈极慢**；且 `probe()` 探活跟随后 HTML 正常也会"成功"，重新选线永远选中旧线（死循环）。
+  列表 HTML 因跳转迟迟不到 → 图床域名收集（collectPicHosts）没跑 → 图片全在超时排队 = 图挂。
+  新站图床仍为 `pic.jtzatly.cn`（模式未变）、解析结构未变、着陆页 `www.ipqegzvg.cc` 仍活（200）。
+  修复（TDD，测试 +9 共 24 用例全绿）：
+  ①**301 落地采纳**：`adoptedBase(requested, final, landing)` 纯函数——请求 host≠最终 host 且请求
+  非着陆页 → 返回落地 origin；`httpGet` 成功后经 `adoptFinalBase` 持久化到 cachedBase/lastBase/
+  melonBase（**一次跳转，永久记住**）；着陆页跳转永不采纳。
+  ②**probe 返回最终 origin**（不再返回 Boolean）：跟随 301 验证后直接采纳活线路，杜绝选中跳转线。
+  ③**图床熔断**：`MelonClient.activePicHost`（由实际成功的图片请求 promote，含 301 落地域名）→
+  拦截器发出前直接改写到它，失败 demote 移池尾（`demoted` 纯函数：仅重排不新增）；404/410 单图
+  内容问题直接失败不换域（注意：throw 后会被自己的 catch 吞掉进 fallback，要用 contentError 标志
+  在 try 外抛）。
+  ④FALLBACK_BASES 置顶 `branch.ftnrqerm.cc`。
+  ⚠️ 经验：**这类站的镜像/图床轮换以 301 方式存在时，探活和内容获取都会"假成功"——凡 followRedirects
+  场景必须以 resp.request.url（最终 URL）为准做状态持久化**。图床与镜像同源轮换模式下，下次全挂
+  先 curl -I 看镜像是否 301。
+  版本：0.223/1223。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

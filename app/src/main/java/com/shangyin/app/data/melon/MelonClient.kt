@@ -81,8 +81,9 @@ object MelonClient {
     /** 着陆页（线路发布页） */
     private const val LANDING = "https://www.ipqegzvg.cc/"
 
-    /** 硬编码兜底线路（着陆页打不开时使用；2026-09-24 实测可用） */
+    /** 硬编码兜底线路（着陆页打不开时使用；ftnrqerm 为 2026-10-16 实测当前活线，置顶避免选中会 301 的旧线） */
     private val FALLBACK_BASES = listOf(
+        "https://branch.ftnrqerm.cc",
         "https://branch.upsqllhj.cc",
         "https://abuse.upsqllhj.cc",
         "https://already.upsqllhj.cc",
@@ -133,6 +134,25 @@ object MelonClient {
         if (found.isNotEmpty()) picHosts = mergePicHosts(picHosts, found)
     }
 
+    /**
+     * 当前信任的图床域名（v0.223 熔断）：由「实际成功」的图片请求驱动（App.kt 拦截器回写）。
+     * 非 null 时图片请求在发出前直接改写到它——避免域名轮换后每张图都从死域名开始试错
+     * （每张最坏 6s×3，Coil 并发排队下整个列表图片全拖死）。null = 不干预按 HTML 原样发。
+     */
+    @Volatile
+    var activePicHost: String? = null
+        private set
+
+    /** 图片请求在某域名成功 → 记为活跃域名（后续图直接改写到它；仅接受 pic.{词}.cn 形态） */
+    fun promotePicHost(host: String) {
+        if (host.matches(MELON_PIC_HOST)) activePicHost = host
+    }
+
+    /** 图片请求在某域名失败 → 降级移到池尾（纯逻辑见 [demoted]，线程安全：整体替换快照） */
+    fun demotePicHost(host: String) {
+        picHosts = demoted(picHosts, host)
+    }
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -171,13 +191,16 @@ object MelonClient {
         SettingsStore.melonBase = ""
     }
 
-    /** 着陆页解码发现线路 + 兜底列表，逐个探活，返回第一个真实可用的镜像 */
+    /** 着陆页解码发现线路 + 兜底列表，逐个探活，返回第一个真实可用的镜像（含 301 落地采纳） */
     private suspend fun discoverBase(): String = withContext(Dispatchers.IO) {
         val candidates = LinkedHashSet<String>()
         runCatching { discoverFromLanding() }.onSuccess { candidates.addAll(it) }
         candidates.addAll(FALLBACK_BASES)
         for (c in candidates) {
-            if (probe(c)) return@withContext c
+            val alive = probe(c) ?: continue
+            // probe 返回的是「验证过含 post-card 的最终 origin」：旧线 301 时直接得到新线，
+            // 避免选中每请求都吃一次跳转的线路
+            return@withContext alive
         }
         throw IOException("所有线路均无法访问，请稍后重试")
     }
@@ -204,10 +227,23 @@ object MelonClient {
             .toList()
     }
 
-    /** 探活：首页必须真的渲染出帖子卡片（排除导航页/挑战页） */
-    private fun probe(base: String): Boolean = runCatching {
-        httpGet("$base/").contains("post-card")
-    }.getOrDefault(false)
+    /** 探活：首页必须真的渲染出帖子卡片（排除导航页/挑战页）；返回最终活线路 origin（跟随 301 采纳落地域名） */
+    private fun probe(base: String): String? {
+        return try {
+            val req = Request.Builder().url("$base/")
+                .header("User-Agent", UA)
+                .build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return null
+                if (!resp.body?.string().orEmpty().contains("post-card")) return null
+                // 2026-10-16 实测：旧镜像 301 到新域名后内容正常，probe 若只看 HTML 会永远选中
+                // 「每请求吃 5.6s 跳转」的旧线 → 返回落地 origin 让 discoverBase 直接采纳新线
+                "${resp.request.url.scheme}://${resp.request.url.host}"
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
 
     // ---------------- HTTP 基础 ----------------
 
@@ -219,7 +255,20 @@ object MelonClient {
             .build()
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw HttpError(resp.code)
+            // 镜像 301 轮换采纳（v0.223）：内容能拿到但 cachedBase 停在旧域名的话，
+            // 设备上每个请求都要吃一遍 5.6s 的跳转 → 一次跳转后把落地域名持久化下来
+            adoptFinalBase(url, resp.request.url.toString())
             return resp.body?.string().orEmpty()
+        }
+    }
+
+    /** httpGet 成功后采纳跳转落地域名（仅站内 doc 请求；着陆页跳转不采纳） */
+    private fun adoptFinalBase(requestedUrl: String, finalUrl: String) {
+        val newBase = adoptedBase(requestedUrl, finalUrl, LANDING) ?: return
+        if (newBase != cachedBase) {
+            cachedBase = newBase
+            lastBase = newBase
+            SettingsStore.melonBase = newBase
         }
     }
 
@@ -401,4 +450,25 @@ fun mergePicHosts(existing: List<String>, found: List<String>): List<String> {
     found.forEach { if (it !in merged) merged.add(it) }
     existing.forEach { if (it !in merged) merged.add(it) }
     return merged.take(5)
+}
+
+/** 失败图床域名降级：移到池尾（不在池中则原样返回），纯函数供单测 */
+fun demoted(existing: List<String>, host: String): List<String> {
+    if (host !in existing) return existing
+    return existing.filter { it != host } + host
+}
+
+/**
+ * 镜像 301 轮换采纳（v0.223，纯函数供单测）：
+ * 请求 host 与最终 host 不同且请求不是着陆页 → 返回落地 origin（应采纳的新镜像）；
+ * 未跳转 / 着陆页跳转 / URL 非法 → null（不采纳）。
+ */
+internal fun adoptedBase(requestedUrl: String, finalUrl: String, landingUrl: String): String? {
+    val req = runCatching { java.net.URI(requestedUrl) }.getOrNull() ?: return null
+    val fin = runCatching { java.net.URI(finalUrl) }.getOrNull() ?: return null
+    val reqHost = req.host ?: return null
+    val finHost = fin.host ?: return null
+    if (reqHost == finHost) return null
+    if (reqHost == runCatching { java.net.URI(landingUrl).host }.getOrNull()) return null
+    return "${fin.scheme}://${finHost}"
 }

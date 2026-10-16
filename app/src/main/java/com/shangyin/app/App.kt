@@ -147,23 +147,43 @@ class App : Application(), ImageLoaderFactory {
                 if (out.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
                     // 图床单图失败就换域，per-call 限时 6s，避免一张图卡死整个列表
                     chain.call().timeout().timeout(6, TimeUnit.SECONDS)
+                    // 熔断直达（v0.223）：会话内已有成功域名 → 发出前直接改写，
+                    // 不再每张图都从死域名开始试错（每张最坏 18s，Coil 排队下全列表拖死）
+                    val preferred = com.shangyin.app.data.melon.MelonClient.activePicHost
+                    val primary = if (preferred != null && preferred != out.url.host)
+                        swapMelonPicHost(out, preferred) ?: out else out
                     var lastErr: java.io.IOException? = null
+                    var contentError = false
                     try {
-                        val resp = chain.proceed(out)
-                        if (resp.isSuccessful) return@addInterceptor resp
+                        val resp = chain.proceed(primary)
+                        if (resp.isSuccessful) {
+                            // 回写成功域名（resp.request.url 含 301 跟随后的落地域名）
+                            com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
+                            return@addInterceptor resp
+                        }
+                        val code = resp.code
                         resp.close()
+                        // 单图内容问题（图被删），换域也无用 → 不降级不试备选
+                        if (code == 404 || code == 410) contentError = true
+                        else lastErr = java.io.IOException("HTTP $code")
                     } catch (e: java.io.IOException) {
                         lastErr = e
                     }
-                    for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(out.url.host)) {
-                        val retry = swapMelonPicHost(out, h) ?: continue
+                    if (contentError) throw lastErr ?: java.io.IOException("HTTP 404")
+                    com.shangyin.app.data.melon.MelonClient.demotePicHost(primary.url.host)
+                    for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(primary.url.host)) {
+                        val retry = swapMelonPicHost(primary, h) ?: continue
                         try {
                             val resp = chain.proceed(retry)
-                            if (resp.isSuccessful) return@addInterceptor resp
+                            if (resp.isSuccessful) {
+                                com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
+                                return@addInterceptor resp
+                            }
                             resp.close()
                         } catch (e: java.io.IOException) {
                             lastErr = e
                         }
+                        com.shangyin.app.data.melon.MelonClient.demotePicHost(h)
                     }
                     throw lastErr ?: java.io.IOException("吃瓜图床加载失败")
                 }

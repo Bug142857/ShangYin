@@ -1,6 +1,8 @@
 package com.shangyin.app
 
 import com.shangyin.app.data.komiic.KomiicClient
+import com.shangyin.app.data.melon.adoptedBase
+import com.shangyin.app.data.melon.demoted
 import com.shangyin.app.data.melon.extractMelonPicHosts
 import com.shangyin.app.data.melon.mergePicHosts
 import okhttp3.Request
@@ -164,5 +166,57 @@ class ImageRequestRewriteTest {
         // 上限 5：新发现的最前，末尾旧的被挤掉
         assertEquals(listOf("pic.f.cn", "pic.a.cn", "pic.b.cn", "pic.c.cn", "pic.d.cn"), merged)
         assertEquals(listOf("pic.a.cn"), mergePicHosts(listOf("pic.a.cn"), emptyList()))
+    }
+
+    // ---- 镜像 301 轮换采纳（v0.223：设备每请求吃 5.6s 301 跳转的根因修复）----
+
+    @Test
+    fun adoptedBase_redirect_adopted() {
+        // 2026-10-16 实测：branch.upsqllhj.cc 301 → branch.ftnrqerm.cc（跳转 TTFB 5.6s）
+        val b = adoptedBase(
+            requestedUrl = "https://branch.upsqllhj.cc/page/2/",
+            finalUrl = "https://branch.ftnrqerm.cc/page/2/",
+            landingUrl = "https://www.ipqegzvg.cc/"
+        )
+        assertEquals("https://branch.ftnrqerm.cc", b)
+    }
+
+    @Test
+    fun adoptedBase_landing_redirect_ignored() {
+        // 着陆页跳转到哪都不采纳（着陆页不是镜像本体）
+        assertNull(
+            adoptedBase(
+                requestedUrl = "https://www.ipqegzvg.cc/",
+                finalUrl = "https://somewhere-else.cc/",
+                landingUrl = "https://www.ipqegzvg.cc/"
+            )
+        )
+    }
+
+    @Test
+    fun adoptedBase_no_redirect_returns_null() {
+        assertNull(
+            adoptedBase(
+                requestedUrl = "https://branch.ftnrqerm.cc/page/2/",
+                finalUrl = "https://branch.ftnrqerm.cc/page/2/",
+                landingUrl = "https://www.ipqegzvg.cc/"
+            )
+        )
+    }
+
+    @Test
+    fun adoptedBase_invalid_url_returns_null() {
+        assertNull(adoptedBase("::::", "https://a.cc/", "https://b.cc/"))
+        assertNull(adoptedBase("https://a.cc/", "::::", "https://b.cc/"))
+    }
+
+    // ---- 图床域名降级（v0.223：失败的图床域名移到池尾，避免每张图都从死域名开始）----
+
+    @Test
+    fun demoted_moves_host_to_tail() {
+        assertEquals(listOf("b", "c", "a"), demoted(listOf("a", "b", "c"), "a"))
+        // 不在池中的域名不新增（降级只重排池内已有项）
+        assertEquals(listOf("a", "b", "c"), demoted(listOf("a", "b", "c"), "z"))
+        assertEquals(emptyList<String>(), demoted(emptyList(), "a"))
     }
 }
