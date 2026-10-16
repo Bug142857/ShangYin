@@ -224,27 +224,8 @@ object MelonDiag {
             } catch (e: Exception) {
                 out.appendLine("首页okhttp: ${e.javaClass.simpleName}: ${e.message?.take(40)}")
             }
-            val wvHtml = try {
-                val ready = kotlinx.coroutines.withTimeoutOrNull(15_000) {
-                    kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
-                        MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
-                            if (c.isActive) c.resume(r)
-                        }
-                    }
-                }
-                when {
-                    ready == null -> "ensure超时(15s)"
-                    !ready -> "未就绪"
-                    else -> kotlinx.coroutines.withTimeoutOrNull(8_000) {
-                        MelonWebImage.evalJs(
-                            "(function(){var m=document.documentElement.innerHTML.match(/loadBannerDirect\\('([^']{10,130})'/);return m?m[1]:'NONE';})()"
-                        )
-                    } ?: "eval超时(8s)"
-                }
-            } catch (e: Exception) {
-                "${e.javaClass.simpleName}: ${e.message?.take(40)}"
-            }
-            out.appendLine("首页WebView: 首条=$wvHtml")
+            // v0.239：管线页已改为极简 stub（仅 zzz.js），首页 HTML 不再进 WebView——
+            // 「首页WebView」对照行失去意义，删除。管线健康度看「WebView管线」raw 行。
         }
         out.toString()
     }

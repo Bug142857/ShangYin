@@ -801,6 +801,20 @@
   WebView ensure 8s→15s。
   版本：0.238/1238。
 
+- **v0.239（管线极简页 + 缓存魔数校验 + 预告片控制修复，2026-10-16）**：
+  0.238 轮诊断：readyState=无（evaluateJavascript 返回 null）+ 首页okhttp 8s 超时 +
+  ensure 25s 超时——镜像首页重资源太多，设备上整页 25s 加载不完；而解密管线只需要
+  zzz.js 单文件。三修复：①**MelonWebImage.ensure 改 loadDataWithBaseURL 极简页**
+  （stub 仅一个 `<script src=zzz.js>`，baseUrl=镜像根保证同源/Cookie 正确，静态 JS 请求
+  远快于整页），「首页WebView」诊断对照行随之删除（无意义化）；②**MelonWebFetcher 缓存
+  魔数校验**（looksLikeImage：JPEG FFD8/PNG 8950/GIF/WEBP RIFF）——读缓存与解密结果都
+  校验，垃圾字节不写不读直接重拉（修 0.238 轮「Coil BitmapFactory null」之谜：缓存进过
+  垃圾）；③**预告片播放控制修复**（ItemDetailScreen.VideoPlayerDialog）：裸 VideoView 无
+  MediaController + update 每帧 start() 把用户暂停又拉起=「不能控制」实锤——加系统
+  MediaController、update 仅在从未播放时 start、AndroidView onRelease stopPlayback 防
+  关弹窗后后台拉流。
+  版本：0.239/1239。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

@@ -1029,14 +1029,23 @@ private fun VideoPlayerDialog(videoUrl: String, onClose: () -> Unit) {
                             onClose()
                             true
                         }
+                        // v0.239：系统媒体控制器——进度条/暂停/快进（此前裸 VideoView 无控制，
+                        // 且 update 每次重组强制 start() 把暂停又拉起=「不能控制」）
+                        val mc = android.widget.MediaController(ctx)
+                        mc.setAnchorView(this)
+                        setMediaController(mc)
                     }
                 },
                 update = { vv ->
-                    vv.start()
+                    // 不再每帧 start()：prepared 时已启动，重组期间保持用户操作的状态
+                    if (!vv.isPlaying && vv.currentPosition == 0 && vv.duration == 0) vv.start()
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                onRelease = { vv ->
+                    // 关闭弹窗时停止播放（v0.239：防后台继续拉流）
+                    runCatching { vv.stopPlayback() }
+                }
             )
-            // 关闭按钮
             IconButton(
                 onClick = onClose,
                 modifier = Modifier
@@ -1052,7 +1061,7 @@ private fun VideoPlayerDialog(videoUrl: String, onClose: () -> Unit) {
             }
             DisposableEffect(videoUrl) {
                 onDispose {
-                    // 停止播放
+                    // 关闭弹窗时停止播放并释放（v0.239：防后台继续拉流）
                 }
             }
         }

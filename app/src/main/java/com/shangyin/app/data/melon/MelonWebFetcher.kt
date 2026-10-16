@@ -31,24 +31,44 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
     override suspend fun fetch(): FetchResult {
         val cacheFile = cacheFile(options.context, url)
         val bytes = if (cacheFile.isFile && cacheFile.length() > 0) {
-            cacheFile.readBytes()
-        } else {
+            (cacheFile.readBytes().takeIf { looksLikeImage(it) } ?: run {
+                // 0.238 轮诊断到「Coil 报 BitmapFactory null」：缓存里进过垃圾字节。
+                // 读出非图片魔数直接删除重拉
+                runCatching { cacheFile.delete() }
+                null
+            })
+        } else null
+        val fresh = bytes ?: run {
             val ok = ensureReady(options.context)
             if (!ok) throw IOException("WebView 管线未就绪")
             val b = MelonWebImage.fetchDecrypted(url) ?: throw IOException("图床解密失败")
+            if (!looksLikeImage(b)) throw IOException("解密结果非图片")
             runCatching {
                 cacheFile.parentFile?.mkdirs()
                 cacheFile.writeBytes(b)
             }
             b
         }
-        val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+        val bmp = android.graphics.BitmapFactory.decodeByteArray(fresh, 0, fresh.size)
             ?: throw IOException("明文解码失败")
         return DrawableResult(
             drawable = android.graphics.drawable.BitmapDrawable(options.context.resources, bmp),
             isSampled = false,
             dataSource = DataSource.NETWORK
         )
+    }
+
+    /** 图片魔数校验：JPEG(FFD8)/PNG(8950)/GIF(4749)/WEBP(RIFF....WEBP)，垃圾字节一律拒收 */
+    private fun looksLikeImage(b: ByteArray): Boolean {
+        if (b.size < 16) return false
+        return when {
+            b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() -> true                                  // JPEG
+            b[0] == 0x89.toByte() && b[1] == 0x50.toByte() -> true                                  // PNG
+            b[0] == 0x47.toByte() && b[1] == 0x49.toByte() -> true                                  // GIF
+            b[0] == 0x52.toByte() && b[1] == 0x49.toByte() &&
+                b[8] == 0x57.toByte() && b[9] == 0x45.toByte() -> true                              // RIFF+WEBP
+            else -> false
+        }
     }
 
     private suspend fun ensureReady(context: android.content.Context): Boolean =

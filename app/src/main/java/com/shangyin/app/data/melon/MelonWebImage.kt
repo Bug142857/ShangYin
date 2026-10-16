@@ -84,13 +84,15 @@ object MelonWebImage {
                     it.settings.blockNetworkImage = true // 只借 JS/网络，不渲染图片（省流量）
                     webView = it
                 }
-                // v0.236：不等 onPageFinished（站点页重资源会拖到 20s 超时——0.235 设备实测
-                // 「Timed out waiting for 20000 ms」）。loadUrl 后主动轮询解密函数就绪。
-                // v0.238：设备实测镜像站点对「新连接」响应极慢（okhttp 裸 client 8s 拿不到
-                // 首页字节），WebView 首载同理——轮询上限 15s→25s；超时后**继续后台轮询**
-                // 至 60s（onReady(false) 已返回，但 pageReady 置位后下次 ensure 幂等成功），
-                // 并输出 document.readyState 供诊断定位（loading=HTML没到/complete=JS没到）。
-                if (wv.url != page) wv.loadUrl(page)
+                // v0.238 实测：镜像首页带一堆重资源，设备上 25s 都加载不完（readyState
+                // 都拿不到）——而解密管线只需要 zzz.js 一个文件。v0.239 改用
+                // loadDataWithBaseURL 加载**极简页**（仅一个 <script src=zzz.js>）：
+                // baseUrl 设镜像根（同源策略/Cookie 正确），静态 JS 文件请求远快于整页。
+                val jsUrl = "$page/usr/plugins/tbxw/js/zzz.js"
+                val stub =
+                    "<!DOCTYPE html><html><head><meta charset='utf-8'>" +
+                        "<script src='$jsUrl'></script></head><body></body></html>"
+                wv.loadDataWithBaseURL(page, stub, "text/html", "utf-8", null)
                 var waited = 0
                 fun pollReady() {
                     runCatching {
