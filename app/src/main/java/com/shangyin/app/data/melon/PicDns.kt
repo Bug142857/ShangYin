@@ -25,7 +25,19 @@ object DohResolver {
     private val cache = ConcurrentHashMap<String, Pair<Long, List<InetAddress>>>()
 
     private const val CACHE_MS = 10 * 60 * 1000L
-    private const val DOH = "https://223.5.5.5/resolve?name=%s&type=A"
+
+    /**
+     * DoH 端点列表（v0.228 双端点）：设备诊断（辽宁联通，10-16）实证阿里 223.5.5.5 的
+     * DoH 从设备网络不可达（全部「无结果」，而 PC 正常）→ DoH 兜底从未生效。
+     * 增加 DNSPod 120.53.53.53（同为 /resolve JSON 格式）；成功的端点会话内优先复用。
+     */
+    private val endpoints = listOf(
+        "https://223.5.5.5/resolve?name=%s&type=A",
+        "https://120.53.53.53/resolve?name=%s&type=A"
+    )
+
+    @Volatile
+    private var preferredEndpoint = 0
 
     /** 解析域名：DoH 优先、系统回退。返回空列表表示全部失败（调用方决定抛异常还是兜底）。 */
     fun resolve(hostname: String): List<InetAddress> {
@@ -38,14 +50,34 @@ object DohResolver {
         return ips
     }
 
-    /** 阿里 DoH JSON API：{"Status":0,"Answer":[{"type":1,"data":"1.2.3.4"},...]}（公开供诊断使用） */
+    /** 依次尝试端点（上次成功的优先），返回首个有结果的 A 记录列表 */
     fun dohLookup(hostname: String): List<InetAddress> {
-        val url = DOH.format(hostname).toHttpUrl()
+        for (offset in endpoints.indices) {
+            val idx = (preferredEndpoint + offset) % endpoints.size
+            val ips = dohQuery(endpoints[idx], hostname)
+            if (ips.isNotEmpty()) {
+                preferredEndpoint = idx
+                return ips
+            }
+        }
+        return emptyList()
+    }
+
+    /** 诊断用：逐端点状态一览 */
+    fun endpointsStatus(hostname: String): String = endpoints.joinToString(" | ") { ep ->
+        val ips = dohQuery(ep, hostname)
+        val name = if (ep.contains("223.5")) "阿里" else "DNSPod"
+        "$name:" + (ips.joinToString(",") { it.hostAddress ?: "?" }.ifEmpty { "无结果" })
+    }
+
+    /** 单端点 DoH JSON 查询：{"Status":0,"Answer":[{"type":1,"data":"1.2.3.4"},...]} */
+    fun dohQuery(endpoint: String, hostname: String): List<InetAddress> {
+        val url = endpoint.format(hostname).toHttpUrl()
         val req = Request.Builder().url(url).header("Accept", "application/dns-json").build()
         return runCatching {
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@runCatching emptyList()
-                val body = resp.body?.string() ?: return@runCatching emptyList()
+                if (!resp.isSuccessful) return@use emptyList()
+                val body = resp.body?.string() ?: return@use emptyList()
                 // 轻量正则解析（type=1 为 A 记录），避免引入 JSON 依赖
                 Regex("""\{\s*"name"\s*:\s*"[^"]*"\s*,\s*"type"\s*:\s*1\s*,[^}]*"data"\s*:\s*"(\d{1,3}(?:\.\d{1,3}){3})"\s*\}""")
                     .findAll(body)

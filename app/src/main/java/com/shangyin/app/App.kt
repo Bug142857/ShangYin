@@ -171,8 +171,21 @@ class App : Application(), ImageLoaderFactory {
                     // 非图片视为该域失败，走换域重试；也确保垃圾响应永远进不了磁盘缓存。
                     fun isImageResponse(r: okhttp3.Response) =
                         r.header("Content-Type")?.startsWith("image", ignoreCase = true) == true
+
+                    // v0.228 Cookie 直通：设备诊断实证 WebView 拿得到图而 okhttp/Coil 拿到
+                    // 「200 + text/html」（JS 挑战页/风控页嫌疑）。WebView 作为主框架访问过
+                    // 图床域后，通过挑战写入的 Cookie 会存在系统 CookieManager——把它带给
+                    // Coil 的请求，即复刻 WebView 的成功路径；若是 ISP 劫持场景则多带无害。
+                    fun withCookie(r: okhttp3.Request): okhttp3.Request {
+                        val c = runCatching {
+                            android.webkit.CookieManager.getInstance()
+                                .getCookie("https://${r.url.host}/")
+                        }.getOrNull()
+                        return if (c.isNullOrBlank()) r
+                        else r.newBuilder().header("Cookie", c).build()
+                    }
                     try {
-                        val resp = chain.proceed(primary)
+                        val resp = chain.proceed(withCookie(primary))
                         if (resp.isSuccessful && isImageResponse(resp)) {
                             // 回写成功域名（resp.request.url 含 301 跟随后的落地域名）
                             com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
@@ -196,7 +209,7 @@ class App : Application(), ImageLoaderFactory {
                     for (h in com.shangyin.app.data.melon.MelonClient.fallbackPicHosts(primary.url.host)) {
                         val retry = swapMelonPicHost(primary, h) ?: continue
                         try {
-                            val resp = chain.proceed(retry)
+                            val resp = chain.proceed(withCookie(retry))
                             if (resp.isSuccessful && isImageResponse(resp)) {
                                 com.shangyin.app.data.melon.MelonClient.promotePicHost(resp.request.url.host)
                                 return@addInterceptor resp

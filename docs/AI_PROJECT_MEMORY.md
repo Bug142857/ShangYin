@@ -622,6 +622,24 @@
   下一轮按诊断结果对症下药，不再盲修。
   版本：0.227/1227。
 
+- **v0.228（诊断数据定性：联通网内 HTML 页 + DoH 设备不可达，Cookie直通+双端点DoH，2026-10-16）**：
+  用户装 0.227 跑内置诊断，输出定性了图片问题（对照 PC 全绿）：
+  ①图床域名被设备 DNS（辽宁联通 218.60.15.x）解析到 **218.60.x/218.61.x 联通网内 IP**，
+  这些 IP 对 HTTPS 返回 **200 + text/html**（okhttp/HttpConn 一致；WebView 正常）→ App 拿到
+  的从来不是图片而是 HTML 页——0.226 的「缓存污染」假说由此实锤（污染源就是这些 200 HTML）
+  ②**阿里 DoH 223.5.5.5 从设备网络完全不可达**（三域名全「无结果」，PC 正常）→ v0.224 起
+  所有 DoH 兜底在设备上从未生效，永远回退到被污染的系统解析。这是「PC 全绿设备全挂」的
+  第二半答案 ③mts.hhjd.mobi 根路径 403 属 CDN 正常行为（播放器带签名路径可播）。
+ WebView OK + okhttp 拿 HTML 的组合指向 **JS 挑战页**（浏览器可过、App 过不了）。
+  修复（对症三招）：
+  ①**Cookie 直通**：图床请求从系统 CookieManager 取 WebView 的 Cookie 带上（withCookie
+  包装 primary/retry）——WebView 通过挑战后的票据对 Coil 同样有效；劫持场景无害。
+  ②**DohResolver 双端点**：阿里 + DNSPod 120.53.53.53（同 /resolve JSON 格式），依次
+  尝试、成功端点会话内记住（preferredEndpoint）。诊断可 endpointsStatus 分端点显示。
+  ③**诊断 v2**：WebView 探测先行（先让挑战 JS 写 Cookie），okhttp 探针分「裸」与
+  「+Cookie」两路，HTML 200 时抓 150 字符片段定性（挑战页/劫持页/CDN默认页一眼可辨）。
+  版本：0.228/1228。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

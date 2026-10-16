@@ -57,8 +57,11 @@ object MelonDiag {
         ts.forEachIndexed { idx, (host, isPic) ->
             out.appendLine("――― $host${if (isPic) "（图床）" else ""} ―――")
             val referer = if (isPic) MelonClient.lastBase.trimEnd('/') + "/" else null
+            // WebView 先行（idx<2）：主框架访问会执行挑战页 JS 并把通过票据写入
+            // CookieManager——之后的「okhttp+Cookie」探针才能验证 Cookie 直通是否有效
+            if (idx < 2) out.appendLine("WebView: ${probeWebView(context, "https://$host/")}")
 
-            // DNS 两路 + 两个 HTTP 栈并行跑，压时长（最坏 4s 内/项）
+            // DNS + HTTP 栈并行跑，压时长（最坏 4s/项）
             val sysDns = async(Dispatchers.IO) {
                 val r = runCatching { Dns.SYSTEM.lookup(host) }
                 val ips: List<InetAddress> = r.getOrDefault(emptyList())
@@ -68,33 +71,46 @@ object MelonDiag {
                     else -> "空"
                 }
             }
-            val dohDns = async(Dispatchers.IO) {
-                DohResolver.dohLookup(host).joinToString(",") { it.hostAddress ?: "?" }.ifEmpty { "无结果" }
-            }
-            val okhttpRes = async(Dispatchers.IO) { probeOkhttp(host, referer) }
+            val doh = async(Dispatchers.IO) { DohResolver.endpointsStatus(host) }
+            val okPlain = async(Dispatchers.IO) { probeOkhttp(host, referer, withCookie = false) }
+            val okCookie = async(Dispatchers.IO) { probeOkhttp(host, referer, withCookie = true) }
             val urlConnRes = async(Dispatchers.IO) { probeUrlConn(host, referer) }
 
             out.appendLine("系统DNS: ${sysDns.await().ifEmpty { "空" }}")
-            out.appendLine("DoH阿里: ${dohDns.await()}")
-            out.appendLine("okhttp: ${okhttpRes.await()}")
+            out.appendLine("DoH: ${doh.await()}")
+            out.appendLine("okhttp: ${okPlain.await()}")
+            out.appendLine("okhttp+Cookie: ${okCookie.await()}")
             out.appendLine("HttpConn: ${urlConnRes.await()}")
-            // WebView 只测前两个（图床主候选 + 切片），压总时长
-            if (idx < 2) out.appendLine("WebView: ${probeWebView(context, "https://$host/")}")
         }
         out.appendLine("镜像: ${MelonClient.lastBase}  图床池: ${MelonClient.fallbackPicHosts("")}")
-        out.appendLine("判读: okhttp+HttpConn 全挂而 WebView 正常 = TLS指纹拦截; 三栈全挂 = 域名/IP阻断; DNS失败 = 解析问题")
+        out.appendLine("判读: HTML片段=挑战页/劫持页(看内容定性); 若okhttp+Cookie返回200 image=Cookie直通已解; 三栈全挂=域名阻断; 切片域名403属CDN对裸路径的正常行为")
         out.toString()
     }
 
-    private fun probeOkhttp(host: String, referer: String?): String {
+    private fun probeOkhttp(host: String, referer: String?, withCookie: Boolean): String {
         val client = OkHttpClient.Builder()
             .connectTimeout(4, TimeUnit.SECONDS)
             .readTimeout(4, TimeUnit.SECONDS)
-            .build() // 故意裸 client（系统 DNS），与 0.221-0.224 时代的图床路径一致
-        val req = Request.Builder().url("https://$host/").header("User-Agent", MelonClient.UA)
-            .apply { referer?.let { header("Referer", it) } }.build()
+            .build() // 故意裸 client（系统 DNS），与 App 内图床路径一致
+        val b = Request.Builder().url("https://$host/").header("User-Agent", MelonClient.UA)
+        referer?.let { b.header("Referer", it) }
+        if (withCookie) {
+            val c = runCatching {
+                android.webkit.CookieManager.getInstance().getCookie("https://$host/")
+            }.getOrNull()
+            if (c.isNullOrBlank()) return "无Cookie可带"
+            b.header("Cookie", c)
+        }
         return try {
-            client.newCall(req).execute().use { "HTTP ${it.code} ${it.header("Content-Type") ?: ""}" }
+            client.newCall(b.build()).execute().use { resp ->
+                val ct = resp.header("Content-Type") ?: ""
+                if (resp.isSuccessful && ct.startsWith("text/html")) {
+                    // 抓 HTML 片段定性：JS 挑战页（script+setTimeout） / 运营商劫持（广告） / CDN 默认页
+                    val snippet = resp.body?.string().orEmpty()
+                        .replace(Regex("\\s+"), " ").trim().take(150)
+                    "HTTP 200 html「$snippet」"
+                } else "HTTP ${resp.code} $ct"
+            }
         } catch (e: Exception) {
             "${e.javaClass.simpleName}: ${e.message?.take(60) ?: ""}"
         }
