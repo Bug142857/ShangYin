@@ -136,12 +136,16 @@ object MelonDiag {
                     } catch (e: Exception) {
                         "${e.javaClass.simpleName}: ${e.message?.take(50)}"
                     }
+                    // HttpConn（安卓原生 TLS/Conscrypt，WebView 同源栈）对照——
+                    // 若它 head=FFD8（真图）而 okhttp=混淆字节，「TLS 指纹风控」实锤
+                    val viaConn = if (n == 1)
+                        httpConnBytes(c, "${MelonClient.lastBase.trimEnd('/')}/") else null
                     // Coil 真身：走 App 的 ImageLoader 完整路径（共享client+拦截器+缓存+解码），
                     // 与列表 UI 完全同路——裸成功而 Coil 失败 = 拦截器/缓存/解码层，一次定性
                     val viaCoil = if (n == 1) {
                         try {
-                            val loader = (context as? coil.ImageLoaderFactory)?.newImageLoader()
-                            if (loader == null) "Coil: loader不可用"
+                            val loader = (context.applicationContext as? coil.ImageLoaderFactory)?.newImageLoader()
+                            if (loader == null) "Coil: loader不可用(非Factory ctx)"
                             else {
                                 val req = coil.request.ImageRequest.Builder(context.applicationContext)
                                     .data(c).allowHardware(false).build()
@@ -159,7 +163,7 @@ object MelonDiag {
                             "Coil异常: ${e.javaClass.simpleName}: ${e.message?.take(50)}"
                         }
                     } else null
-                    listOfNotNull(bare, viaCoil).joinToString("  ||  ")
+                    listOfNotNull(bare, viaConn, viaCoil).joinToString("  ||  ")
                 }.await()
                 out.appendLine("封面$n: $r")
                 n++
@@ -168,17 +172,36 @@ object MelonDiag {
         out.toString()
     }
 
-    /** 精确探测 App 内真实使用的 URL（不带缓存、UA/Referer 与图床路径一致） */
-    private fun probeExact(url: String): String = try {
-        val req = Request.Builder().url(url)
-            .header("User-Agent", MelonClient.UA)
-            .header("Referer", "${MelonClient.lastBase.trimEnd('/')}/").build()
-        probeClient.newCall(req).execute().use { r ->
-            val size = r.body?.bytes()?.size ?: 0
-            "HTTP ${r.code} ${r.header("Content-Type")} ${size}B"
+    /**
+     * HttpURLConnection 探针（v0.234 字节级终审）：Android 原生 TLS 栈（Conscrypt），与
+     * WebView 的网络栈同源——若它拿到真图（FFD8）而 okhttp 拿到混淆字节（3E AA...），
+     * 则「TLS 指纹风控」实锤，修复 = 图片/视频/下载全面换 HttpConn 栈。
+     */
+    private fun httpConnBytes(url: String, referer: String?): String = try {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("User-Agent", MelonClient.UA)
+            if (!referer.isNullOrBlank()) setRequestProperty("Referer", referer)
         }
+        conn.connect()
+        val code = conn.responseCode
+        val head = ByteArray(8)
+        val len = if (code in 200..299) {
+            val ins = conn.inputStream
+            var off = 0
+            while (off < 8) {
+                val r = ins.read(head, off, 8 - off)
+                if (r < 0) break
+                off += r
+            }
+            ins.close()
+            off
+        } else 0
+        conn.disconnect()
+        "HTTP $code head=[${head.take(len).joinToString(" ") { "%02X".format(it) }}]"
     } catch (e: Exception) {
-        "${e.javaClass.simpleName}: ${e.message?.take(60) ?: ""}"
+        "${e.javaClass.simpleName}: ${e.message?.take(40)}"
     }
 
     /** 播放地址探测：m3u8 → KEY 实测 + 前 2 个切片实测（seek 卡死/下载失败的同链路定性） */
@@ -222,12 +245,22 @@ object MelonDiag {
                                 probeClient.newCall(
                                     Request.Builder().url(su).header("User-Agent", MelonClient.UA).build()
                                 ).execute().use { sr ->
-                                    val sb2 = sr.body?.bytes() ?: ByteArray(0)
-                                    sb.append(" | 片$i:HTTP ${sr.code} ${sb2.size}B")
+                                    // TS 切片验证：每 188 字节首个应为 0x47；假切片（风控混淆
+                                    // 字节）此处错乱 → ExoPlayer 解码卡死 / AES 解密失败下载挂
+                                    val raw = sr.body?.bytes() ?: ByteArray(0)
+                                    val head = raw.take(8).joinToString(" ") { "%02X".format(it) }
+                                    val tsOk = raw.size >= 377 &&
+                                        raw[0] == 0x47.toByte() && raw[188] == 0x47.toByte() &&
+                                        raw[376] == 0x47.toByte()
+                                    sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B head=[$head] TS对齐=${if (tsOk) "OK" else "错乱"}")
                                 }
                             } catch (e: Exception) {
                                 sb.append(" | 片$i:${e.javaClass.simpleName}: ${e.message?.take(40)}")
                             }
+                        }
+                        // 切片 HttpConn 对照（v0.234）：okhttp 假切片而 conn 真切片 → 换栈
+                        segUrls.firstOrNull()?.let { su ->
+                            sb.append(" | 片0conn:${httpConnBytes(su, null)}")
                         }
                         sb.toString()
                     }

@@ -724,6 +724,21 @@
   的 probeExact 直接在主线程调用的低级错误）。
   版本：0.233/1233。
 
+- **v0.234（字节级终审：TLS 指纹风控实锤线 + 用户手机 Clash fake-ip 干扰实锤，2026-10-16）**：
+  0.233 诊断数据三大真相：①**封面字节头 [3E AA 70 8E] 非任何图片魔数**（JPEG=FFD8/PNG=
+  8950/RIFF=WEBP）——图床「内容级风控」实锤线：对非浏览器 TLS 指纹返回 200+混淆假图字节
+  （200/octet-stream/293KB 全是假象，此前 PC 与设备测的「成功」全是假数据，WebView 能看
+  是因为真浏览器 TLS 指纹）；②**系统 DNS 变 198.18.x**——用户手机开 Clash 系代理（15:29
+  轮还是真 IP 218.60.x），下载 err=unexpected end of stream = 代理切断连接，视频/下载问题
+  混入了用户代理软件干扰；③切片 1.6MB「拉到」但未验字节——疑似假 TS（假切片→ExoPlayer
+  卡死/AES 解密失败，与图片同机制）。
+  诊断 v6：封面 okhttp hex + **HttpConn（Conscrypt 原生 TLS，WebView 同源栈）hex 对照** +
+  Coil 真身（loader 修 applicationContext）；切片 **TS 188 对齐检查**（0/188/376=0x47）+
+  片0 HttpConn 对照。**若 HttpConn 真字节而 okhttp 假字节 → 0.235 图片/视频/下载全面换
+  HttpURLConnection 栈 = 终极修复**；另需提醒用户：App 测试时关掉手机代理软件（分流规则
+  未覆盖国内域名时会干扰直连）。
+  版本：0.234/1234。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
