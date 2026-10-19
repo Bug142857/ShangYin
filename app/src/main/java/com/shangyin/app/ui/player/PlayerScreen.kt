@@ -697,16 +697,23 @@ fun PlayerScreen(nav: NavHostController) {
             // v0.251：视频停帧检测（第四盲区）——0.250 黑匣子实锤：seek 后 9 次首帧渲染、
             // 0 条卡住自愈 = 解码器只出 1 帧就停，但 isPlaying=true 位置照走（媒体时钟与
             // 画面脱钩），state/pos/suppression 全部"健康"，前三种判据全部被骗过。
-            // renderedOutputBufferCount 每渲染一帧 +1：时钟在走而帧数 12s 不涨 = 停帧
+            // renderedOutputBufferCount 每渲染一帧 +1：时钟在走而帧数不涨 = 停帧。
+            // v0.252：12s→8s（用户感知"卡住"远早于此，快检测快恢复）；停帧自愈第 1 轮
+            // 就上 MediaItem 重建（解码器级卡死 stop+prepare 不一定重建编解码器实例）
             var videoStalled = false
             countersRef.get()?.let { cnt ->
                 val rendered = cnt.renderedOutputBufferCount
                 if (rendered != lastRendered) {
+                    if (lastRendered >= 0 && stallSince > 0) {
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "渲染恢复 frames=$rendered（自愈${if (reloadRound > 0) "有效" else "未介入"}）"
+                        )
+                    }
                     lastRendered = rendered
                     stallSince = 0L
                 } else if (rendered > 0 && player.isPlaying && !isLive) {
                     if (stallSince == 0L) stallSince = now
-                    else if (now - stallSince > 12_000) videoStalled = true
+                    else if (now - stallSince > 8_000) videoStalled = true
                 } else {
                     stallSince = 0L
                 }
@@ -755,9 +762,20 @@ fun PlayerScreen(nav: NavHostController) {
                 val item = player.currentMediaItem
                 runCatching {
                     when {
-                        // 第 1 次：轻量重载——stop()+prepare() 强制丢弃已加载的 MediaPeriod
-                        // 重新拉清单/切片（⚠️ v0.225 教训：seekTo(当前位置) 是 no-op，
-                        // media3 认为目标位置就是当前位置不重新加载；seekTo 只用于钉住进度）
+                        // v0.252：停帧 = 解码器级卡死（0.250 实锤时钟走画面停），第 1 轮
+                        // 就直接 MediaItem 重建——完整重置解码器/清单/密钥/切片状态，
+                        // stop+prepare 不一定重建编解码器实例，对停帧是弱药
+                        videoStalled && item != null -> {
+                            com.shangyin.app.data.melon.MelonFlightLog.log(
+                                "PLAYER", "${src}自愈#$reloadRound frames冻结 pos=$pos → MediaItem重建(解码器级)"
+                            )
+                            player.setMediaItem(item, pos)
+                            player.prepare()
+                            player.playWhenReady = true
+                        }
+                        // 第 1 次（BUFFERING/READY 场景）：轻量重载——stop()+prepare() 强制丢弃
+                        // 已加载的 MediaPeriod 重新拉清单/切片（⚠️ v0.225 教训：seekTo(当前位置)
+                        // 是 no-op，media3 认为目标位置就是当前位置不重新加载；seekTo 只用于钉住进度）
                         reloadRound <= 1 || item == null -> {
                             com.shangyin.app.data.melon.MelonFlightLog.log(
                                 "PLAYER", "${src}自愈#$reloadRound state=${player.playbackState} pos=$pos → stop+prepare"

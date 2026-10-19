@@ -438,12 +438,22 @@ fun MelonHomeScreen(nav: NavHostController) {
                                     modifier = Modifier.size(20.dp),
                                     strokeWidth = 2.dp
                                 )
-                                error != null && items.isNotEmpty() -> Text(
-                                    "加载失败，点击重试",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.clickable { load(false, nextPath) }
-                                )
+                                error != null && items.isNotEmpty() -> Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    // v0.252：失败原因直接亮出来——"加载失败"四个字没法定位
+                                    Text(
+                                        "加载失败：${error}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                    Text(
+                                        "点击重试",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.clickable { load(false, nextPath) }
+                                    )
+                                }
                                 nextPath == null && items.isNotEmpty() -> Text(
                                     "没有更多了",
                                     style = MaterialTheme.typography.bodySmall,

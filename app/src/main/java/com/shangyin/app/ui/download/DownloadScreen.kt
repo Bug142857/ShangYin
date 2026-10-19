@@ -441,9 +441,11 @@ private fun VideoTaskCard(task: VideoTask, onCancel: () -> Unit, onDismiss: () -
                     modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(Modifier.height(4.dp))
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // v0.252：确定进度也显示实时字节——「进度条不动」时立刻分辨是
+                    // UI 没刷新（%不动但MB动）还是流水线卡死（两者都不动）
                     Text(
-                        "${(task.progress * 100).toInt()}%",
+                        "${(task.progress * 100).toInt()}% · 已下载 ${"%.1f".format(task.bytesCopied / 1048576f)} MB",
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.weight(1f)
                     )
