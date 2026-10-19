@@ -24,8 +24,8 @@ data class MelonPost(
     val categories: List<String>
 )
 
-/** 一页列表：items + 下一页路径（null = 没有下一页；以站点 page-nav 的 next 链接为准） */
-data class MelonPage(val items: List<MelonPost>, val nextPath: String?)
+/** 一页列表：items + 下一页路径（null = 没有下一页；以站点 page-nav 的 next 链接为准）+ 末页页码 */
+data class MelonPage(val items: List<MelonPost>, val nextPath: String?, val lastPage: Int? = null)
 
 /** 正文内容块 */
 sealed class MelonBlock {
@@ -350,7 +350,18 @@ object MelonClient {
             ?.takeIf { it.startsWith("http") }
             ?.let { it.substringAfter(base, it).ifBlank { null } }
             ?.let { normalizeNext(it) }
-        return MelonPage(items.distinctBy { it.id }, next)
+        // v0.255：末页页码——用户要求页码条可跳页、能看总数。分页器里的所有数字页链接
+        //（/page/N/ 与 /category/x/N/ 尾段数字）取最大即末页；解析不到为 null（UI 退回
+        // 上一页/下一页形态）
+        val navScope = d.selectFirst(".page-navigator") ?: d.selectFirst(".pagination")
+        val lastPage = navScope?.select("a[href]")
+            ?.mapNotNull { a ->
+                // 原始 href（相对/绝对均可）尾段数字即页码：/page/5/ → 5；/category/x/7/ → 7
+                Regex("""/(\d+)/?$""").find(a.attr("href") ?: "")?.groupValues?.get(1)?.toIntOrNull()
+            }
+            ?.maxOrNull()
+            ?.takeIf { it >= 1 }
+        return MelonPage(items.distinctBy { it.id }, next, lastPage)
     }
 
     /**

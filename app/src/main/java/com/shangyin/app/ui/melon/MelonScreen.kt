@@ -55,7 +55,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -105,7 +104,8 @@ private object MelonHomeCache {
     var keyword: String = ""
     var items: List<MelonPost> = emptyList()
     var nextPath: String? = null
-    var pages: List<String> = listOf("") // v0.254 页码栈（""=首页哨兵），页码条导航用
+    var page: Int = 1      // v0.255 当前页码（页码条）
+    var lastPage: Int = 0  // v0.255 末页页码（分页器解析，0=未知）
     var loadedKey: String? = null
 }
 
@@ -128,13 +128,32 @@ fun MelonHomeScreen(nav: NavHostController) {
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
     var loadedKey by remember { mutableStateOf(MelonHomeCache.loadedKey) }
-    // v0.254：页码条导航——用户明确要求「需要分页 不要无限翻」。页码栈（""=首页哨兵）
-    // 记录已访问页路径：下一页 push、上一页 pop+重载上一页路径。页码 = 栈深
-    val pageStack = remember { mutableStateListOf<String>().apply { addAll(MelonHomeCache.pages) } }
-    var lastNavWasNext by remember { mutableStateOf(true) } // 失败重试要重复上次导航动作
+    // v0.255：页码条导航——用户要求「中间可以选页，知道最后一页」。currentPage 显式计数，
+    // 跳页/上/下页统一走 loadNav(target, page)；lastPage 来自分页器解析（null=未知）
+    var currentPage by remember { mutableIntStateOf(MelonHomeCache.page) }
+    var lastPage by remember { mutableIntStateOf(MelonHomeCache.lastPage) }
+    var lastTarget by remember { mutableStateOf<String?>(null) } // 失败重试要重复上次导航
+    var lastRequested by remember { mutableIntStateOf(1) }       // 重试要重复的请求页码（失败时 currentPage 未变）
     val lastSeen = remember { MelonCache.last }
     // 列表状态须在 fetch 之前定义：reset 加载成功后要 scrollToItem(0) 回第一条
     val listState = rememberLazyListState()
+
+    /** 目标页的请求路径：P=1 → null（走初始加载：首页/分类/搜索）；P≥2 → 由已知样例路径换尾段数字 */
+    fun pathFor(p: Int): String? {
+        if (p <= 1) return null
+        val sample = nextPath ?: MelonHomeCache.nextPath
+        if (sample != null) {
+            val replaced = sample.replace(Regex("""/(\d+)/$"""), "/$p/")
+            if (replaced != sample) return replaced
+        }
+        // 样例缺失/尾段未命中（处于末页 next=null 时跳页）：按当前版块形态构造，防错跳首页 404
+        // （v0.255 审查发现：此前一律兜底 /page/$p/，分类页在末页跳页会请求错误形态）
+        return when {
+            keyword.isNotBlank() -> "/search/$keyword/$p/"
+            catPath.isNotBlank() -> "$catPath$p/"
+            else -> "/page/$p/"
+        }
+    }
 
     /** 整页加载（target=null=首页/分类/搜索第一页；非空=指定页路径）。每次整页替换 */
     suspend fun fetchPage(target: String?) {
@@ -158,37 +177,36 @@ fun MelonHomeScreen(nav: NavHostController) {
         }.onSuccess { page ->
             items = page.items.distinctBy { it.id }
             nextPath = page.nextPath
+            page.lastPage?.let { lastPage = it }
             // 翻页/重置后回顶部：页码条模式下每页都是新列表
             listState.scrollToItem(0)
             // 成功后同步现场缓存（返回再进不重载、不丢位置）
+            // v0.255 审查修复：页码不在 fetchPage 写——此刻 currentPage 还是导航前的旧值
+            // （loadNav 在 fetchPage 之后才更新），写进去会滞后一页；改由 loadNav 成功后补写
             MelonHomeCache.catPath = catPath
             MelonHomeCache.keyword = keyword
             MelonHomeCache.items = items
             MelonHomeCache.nextPath = nextPath
-            MelonHomeCache.pages = pageStack.toList()
+            MelonHomeCache.lastPage = lastPage
             MelonHomeCache.loadedKey = "$catPath|$keyword"
         }.getOrThrow() // 回调内异常抛给 loadNav 的 catch（loading 复位由 finally 保证）
     }
 
-    /** 页码条导航：isNext=true 加载下一页（push 栈）；false 加载上一页（pop 栈） */
-    fun loadNav(target: String?, isNext: Boolean) {
+    /** 页码条导航：target=null=初始加载（第1页）；非空=指定页路径。页码变化只在成功后生效 */
+    fun loadNav(target: String?, page: Int) {
         if (loading) return
         loading = true
-        lastNavWasNext = isNext
+        lastTarget = target
+        lastRequested = page
         error = null
         scope.launch {
             try {
-                // ""=首页哨兵：上一页回到第 1 页时走初始加载
-                val t = target?.takeIf { it.isNotBlank() }
-                fetchPage(t)
-                if (target != null) {
-                    if (isNext) pageStack.add(target) else if (pageStack.size > 1) pageStack.removeLast()
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "LIST", "页码=${pageStack.size} ${items.size}条 next=${nextPath ?: "null"}"
-                    )
-                    // 栈操作后再写缓存（fetchPage 写的是操作前快照，会滞后一页）
-                    MelonHomeCache.pages = pageStack.toList()
-                }
+                fetchPage(target)
+                currentPage = page
+                MelonHomeCache.page = currentPage
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "LIST", "页码=$currentPage/${lastPage.takeIf { it > 0 } ?: "?"} ${items.size}条 next=${nextPath ?: "null"}"
+                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e // 协程取消不是错误，原样重抛（finally 照常复位 loading）
             } catch (e: Exception) {
@@ -205,33 +223,9 @@ fun MelonHomeScreen(nav: NavHostController) {
         }
     }
 
-    fun loadPrev() {
-        if (pageStack.size >= 2) loadNav(pageStack[pageStack.size - 2], false)
-    }
-
     /** 初始/刷新/切分类：回到第 1 页 */
-    fun load(reset: Boolean) {
-        if (loading) return
-        loading = true
-        error = null
-        scope.launch {
-            try {
-                fetchPage(null)
-                pageStack.clear()
-                pageStack.add("")
-                MelonHomeCache.pages = pageStack.toList()
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "LIST", "加载协程异常 ${e.javaClass.simpleName}: ${e.message?.take(60)}"
-                )
-                items = emptyList()
-                error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
-            } finally {
-                loading = false
-            }
-        }
+    fun load() {
+        loadNav(null, 1)
     }
 
     // 分类/关键词变化 → 重置加载
@@ -239,7 +233,7 @@ fun MelonHomeScreen(nav: NavHostController) {
         val key = "$catPath|$keyword"
         if (key != loadedKey) {
             loadedKey = key
-            load(true)
+            load()
         }
     }
 
@@ -387,7 +381,7 @@ fun MelonHomeScreen(nav: NavHostController) {
                         textAlign = TextAlign.Center
                     )
                     Button(
-                        onClick = { loadedKey = null; load(true) },
+                        onClick = { loadedKey = null; load() },
                         modifier = Modifier.padding(top = 16.dp)
                     ) { Text("重试") }
                 }
@@ -402,11 +396,9 @@ fun MelonHomeScreen(nav: NavHostController) {
                                 .onFailure { e ->
                                     if (e is kotlinx.coroutines.CancellationException) throw e
                                 }
-                            // v0.254：刷新=回到第 1 页，页码栈必须复位（审查发现：第 3 页刷新
-                            // 后显示第 1 页内容仍标"第 3 页"，栈/锚点错位）
-                            pageStack.clear()
-                            pageStack.add("")
-                            MelonHomeCache.pages = pageStack.toList()
+                            // v0.254：刷新=回到第 1 页（栈已由 currentPage 取代）
+                            currentPage = 1
+                            MelonHomeCache.page = 1
                             refreshing = false
                         }
                     },
@@ -482,27 +474,88 @@ fun MelonHomeScreen(nav: NavHostController) {
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.clickable {
-                                            // 重复上次导航动作（失败时栈/锚点均未变动，重算即可）
-                                            if (lastNavWasNext) nextPath?.let { loadNav(it, true) }
-                                            else loadPrev()
+                                            // 重复上次导航（目标路径+页码均已存档，失败时页面状态未变动）
+                                            loadNav(lastTarget, lastRequested)
                                         }
                                     )
                                 }
-                                else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(
-                                        enabled = pageStack.size > 1 && !loading,
-                                        onClick = { loadPrev() }
-                                    ) { Text("上一页") }
-                                    Text(
-                                        "第 ${pageStack.size} 页",
-                                        style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.outline,
-                                        modifier = Modifier.padding(horizontal = 10.dp)
-                                    )
-                                    TextButton(
-                                        enabled = nextPath != null && !loading,
-                                        onClick = { nextPath?.let { loadNav(it, true) } }
-                                    ) { Text("下一页") }
+                                else -> {
+                                    if (lastPage > 0) {
+                                        // v0.255 数字页码条（用户要求「中间可以选页，知道最后一页」）：
+                                        // 窗口 = 1 … cur-1 cur cur+1 … N，当前页高亮，点击跳页
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                            modifier = Modifier.horizontalScroll(rememberScrollState())
+                                        ) {
+                                            TextButton(
+                                                enabled = currentPage > 1 && !loading,
+                                                onClick = { loadNav(pathFor(currentPage - 1), currentPage - 1) },
+                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
+                                            ) { Text("上一页") }
+                                            val window = buildList {
+                                                add(1); add(lastPage)
+                                                for (d in -1..1) {
+                                                    val p = currentPage + d
+                                                    if (p in 1..lastPage) add(p)
+                                                }
+                                            }.distinct().sorted()
+                                            var prevNum = 0
+                                            window.forEach { p ->
+                                                if (p - prevNum > 1) {
+                                                    Text(
+                                                        "…",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.outline,
+                                                        modifier = Modifier.padding(horizontal = 2.dp)
+                                                    )
+                                                }
+                                                prevNum = p
+                                                if (p == currentPage) {
+                                                    Surface(
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        color = MaterialTheme.colorScheme.primary
+                                                    ) {
+                                                        Text(
+                                                            "$p",
+                                                            style = MaterialTheme.typography.labelMedium,
+                                                            color = MaterialTheme.colorScheme.onPrimary,
+                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                        )
+                                                    }
+                                                } else {
+                                                    TextButton(
+                                                        enabled = !loading,
+                                                        onClick = { loadNav(pathFor(p), p) },
+                                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
+                                                    ) { Text("$p") }
+                                                }
+                                            }
+                                            TextButton(
+                                                enabled = nextPath != null && !loading,
+                                                onClick = { nextPath?.let { loadNav(it, currentPage + 1) } },
+                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
+                                            ) { Text("下一页") }
+                                        }
+                                    } else {
+                                        // 末页未知（分页器没解析到）→ 退回上一页/下一页形态
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            TextButton(
+                                                enabled = currentPage > 1 && !loading,
+                                                onClick = { loadNav(pathFor(currentPage - 1), currentPage - 1) }
+                                            ) { Text("上一页") }
+                                            Text(
+                                                "第 ${currentPage} 页",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.outline,
+                                                modifier = Modifier.padding(horizontal = 10.dp)
+                                            )
+                                            TextButton(
+                                                enabled = nextPath != null && !loading,
+                                                onClick = { nextPath?.let { loadNav(it, currentPage + 1) } }
+                                            ) { Text("下一页") }
+                                        }
+                                    }
                                 }
                             }
                         }

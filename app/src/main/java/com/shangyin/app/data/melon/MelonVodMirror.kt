@@ -75,6 +75,10 @@ object MelonVodMirror {
             val c = client()
             val playlist = c.newCall(Request.Builder().url(url).build()).execute().use { r ->
                 if (!r.isSuccessful) throw IOException("m3u8 HTTP ${r.code}")
+                // v0.255：站点 HLS 地址无 .m3u8 后缀，镜像门放宽后可能拿到 mp4 等直链——
+                // 先 peek 256B 验证 #EXTM3U 再读全量（否则 string() 会把整个视频读进内存）
+                val head = r.peekBody(256L).string()
+                if (!head.contains("#EXTM3U")) throw IOException("非m3u8响应 head=${head.take(48)}")
                 r.body?.string() ?: throw IOException("m3u8 空响应体")
             }
             val base = URI(url)

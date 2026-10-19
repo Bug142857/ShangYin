@@ -29,7 +29,9 @@ object MelonFlightLog {
         synchronized(buf) {
             // v0.251：DOWNLOAD 与 PLAYER 同入优先缓冲——下载全程只打 ~5 条里程碑，
             // 混进主缓冲照样被 FETCH 刷屏挤掉；两取证源都不该靠运气活下来
-            if (tag == "PLAYER" || tag == "DOWNLOAD" || tag == "LIST") {
+            // v0.255：MIRROR 同入——0.254 镜像日志被 FETCH 挤掉，「门挡死」定性失去证据，
+            // 低频取证标签一律进优先缓冲（教训重演即补白名单）
+            if (tag == "PLAYER" || tag == "DOWNLOAD" || tag == "LIST" || tag == "MIRROR") {
                 playerBuf.addLast(line)
                 while (playerBuf.size > PLAYER_CAP) playerBuf.removeFirst()
             } else {

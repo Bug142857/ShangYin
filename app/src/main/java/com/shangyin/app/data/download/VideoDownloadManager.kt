@@ -203,8 +203,8 @@ object VideoDownloadManager {
         }
     }
 
-    /** 进度通知（id=URL hash；进度刷新 ~1s/次节流，避免通知风暴） */
-    internal fun notifyProgress(context: Context, id: Int, title: String, progress: Float) {
+    /** 进度通知（id=URL hash；进度刷新 ~1s/次节流；v0.255 文字带实时 MB，冻结/慢速一眼分辨） */
+    internal fun notifyProgress(context: Context, id: Int, title: String, progress: Float, bytes: Long = 0L) {
         runCatching {
             ensureChannel(context)
             val b = android.app.Notification.Builder(context, CH_DL)
@@ -212,10 +212,11 @@ object VideoDownloadManager {
                 .setContentTitle("正在下载「$title」")
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
-            if (progress < 0) b.setProgress(0, 0, true) // 服务器未告知总大小 → 转圈
+            val mb = "%.1f".format(bytes / 1048576f)
+            if (progress < 0) b.setProgress(0, 0, true).setContentText("已下载 $mb MB") // 总量未知 → 转圈+MB
             else {
                 val pct = (progress * 100).toInt().coerceIn(0, 100)
-                b.setProgress(100, pct, false).setContentText("已下载 $pct%")
+                b.setProgress(100, pct, false).setContentText("已下载 $pct% · $mb MB")
             }
             notifMgr(context)?.notify(id, b.build())
         }
@@ -375,7 +376,12 @@ object VideoDownloadManager {
                                     val plain = if (keyBytes != null) aesDecrypt(raw, keyBytes, playlist.key!!.ivHex, idx) else raw
                                     f.writeBytes(plain)
                                     lastErr = null
-                                    return@withPermit
+                                    // v0.255 一行定案（7 轮「进度条不动」真凶）：此前 return@withPermit
+                                    // 在成功路径直接跳出整个 withPermit 块——下方 done/active.update/
+                                    // notifyProgress 全被跳过，只有 tmp 目录已有旧文件的续传路径才会
+                                    // 更新进度 → 21s 切片期间零发射，写盘 ~0.3s 闪存瞬间完成（观感
+                                    // 「突然动起来瞬间结束」）。只退重试循环即可
+                                    return@repeat
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
@@ -393,7 +399,7 @@ object VideoDownloadManager {
                         // 状态栏通知 ~1s 节流
                         if (System.currentTimeMillis() - lastNotif > 1_000) {
                             lastNotif = System.currentTimeMillis()
-                            notifyProgress(context, task.url.hashCode(), task.title, p)
+                            notifyProgress(context, task.url.hashCode(), task.title, p, sliceBytes)
                         }
                     }
                 }
@@ -420,7 +426,7 @@ object VideoDownloadManager {
                 }
                 if (System.currentTimeMillis() - lastNotif > 1_000) {
                     lastNotif = System.currentTimeMillis()
-                    notifyProgress(context, task.url.hashCode(), task.title, p)
+                    notifyProgress(context, task.url.hashCode(), task.title, p, maxOf(doneBytes.get(), written))
                 }
             }
         } finally {
@@ -473,12 +479,13 @@ object VideoDownloadManager {
                         // 状态栏通知 ~1s 节流
                         if (System.currentTimeMillis() - lastNotif > 1_000) {
                             lastNotif = System.currentTimeMillis()
-                            notifyProgress(context, task.url.hashCode(), task.title, p)
+                            notifyProgress(context, task.url.hashCode(), task.title, p, copied)
                         }
                     }
                 }
                 val p = if (total > 0) copied.toFloat() / total else -1f
                 active.update { it + (task.url to task.copy(progress = p, bytesCopied = copied)) }
+                notifyProgress(context, task.url.hashCode(), task.title, p, copied)
                 return copied
             }
         }

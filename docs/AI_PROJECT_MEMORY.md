@@ -889,6 +889,42 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.255（下载进度 7 轮真凶一行定案 / 可选页页码条 / 镜像门拆除，2026-10-19）**：
+  用户三反馈：分页要中间可选页+知道最后一页 / 下载进度条还是不动 / 视频也没解决。
+  **下载（真凶落网，7 轮盲修后一行定案）**：切片循环成功路径 `return@withPermit` 直接
+  跳出整个 withPermit 块——下方 `done.incrementAndGet()`/`doneBytes.addAndGet`/
+  `active.update`/`notifyProgress` **全部被跳过**，只有 tmp 目录已有旧文件（续传）才走
+  计数器 → 71 片 21s 切片期间 StateFlow **零发射**（下载页卡片 0%·0.0MB、通知空进度条、
+  ↓N% 角标 0% 全冻结），唯一活着的更新点是写盘段（113MB 闪存缓存 ~0.3s 跑完 0.5→1.0）
+  → 观感「盯着看没动，突然动起来瞬间结束」。0.249~0.253 五轮进度公式/权重/字节源重构
+  全在改**死代码下游**，没核对更新语句是否在成功路径上可达。修复=`return@withPermit` →
+  `return@repeat`（只退重试循环落回计数器）；通知文字加实时 MB（"已下载 42% · 38.2MB"）。
+  **教训：UI 冻结而数据层"看起来在更新"时，先验证更新语句在成功路径上可达——提前
+  return 是隐形杀手；这轮 DOWNLOADUI 观察日志"任务运行 21s 零输出"正是铁证**。
+  **分页**：用户要求中间可选页——MelonPage 加 `lastPage`（page-navigator/pagination
+  内所有 a[href] 尾段数字取 max）；页码栈 pageStack 废弃改 `currentPage: Int`，
+  loadNav(target,page) 统一导航+lastTarget/lastRequested 重试存档；
+  footer 数字页码条：窗口 1…cur-1 cur cur+1…N（当前页 primary 高亮禁点，横向可滚动），
+  lastPage 未知退回上一页/第N页/下一页形态；pathFor(p) 由 nextPath 样例换尾段（P=1 走
+  初始加载）；MelonHomeCache 改存 page/lastPage；下拉刷新复位第 1 页。
+  **视频**：0.254 镜像未生效（dur 仍 28 亿）但「后缀门挡死」定案**被推翻**——装机日志零条
+  MIRROR 的证据无效：MIRROR 标签不在优先缓冲白名单（只有 PLAYER/DOWNLOAD/LIST），被
+  FETCH 刷屏挤掉（0.251 教训重演：新增取证标签必须同步进白名单）。且 ep.url 实际**带**
+  `.m3u8` 后缀（下载器 isHls 同一 endsWith 判 true 走了 HLS 下载是运行时实锤，诊断页显示
+  的 URL 是截断展示）——门本可放行。真相反转：镜像可能启动了但**未就绪**（113MB 切片下载
+  21s+ 与下载任务抢带宽，切换前 seek 仍在原流直播化时间轴上卡）或 prepare 失败。本轮：
+  MIRROR 补入优先缓冲白名单 + 拆除后缀门（改排除直链文件后缀 mp4/mkv/flv/avi/mov/webm/ts，
+  保留对无后容错）+ prepare 内 peek 256B 验 #EXTM3U 快速失败（防 string() 把整个 mp4 读
+  进内存）+ MIRROR 入场日志——下一轮装机日志（入场/完成/失败三条俱全）即可定性。
+  **审查修复（code-review vs v0.254）**：①缓存页码滞后——fetchPage 写 MelonHomeCache.page
+  时 currentPage 还是导航前旧值（滞后一页，翻页后退出再进高亮错页），改 loadNav 成功后补写；
+  ②pathFor 兜底——样例缺失/尾段未命中时按 keyword/catPath/首页三形态构造（此前一律
+  /page/N/，分类页末页跳页会 404）；③清理 isInit/lastWasInit 冗余（target==null ⟺ 页==1，
+  可互推）、load(reset) 死参数、elvis 死代码；④横扫核查 `.m3u8` 后缀判定共 5 处
+  （VideoDownloadManager:252 / PlayerScreen:293,471 / LivePlay / LiveHome）：URL 带后缀
+  实锤下全部工作正常，无需改。
+  版本：0.255/1255。
+
 - **v0.254（用户点破思路定势：ENDLIST 直播化是 seek 卡的根因 / 页码条 / 下载角标，2026-10-19）**：
   用户："不要把思路卡在这里 也许是别的原因"+ 铁证 `dur=2836434455ms`（**28 亿毫秒≈32 天**
   且随真实时间增长）——播放器把视频当**直播流**处理！根因：站点 m3u8 **缺 `#EXT-X-ENDLIST`**

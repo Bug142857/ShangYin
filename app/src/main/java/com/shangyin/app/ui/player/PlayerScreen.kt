@@ -484,9 +484,15 @@ fun PlayerScreen(nav: NavHostController) {
         // v0.254：本地镜像修复「点进度条必卡」——站点 m3u8 缺 ENDLIST 被当直播流
         // （黑匣子实锤 dur≈32天），进度条映射到天文数字，seek 落点必然在真实内容之外。
         // 后台镜像全部切片+密钥本地化+补 ENDLIST，就绪后无缝切换（保持位置）。
-        // 仅单集视频且非直播时启用；镜像失败保持原流（看门狗自愈兜底）
-        if (!isLive && eps.size == 1 && eps[0].url.substringBefore('?').endsWith(".m3u8")) {
+        // v0.255：拆除 .m3u8 后缀门——站点 HLS 地址无后缀（hls.tpbbwcc.cn/videos5/…/…），
+        // 后缀门把镜像挡死从未启动（0.254 装机日志零条 MIRROR）。改为排除直链文件
+        // （mp4 等无 ENDLIST 问题），非 HLS 响应由 prepare 内 peek 校验快速失败保持原流
+        if (!isLive && eps.size == 1) {
             val epUrl = eps[0].url
+            val isDirectFile = Regex("""\.(mp4|mkv|flv|avi|mov|webm|ts)$""", RegexOption.IGNORE_CASE)
+                .containsMatchIn(epUrl.substringBefore('?'))
+            if (isDirectFile) return@LaunchedEffect
+            com.shangyin.app.data.melon.MelonFlightLog.log("MIRROR", "镜像准备开始 url=$epUrl")
             scope.launch {
                 val mirror = runCatching {
                     com.shangyin.app.data.melon.MelonVodMirror.prepare(context, epUrl)
