@@ -594,13 +594,25 @@ fun PlayerScreen(nav: NavHostController) {
                             player.seekTo(pos)
                             player.playWhenReady = true
                         }
-                        // 第 2 次起：整条 MediaItem 重建——彻底丢弃清单/解密密钥/切片状态，
-                        // 从头重新解析（对付切片地址过期、坏节点、密钥失效等轻量重载救不回的情况）
+                        // 第 2 次：整条 MediaItem 原位重建——彻底丢弃清单/解密密钥/切片状态从头解析
+                        // （对付切片地址过期、密钥失效等轻量重载救不回的情况）
                         else -> {
+                            // 第 3 次起原位重建已证明无效（0.246 黑匣子实测：6 轮全部
+                            // BUFFERING 卡在同一 pos → 该位置的切片在 CDN 侧持续失败，
+                            // 任何原位重试都不会好），改为**向前跳过坏段**继续播，
+                            // 跳过量随轮次递增（#3→+15s，#4→+30s…），越界则回退原位重建
+                            val dur = player.duration
+                            val skipTarget = pos + 15_000L * (reloadRound - 2)
+                            val target = if (dur > 0) skipTarget.coerceAtMost(dur - 1_000) else skipTarget
+                            val msg = when {
+                                target <= pos && reloadRound <= 2 -> "原位重建"
+                                target <= pos -> "原位重建(无处可跳,已近片尾)"
+                                else -> "重建+跳过坏段至${target / 1000}s"
+                            }
                             com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "卡住自愈#$reloadRound state=${player.playbackState} pos=$pos → MediaItem重建"
+                                "PLAYER", "卡住自愈#$reloadRound state=${player.playbackState} pos=$pos → $msg"
                             )
-                            player.setMediaItem(item, pos)
+                            player.setMediaItem(item, target)
                             player.prepare()
                             player.playWhenReady = true
                         }
