@@ -379,7 +379,9 @@ object VideoDownloadManager {
                             }
                         }
                         val n = done.incrementAndGet()
-                        val p = 0.9f * n / total // v0.249：切片段映射 0→0.9，拼接段 0.9→1.0（避免 100%→90% 回跳）
+                        // v0.250：切片段映射 0→0.5——CDN 极快（实测 15-47ms/片），几百 MB
+                        // 切片阶段几秒冲完；耗时大头是写盘拼接，权重给足 0.5→1.0 观感才平滑
+                        val p = 0.5f * n / total
                         active.update { it + (task.url to task.copy(progress = p, bytesCopied = written)) }
                         // 状态栏通知 ~1s 节流
                         if (System.currentTimeMillis() - lastNotif > 1_000) {
@@ -389,11 +391,18 @@ object VideoDownloadManager {
                     }
                 }
             }.awaitAll()
-            // v0.249：拼接阶段计入进度（0.9→1.0）——大片顺序写盘是可见的时间黑洞，
-            // 此前进度停在 100% 看似卡死，完成后才突然消失
+            // v0.250：拼接写盘按字节平滑推进（0.5→1.0）——长视频写盘几百 MB 要 1-2 分钟，
+            // 此前固定占 10% 区间且每片才动 0.4%，观感「进度条没动」；按 written/totalBytes
+            // 计算后每写 1% 字节进度就走 0.5%，与切片段衔接连续
+            val totalBytes = segments.indices.sumOf { File(tmp, "seg-%05d".format(it)).length() }
+            if (totalBytes <= 0L) {
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "DOWNLOAD", "拼接异常: 切片文件总大小0 segs=${segments.size} tmp=$tmp"
+                )
+            }
             segments.indices.forEachIndexed { idx2, idx ->
                 File(tmp, "seg-%05d".format(idx)).inputStream().use { written += it.copyTo(out) }
-                val p = 0.9f + 0.1f * (idx2 + 1) / segments.size
+                val p = if (totalBytes > 0) 0.5f + 0.5f * written / totalBytes else 1f
                 active.update { it + (task.url to task.copy(progress = p, bytesCopied = written)) }
                 if (System.currentTimeMillis() - lastNotif > 1_000) {
                     lastNotif = System.currentTimeMillis()

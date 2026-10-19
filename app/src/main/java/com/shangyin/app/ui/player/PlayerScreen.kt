@@ -173,7 +173,9 @@ fun PlayerScreen(nav: NavHostController) {
         val okhttpClient = okhttp3.OkHttpClient.Builder()
             .dns(com.shangyin.app.data.melon.GeneralDohDns)
             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            // v0.250：15s→10s——CDN 有间歇超时切片（0.249 探针片20 SocketTimeout），
+            // 快速失败重试好过死等；media3 重试耗尽进 error 态由看门狗自愈接管
+            .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
             // 直播防盗链 / 站点 Referer：进播放页前由 PlayerSession 传好（每请求动态读，
             // 本地播放为空表），UA 固定浏览器指纹
             .addInterceptor { chain ->
@@ -580,6 +582,19 @@ fun PlayerScreen(nav: NavHostController) {
                 )
             }
 
+            // v0.250：加载错误耗尽的最终落点——之前的 onLoadError 只记单次加载失败，
+            // 重试耗尽后的 PlaybackException（进 error 态、画面定住）从未进黑匣子
+            override fun onPlayerError(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                error: androidx.media3.common.PlaybackException
+            ) {
+                val cause = error.cause
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER",
+                    "播放错误 ${error.errorCodeName} ${cause?.javaClass?.simpleName ?: ""}: ${cause?.message?.take(60) ?: error.message?.take(60)}"
+                )
+            }
+
             override fun onLoadError(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                 loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
@@ -623,6 +638,38 @@ fun PlayerScreen(nav: NavHostController) {
             if (gaveUp) continue
             val now = System.currentTimeMillis()
             val pos = player.currentPosition
+            // v0.250：加载失败耗尽（STATE_IDLE + playerError）——坏切片重试耗尽后 media3
+            // 停在 error 态，画面定在最后一帧不再前进（0.249 探针实锤 CDN 有间歇超时切片，
+            // 片20 SocketTimeout）。「画面定住不动」的第三个盲区：前两判（BUFFERING 超时/
+            // READY 不播）都覆盖不到 error 态 → 永久定住。立即自愈重载
+            player.playerError?.let { err ->
+                // 直播流不走看门狗（无 seek/有限时长语义，卡住走直播自己的重连）
+                if (!isLive) reloadRound++
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER", "加载失败耗尽#$reloadRound ${err.errorCodeName} pos=$pos → 自愈重载"
+                )
+                if (reloadRound >= 8) {
+                    gaveUp = true
+                    com.shangyin.app.data.melon.MelonFlightLog.log("PLAYER", "error态自愈放弃 → 建议刷新/切线路")
+                    Toast.makeText(context, "片源无法继续播放，建议点刷新或切换线路", Toast.LENGTH_LONG).show()
+                    return@let
+                }
+                runCatching {
+                    player.stop()
+                    player.prepare()
+                    player.seekTo(pos)
+                    player.playWhenReady = true
+                }.onFailure { e ->
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "error态自愈异常 ${e.javaClass.simpleName}: ${e.message?.take(80)}"
+                    )
+                }
+                bufferingSince = System.currentTimeMillis()
+                stuckSince = 0L
+                lastPos = pos
+                return@let
+            }
+            if (gaveUp) continue
             // 位置在前进（真正在播）= 一切正常，自愈计数清零；曾放弃的流恢复播放
             //（如用户点刷新成功）→ 看门狗自动重新上岗，不依赖换 uri
             if (player.isPlaying) {

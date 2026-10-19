@@ -8,22 +8,36 @@ package com.shangyin.app.data.melon
  * 分派→WebView 就绪→解密→缓存→解码）每一步的结果都记录在内存环形缓冲里，诊断页
  * 原样输出：设备自己说出卡在哪一步，不再靠猜。
  *
- * 只存内存（~60 条），无持久化开销；App 进程死了日志就没了，正好聚焦「本次会话」。
+ * 只存内存，无持久化开销；App 进程死了日志就没了，正好聚焦「本次会话」。
+ *
+ * v0.250：PLAYER 标签独立缓冲——0.247~0.249 连续三轮取证都栽在同一件事上：图片
+ * FETCH 日志刷屏（一次列表加载几十条），把播放器卡住瞬间的 PLAYER 记录全部挤出
+ * 60 条环形缓冲，诊断页拿到的永远是「卡完之后」的图墙日志。PLAYER 独立 24 条 +
+ * dump 置顶，播放取证不再靠运气。
  */
 object MelonFlightLog {
 
     private const val CAP = 60
+    private const val PLAYER_CAP = 24
     private val buf = ArrayDeque<String>()
+    private val playerBuf = ArrayDeque<String>()
 
     fun log(tag: String, msg: String) {
         val line = "[${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
             .format(java.util.Date())}] $tag: ${msg.take(220)}"
         synchronized(buf) {
-            buf.addLast(line)
-            while (buf.size > CAP) buf.removeFirst()
+            if (tag == "PLAYER") {
+                playerBuf.addLast(line)
+                while (playerBuf.size > PLAYER_CAP) playerBuf.removeFirst()
+            } else {
+                buf.addLast(line)
+                while (buf.size > CAP) buf.removeFirst()
+            }
         }
     }
 
-    /** 诊断输出（新→旧，最新的在最上面） */
-    fun dump(): List<String> = synchronized(buf) { buf.toList().asReversed() }
+    /** 诊断输出（新→旧，最新的在最上面；PLAYER 独立缓冲置顶——播放取证优先） */
+    fun dump(): List<String> = synchronized(buf) {
+        playerBuf.toList().asReversed() + buf.toList().asReversed()
+    }
 }

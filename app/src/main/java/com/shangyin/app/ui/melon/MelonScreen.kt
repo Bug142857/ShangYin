@@ -388,6 +388,9 @@ fun MelonHomeScreen(nav: NavHostController) {
                     }
                     // 底部状态
                     item(key = "footer") {
+                        // v0.250：触底加载失败此前静默——items 保留、error 只在空列表显示，
+                        // 且 snapshotFlow 条件值不变不再触发 → 用户滚到底没反应像「没有分页」。
+                        // 失败时给出可点的重试入口
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -398,6 +401,12 @@ fun MelonHomeScreen(nav: NavHostController) {
                                 loading -> CircularProgressIndicator(
                                     modifier = Modifier.size(20.dp),
                                     strokeWidth = 2.dp
+                                )
+                                error != null && items.isNotEmpty() -> Text(
+                                    "加载失败，点击重试",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.clickable { load(false, nextPath) }
                                 )
                                 nextPath == null && items.isNotEmpty() -> Text(
                                     "没有更多了",
