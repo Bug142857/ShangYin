@@ -13,15 +13,15 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /**
- * 吃瓜图床专用 Coil Fetcher（v0.243）：okhttp → WebView 原始拉取 → Kotlin 解密。
+ * 吃瓜图床专用 Coil Fetcher（v0.244）：okhttp 拉真密文 → 本地 AES 解密 → WebView 兜底。
  *
- * 图床按 TLS 指纹放行 Chromium（详见 MelonWebImage 类注释）：okhttp 拿到 200+随机
- * 垃圾字节（每次头都不同），只有 WebView 能拿到真数据（可能为密文）。v0.235~0.242
- * 七轮管线未就绪的根因 = ApplicationContext 创建的 WebView Chromium 静默瘫痪
- * （v0.243 定案）——现改用 Activity context 创建，并在失败时销毁重建。
+ * 0.244 定案：okhttp 拿到的就是**真 AES-128-CBC 密文**（16B 对齐、同 URL PC curl 与
+ * 设备逐字节一致），0.235~0.243 十轮「TLS 指纹/WebView 管线」盲修的根因是 v0.242 把
+ * zzz.js 的 KEY/IV **装反**导致解密必败、密文被误判为指纹垃圾（详见 [MelonImageCipher]
+ * 类注释）。本地解密成功后 WebView 仅作站点改版兜底，正常路径零等待。
  *
- * 数据流：缓存 → okhttp（直接是明文则用）→ [MelonWebImage.fetchViaWeb]（非图魔数时）
- * → [MelonImageCipher.decrypt]（WebView 字节仍非图 = 密文，硬编码 KEY → 动态提取）。
+ * 数据流：缓存 → okhttp（直接是明文则用）→ [MelonImageCipher.decryptAuto]（硬编码 KEY
+ * 正反双向）→ 动态提取 zzz.js KEY 再试 → [MelonWebImage.fetchViaWeb]（最后兜底）。
  *
  * Coil 2.7 的 ImageSource 构造器 protected，无法给自定义 Fetcher 交付字节走系统缓存，
  * 因此自建一层磁盘缓存（cacheDir/melon_web_img，MD5 键）——明文 Bitmap 经
@@ -39,7 +39,7 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
         MelonFlightLog.log("FETCH", "入口 url=$url")
         val cacheFile = cacheFile(options.context, url)
         val bytes = if (cacheFile.isFile && cacheFile.length() > 0) {
-            (cacheFile.readBytes().takeIf { looksLikeImage(it) } ?: run {
+            (cacheFile.readBytes().takeIf { MelonImageCipher.looksLikeImage(it) } ?: run {
                 MelonFlightLog.log("FETCH", "磁盘缓存垃圾拒收 size=${cacheFile.length()} 已删")
                 runCatching { cacheFile.delete() }
                 null
@@ -47,47 +47,56 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
         } else null
         if (bytes != null) MelonFlightLog.log("FETCH", "磁盘缓存命中 ${bytes.size}B")
         val fresh = bytes ?: run {
-            // v0.243 数据流：okhttp 拉原始字节 → 非图魔数（风控指纹下发垃圾）→ WebView
-            // （Activity context Chromium，v0.235~0.242 七轮未就绪的根因即 AppContext 创建
-            // 瘫痪）同源原始拉取 → 仍非图魔数（真密文）→ Kotlin 侧 AES 解密（硬编码 KEY
-            // → 动态提取 zzz.js KEY 重试）。
+            // v0.244 数据流：okhttp 拉真密文 → 本地 AES 解密（硬编码 KEY 正反双向）→
+            // 动态提取 zzz.js KEY 重试 → WebView 原始拉取仅作站点改版兜底。
             val cipher = fetchCipher(url)
-            if (looksLikeImage(cipher)) {
+            if (MelonImageCipher.looksLikeImage(cipher)) {
                 MelonFlightLog.log("FETCH", "okhttp明文 ${cipher.size}B（CDN未加密此请求）")
                 return@run finish(cipher, cacheFile)
             }
             MelonFlightLog.log(
                 "FETCH",
-                "okhttp非图 ${cipher.size}B head=${cipher.take(4).joinToString(" ") { "%02X".format(it) }} → WebView原始拉取"
+                "okhttp密文 ${cipher.size}B head=${cipher.take(4).joinToString(" ") { "%02X".format(it) }} → 本地解密"
             )
+            val b = MelonImageCipher.decryptAuto(cipher)
+            if (b != null) {
+                MelonFlightLog.log("FETCH", "解密成功 ${b.size}B")
+                return@run finish(b, cacheFile)
+            }
+            // 硬编码密钥可能被站点轮换 → 动态拉 zzz.js 重新提取后双向重试
+            MelonFlightLog.log("FETCH", "硬编码双向解密失败(${cipher.size}B/okhttp) → 动态提取密钥重试")
+            val (k1, k2) = MelonImageCipher.fetchKeyIv(MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" })
+            if (k1 != null && k2 != null) {
+                val b2 = MelonImageCipher.decryptAuto(cipher, k1, k2)
+                if (b2 != null) {
+                    MelonFlightLog.log("FETCH", "动态密钥解密成功 ${b2.size}B")
+                    return@run finish(b2, cacheFile)
+                }
+                MelonFlightLog.log("FETCH", "动态密钥双向解密仍失败 → WebView兜底")
+            } else {
+                MelonFlightLog.log("FETCH", "动态提取密钥失败(zzz.js 不可达) → WebView兜底")
+            }
+            // 兜底：Chromium 指纹原始拉取（站点改版/CDN 行为变化时的最后手段）
             val web = runCatching {
                 kotlinx.coroutines.withTimeoutOrNull(40_000) { MelonWebImage.fetchViaWeb(options.context, url) }
             }.getOrNull()
-            if (web != null && looksLikeImage(web)) {
+            if (web != null && MelonImageCipher.looksLikeImage(web)) {
                 MelonFlightLog.log("FETCH", "WebView明文 ${web.size}B ✓")
                 return@run finish(web, cacheFile)
             }
             val src = web ?: cipher
             val via = if (web != null) "WebView" else "okhttp"
-            val b = MelonImageCipher.decrypt(src)
-            if (b == null) {
-                // 硬编码密钥可能被站点轮换 → 动态拉 zzz.js 重新提取后重试一次
-                MelonFlightLog.log("FETCH", "硬编码密钥解密失败(${src.size}B/$via) → 动态提取密钥重试")
-                val (k, iv) = MelonImageCipher.fetchKeyIv(MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" })
-                if (k == null || iv == null) {
-                    MelonFlightLog.log("FETCH", "动态提取密钥失败(zzz.js 不可达)")
-                    throw IOException("解密密钥不可用")
-                }
-                val b2 = MelonImageCipher.decrypt(src, k, iv)
-                if (b2 == null) {
-                    MelonFlightLog.log("FETCH", "动态密钥解密仍失败 head=${src.take(4).joinToString(" ") { "%02X".format(it) }}")
-                    throw IOException("图床解密失败")
-                }
-                MelonFlightLog.log("FETCH", "动态密钥解密成功 ${b2.size}B key=$k")
-                return@run finish(b2, cacheFile)
+            val fallbackPlain = MelonImageCipher.decryptAuto(src)
+                ?: (if (k1 != null && k2 != null) MelonImageCipher.decryptAuto(src, k1, k2) else null)
+            if (fallbackPlain == null) {
+                MelonFlightLog.log(
+                    "FETCH",
+                    "WebView兜底全失败(${src.size}B/$via) head=${src.take(4).joinToString(" ") { "%02X".format(it) }}"
+                )
+                throw IOException("图床解密失败")
             }
-            MelonFlightLog.log("FETCH", "解密成功 ${b.size}B")
-            return@run finish(b, cacheFile)
+            MelonFlightLog.log("FETCH", "WebView兜底解密成功 ${fallbackPlain.size}B")
+            return@run finish(fallbackPlain, cacheFile)
         }
         val bmp = android.graphics.BitmapFactory.decodeByteArray(fresh, 0, fresh.size)
         if (bmp == null) {
@@ -104,7 +113,7 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
 
     /** 解密结果：魔数校验 → 写缓存 → 返回 */
     private suspend fun finish(plain: ByteArray, cacheFile: File): ByteArray {
-        if (!looksLikeImage(plain)) {
+        if (!MelonImageCipher.looksLikeImage(plain)) {
             MelonFlightLog.log("FETCH", "失败: 明文${plain.size}B非图片魔数 head=${plain.take(4).joinToString(" ") { "%02X".format(it) }}")
             throw IOException("解密结果非图片")
         }
@@ -128,18 +137,7 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
             }
         }
 
-    /** 图片魔数校验：JPEG(FFD8)/PNG(8950)/GIF(4749)/WEBP(RIFF....WEBP)，垃圾字节一律拒收 */
-    private fun looksLikeImage(b: ByteArray): Boolean {
-        if (b.size < 16) return false
-        return when {
-            b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() -> true                                  // JPEG
-            b[0] == 0x89.toByte() && b[1] == 0x50.toByte() -> true                                  // PNG
-            b[0] == 0x47.toByte() && b[1] == 0x49.toByte() -> true                                  // GIF
-            b[0] == 0x52.toByte() && b[1] == 0x49.toByte() &&
-                b[8] == 0x57.toByte() && b[9] == 0x45.toByte() -> true                              // RIFF+WEBP
-            else -> false
-        }
-    }
+    // 图片魔数校验统一走 MelonImageCipher.looksLikeImage（v0.244 收编共用，勿在本地复制）
 
     /**
      * Uri 版 Factory（v0.240 决定性修复）：Coil 2.x 对 String model 会先经 StringMapper

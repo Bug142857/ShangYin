@@ -888,6 +888,28 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.244（图片根因真反转：0.242 把 zzz.js 的 KEY/IV 装反——密文是真的，2026-10-19）**：
+  0.243 的「okhttp 拿到随机垃圾」结论被 PC 实验**推翻**：① PC curl 拉设备黑匣子同款封面
+  （108736B, head 4F E8 97 A4）与设备 okhttp **逐字节一致**（okhttp/HttpURLConnection/
+  curl 三栈同字节 → 不存在针对 okhttp 的指纹下发）；② 本次黑匣子所有「垃圾」响应字节数
+  **全部 16B 对齐**（108736/108672/72080/113232/192016/48704÷16 全整除）——随机垃圾不可
+  能全对齐，是真 AES-CBC 密文；③ 把 zzz.js 载入 Node 沙箱跑站点自己的 decryptImage，
+  对同一份字节**解密成功**（输出 FFD8FF 开头 JPEG base64）→ 密文真、密钥对、算法对。
+  **真正根因：0.242 逆向 zzz.js 时把 KEY/IV 装反**——混淆字符串数组经轮换，静态出现顺序
+  ≠ 使用顺序，decryptImage 实际 KEY="f5d965df75336270"、IV="97b60394abc2fbe1"（与 0.242
+  硬编码正好互换）；Node 标准 aes-128-cbc 用换正指派一发命中（108733B FFD8FFDB 合法
+  JPEG），原指派 BadPadding。0.243 观察到的「同一 URL 每次头不同」实为跨时段密文批次
+  轮换（同批同头、跨批换头），被误读成「随机垃圾」→ 十轮 WebView/指纹盲修全跑了歧途。
+  修复（TDD，MelonImageCipherTest 5 用例 + 真密文 fixture app/src/test/resources/
+  melon_cover1.cipher）：① MelonImageCipher 换正 defKey/defIv；② 新增 decryptAuto——
+  KEY/IV **正反两种指派都试**、图片魔数（JPEG/PNG/GIF/WEBP）命中者胜出，指派顺序从
+  单点故障降级为可自愈；魔数校验自 Fetcher 收编共用；③ MelonWebFetcher 管线重排：
+  okhttp 拉密文 → 本地解密（主路径，WebView 零等待）→ 动态提取 zzz.js KEY 双向重试 →
+  WebView 仅作站点改版兜底；④ 诊断「WebView拉取」探针改「封面解密链路」（本地解密优先，
+  命中即跳过 WebView）。教训固化：**混淆 JS 的字符串数组顺序不可信，KEY/IV 指派必须用
+  站点自己的函数在真实字节上验证；16B 对齐 + 跨端同字节 = 密文不是垃圾；解密失败先怀疑
+  自己的参数指派，再怀疑世界**。版本：0.244/1244。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
