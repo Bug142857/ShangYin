@@ -356,8 +356,10 @@ object VideoDownloadManager {
             "DOWNLOAD", "HLS开始 slices=${segments.size} key=${if (keyBytes != null) "有" else "无"}"
         )
         try {
-            val semaphore = Semaphore(3)
+            // v0.253：并发 3→6——109 片 174MB 实测 24s（7.2MB/s 均摊），并发翻倍缩短一半墙钟
+            val semaphore = Semaphore(6)
             val total = segments.size
+            val doneBytes = java.util.concurrent.atomic.AtomicLong() // 已完成切片的实际字节数
             // v0.230：并发切片下 ++done 局部变量有竞态（丢计数、进度跳动/卡住）→ AtomicInteger
             val done = java.util.concurrent.atomic.AtomicInteger()
             segments.mapIndexed { idx, seg ->
@@ -383,10 +385,11 @@ object VideoDownloadManager {
                             }
                         }
                         val n = done.incrementAndGet()
-                        // v0.250：切片段映射 0→0.5——CDN 极快（实测 15-47ms/片），几百 MB
-                        // 切片阶段几秒冲完；耗时大头是写盘拼接，权重给足 0.5→1.0 观感才平滑
+                        val sliceBytes = doneBytes.addAndGet(f.length())
+                        // v0.253：切片段映射 0→0.5，MB 用实际完成字节数——0.252 实锤切片阶段
+                        // bytesCopied 恒 0（written 只在写盘阶段累加），「MB 不动」真凶之一
                         val p = 0.5f * n / total
-                        active.update { it + (task.url to task.copy(progress = p, bytesCopied = written)) }
+                        active.update { it + (task.url to task.copy(progress = p, bytesCopied = sliceBytes)) }
                         // 状态栏通知 ~1s 节流
                         if (System.currentTimeMillis() - lastNotif > 1_000) {
                             lastNotif = System.currentTimeMillis()
@@ -410,7 +413,11 @@ object VideoDownloadManager {
             segments.indices.forEachIndexed { idx2, idx ->
                 File(tmp, "seg-%05d".format(idx)).inputStream().use { written += it.copyTo(out) }
                 val p = if (totalBytes > 0) 0.5f + 0.5f * written / totalBytes else 1f
-                active.update { it + (task.url to task.copy(progress = p, bytesCopied = written)) }
+                // v0.253：MB 取 max——written 从 0 重算会让 MB 从 174MB 回跳（审查发现），
+                // doneBytes 已含全部切片字节，保持单调
+                active.update {
+                    it + (task.url to task.copy(progress = p, bytesCopied = maxOf(doneBytes.get(), written)))
+                }
                 if (System.currentTimeMillis() - lastNotif > 1_000) {
                     lastNotif = System.currentTimeMillis()
                     notifyProgress(context, task.url.hashCode(), task.title, p)

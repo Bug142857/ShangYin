@@ -680,8 +680,11 @@ fun PlayerScreen(nav: NavHostController) {
                 }
                 runCatching {
                     player.stop()
-                    player.prepare()
+                    // v0.253：先 seekTo 再 prepare——stop 后 player 回到 IDLE，prepare 会从
+                    // 默认位置 0 开始缓冲（0.252 诊断实锤：自愈后首帧渲染 pos=0，用户进度被
+                    // 丢回片头）；seekTo 在 IDLE 态设定的是「prepare 后的初始位置」
                     player.seekTo(pos)
+                    player.prepare()
                     player.playWhenReady = true
                 }.onFailure { e ->
                     com.shangyin.app.data.melon.MelonFlightLog.log(
@@ -781,8 +784,10 @@ fun PlayerScreen(nav: NavHostController) {
                                 "PLAYER", "${src}自愈#$reloadRound state=${player.playbackState} pos=$pos → stop+prepare"
                             )
                             player.stop()
-                            player.prepare()
+                            // v0.253：先 seekTo 再 prepare（IDLE 态 seekTo 设定 prepare 后初始
+                            // 位置；反序会先从 0 缓冲——0.252 诊断实锤自愈后首帧渲染 pos=0）
                             player.seekTo(pos)
+                            player.prepare()
                             player.playWhenReady = true
                         }
                         // 第 2 次：整条 MediaItem 原位重建——彻底丢弃清单/解密密钥/切片状态从头解析

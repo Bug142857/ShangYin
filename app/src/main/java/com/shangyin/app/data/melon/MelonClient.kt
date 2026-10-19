@@ -349,12 +349,25 @@ object MelonClient {
         val next = nextRaw
             ?.takeIf { it.startsWith("http") }
             ?.let { it.substringAfter(base, it).ifBlank { null } }
+            ?.let { normalizeNext(it) }
         return MelonPage(items.distinctBy { it.id }, next)
+    }
+
+    /**
+     * v0.253：下一页路径规范化——0.252 诊断实锤 UI 拿到 "/2/" 请求 404，而站点真实
+     * 分页是 "/page/2/"（PARSE 日志 next=/page/2/）。历史会话缓存/主题相对链接都会
+     * 产出 "/2/" 形态；存取两端统一归一，兼容旧缓存。
+     */
+    private fun normalizeNext(path: String): String {
+        val m = Regex("^/(\\d+)/?$").find(path)
+            ?: return path
+        return "/page/${m.groupValues[1]}/"
     }
 
     /** 加载任意列表页（firstPath 为首页/分类/搜索的第一页路径；nextPath 直接透传翻页） */
     private suspend fun list(firstPath: String, nextPath: String? = null): MelonPage {
-        val page = parseList(doc(nextPath ?: firstPath))
+        // 消费端再归一一次：MelonHomeCache 里可能有旧版本写入的 "/2/" 形态脏数据
+        val page = parseList(doc(nextPath?.let { normalizeNext(it) } ?: firstPath))
         // v0.241 黑匣子：解析层统计——「有封面=0」说明 App 拿的 HTML 里没有封面脚本
         // （服务器按客户端下发），与截图里纯文字卡片互证
         MelonFlightLog.log(

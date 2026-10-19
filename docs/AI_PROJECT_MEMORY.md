@@ -889,6 +889,26 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.253（诊断三连定性：分页404真URL / 下载全量并发 / 自愈丢进度，2026-10-19）**：
+  0.252 自解释化立竿见影，三项全有硬证据：
+  **分页**：`翻页失败 /2/ HttpError: HTTP 404`——UI 拿到的 nextPath 是 "/2/"，站点真实
+  分页是 "/page/2/"（PARSE next=/page/2/）。来源：MelonHomeCache 旧会话脏数据/主题相对
+  链接。修复：normalizeNext()（Regex ^/(\d+)/?$ → /page/$1/）**存取两端都归一**
+  （parseList 存储时+list() 消费时，兼容旧缓存）。
+  **下载**：DOWNLOAD 里程碑实锤——`切片完成 24196ms`、`HLS完成 174MB 用时24s`：109 片
+  Semaphore(3) 并发 24s 内匀速完成，进度 0→50% 每 0.7s 走一步**理论上是动的**；但
+  bytesCopied=written 而 written 只在写盘阶段累加 → **切片阶段 MB 恒 0**（用户看到的
+  "两者都不动"的 MB 部分）；写盘 174MB 仅 0.3s（cache write）→ 50%→100% 瞬间完成 =
+  "快结束突然动"。修复：doneBytes AtomicLong 累计实际完成切片字节数（切片阶段 MB 实时
+  动）+ Semaphore 3→6（墙钟减半）。
+  **播放器**：`卡住自愈#1 state=2 pos=141788 → stop+prepare` 后 `首帧渲染 pos=0`——
+  **自愈生效但位置丢回片头**：stop 后 player 进 IDLE，prepare 从默认位置 0 开始缓冲，
+  而 seekTo 在 prepare 之后（no-op 落空）。修复：**stop → seekTo(pos) → prepare**
+  （IDLE 态 seekTo 设定 prepare 后初始位置）——两处（error 态分支+轻量重载分支）都改。
+  注意 v0.225 教训边界：「seekTo(current) no-op」指 READY 态原地重载；IDLE 态（stop 后）
+  seekTo 是设定初始位置的正确姿势，两者不矛盾。
+  版本：0.253/1253。
+
 - **v0.252（无诊断轮：自解释化 + 停帧自愈加重 + 换播放器评估，2026-10-19）**：
   用户反馈"修了多次没改观"且**未附诊断**（0.251 停帧自愈是否触发未知）。三线处理：
   **播放器（换内核评估）**：结论不换——ExoPlayer 是 YouTube/Netflix 级标准内核，且流
