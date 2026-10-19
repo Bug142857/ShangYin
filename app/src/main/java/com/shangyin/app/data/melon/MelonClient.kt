@@ -351,14 +351,8 @@ object MelonClient {
             "PARSE", "items=${page.items.size} 有封面=${page.items.count { it.cover != null }} " +
                 "首条cover=${page.items.firstOrNull()?.cover ?: "null"}"
         )
-        // v0.238 预热：列表能拉到 = 镜像可达；后台开始加载隐藏 WebView 的解密管线页
-        // （慢站点首载 25s+，提前加载——用户往下翻到图片时管线多半已就绪）
-        runCatching {
-            MelonWebImage.ensure(
-                com.shangyin.app.App.instance,
-                lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }
-            ) { ok -> MelonFlightLog.log("PREHEAT", "ensure=$ok") }
-        }
+        // v0.242：WebView 管线预热已删除（0.235~0.241 ensure 从未就绪，死路退役；
+        // 图片走 MelonImageCipher 原生解密，无需预热）
         return page
     }
 

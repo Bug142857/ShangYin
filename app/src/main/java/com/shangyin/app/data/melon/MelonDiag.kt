@@ -177,31 +177,42 @@ object MelonDiag {
                 n++
             }
 
-            // WebView 解密管线实况：ensure（主动轮询就绪）→ probeRaw 首封面（raw 头 +
-            // 解密长度一次区分「网络假数据」vs「解密失败」）。v0.237：整段限时 15s——
-            // ensure 就绪轮询 + probeRaw fetch/解密都可能各自拖 20s，串行叠加曾把诊断
-            // 拖到 140s（用户以为卡死）；probeRaw 已含解密长度，fetchDecrypted 冗余已删
-            val wvTarget = covers.firstOrNull()
-            if (wvTarget != null) {
-                val wvRes = try {
-                    val ready = kotlinx.coroutines.withTimeoutOrNull(25_000) {
-                        kotlinx.coroutines.suspendCancellableCoroutine<Boolean> { c ->
-                            MelonWebImage.ensure(context, MelonClient.lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }) { r ->
-                                if (c.isActive) c.resume(r)
+            // v0.242 原生解密探针：okhttp 拉密文 → 本地 AES-128-CBC 解密 → 魔数。
+            // 一行定案：密文头 + 解密结果（FFD8=成功，方案闭环；null=密钥错，看动态提取）
+            val cipherTarget = covers.firstOrNull()
+            if (cipherTarget != null) {
+                val r = try {
+                    val cipher = kotlinx.coroutines.withTimeoutOrNull(10_000) {
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            val req = Request.Builder().url(cipherTarget)
+                                .header("User-Agent", MelonClient.UA)
+                                .cacheControl(okhttp3.CacheControl.FORCE_NETWORK).build()
+                            probeClient.newCall(req).execute().use { resp ->
+                                if (!resp.isSuccessful) null else resp.body?.bytes()
                             }
                         }
                     }
                     when {
-                        ready == null -> "ensure超时(25s) readyState=${MelonWebImage.readyState.ifBlank { "无" }}"
-                        !ready -> "页面未就绪(25s) readyState=${MelonWebImage.readyState.ifBlank { "无" }}——后台仍在加载"
-                        else -> kotlinx.coroutines.withTimeoutOrNull(12_000) { MelonWebImage.probeRaw(wvTarget) }
-                            ?.let { "raw: $it" } ?: "probeRaw超时或失败(12s)"
+                        cipher == null -> "拉密文失败/超时(10s)"
+                        cipher.isEmpty() -> "密文 0B（CDN 拦截）"
+                        else -> {
+                            val head = cipher.take(4).joinToString(" ") { "%02X".format(it) }
+                            val plain = MelonImageCipher.decrypt(cipher)
+                            val plainHead = plain?.take(4)?.joinToString(" ") { "%02X".format(it) }
+                            if (plain != null) "密文${cipher.size}B[$head] → 解密${plain.size}B[$plainHead] ✓"
+                            else {
+                                val (k, iv) = MelonImageCipher.fetchKeyIv(MelonClient.lastBase)
+                                val p2 = if (k != null && iv != null) MelonImageCipher.decrypt(cipher, k, iv) else null
+                                if (p2 != null) "密文${cipher.size}B → 动态密钥解密${p2.size}B ✓（硬编码密钥已轮换）"
+                                else "密文${cipher.size}B[$head] → 解密失败（密钥不可用）"
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     "异常 ${e.javaClass.simpleName}: ${e.message?.take(50)}"
                 }
-                out.appendLine("WebView管线: $wvRes")
-            } else out.appendLine("WebView管线: 跳过（无封面URL）")
+                out.appendLine("原生解密: $r")
+            } else out.appendLine("原生解密: 跳过（无封面URL）")
 
             // 首页 HTML 双栈对照：App 解析的封面 URL 是截断版 .jpe 而 PC 同镜像完整——
             // okhttp（FORCE_NETWORK）与 WebView 各拉一次首页，比较首条 loadBannerDirect

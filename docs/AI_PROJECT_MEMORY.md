@@ -849,6 +849,26 @@
   有运行时命中证据**。
   版本：0.241/1241。
 
+- **v0.242（图床风控真相定案：AES 密文非垃圾，WebView 管线退役换原生解密，2026-10-19）**：
+  0.241 黑匣子（首次设备自证成功）三大排除+一定案：①FACTORY Uri分派命中=true（0.240
+  修复生效，Fetcher 被调用）；②PARSE 有封面=30、URL 完整 .jpeg、DOC len=246328（解析
+  层与网络层全通——「服务器按客户端下发不同 HTML」假设也错了）；③卡点=FETCH 入口后
+  无下文 + PREHEAT ensure=false + readyState=无 → **WebView 管线 0.235~0.241 七轮从未
+  就绪**（evaluateJavascript 回调一次都没执行，疑似离屏 WebView/ApplicationContext 创建
+  等环境问题，不再深究）。**风控真相（zzz.js 逆向定案）**：图床对所有客户端下发
+  AES-128-CBC 密文（大小与真图接近的「假字节」就是密文！），浏览器只是靠 zzz.js 前端
+  解密——七轮盲修全因把密文误判为「指纹垃圾」。混淆解包：CryptoJS.AES.decrypt(b64,
+  Utf8.parse(KEY), {iv, CBC, Pkcs7})，码点序列 "57_55_98_..." → KEY="97b60394abc2fbe1"
+  IV="f5d965df75336270"。0.242 实现：新建 MelonImageCipher（硬编码密钥解密 + fetchKeyIv
+  动态拉 zzz.js 正则提取防轮换——zzz.js 静态资源不被风控拦，PC 实测 50KB 可达）；
+  MelonWebFetcher.fetch 改 okhttp 拉密文→本地 AES→魔数→缓存（WebView 管线整体退役，
+  ensure/probeRaw/fetchDecrypted 成死代码待清）；list() 预热删除；诊断「WebView管线」
+  段换「原生解密」探针。PC 端验证受阻：图床对 PC 已 0 字节（风控连 PC 全挡），设备端
+  诊断即验证。**教训固化：①「假数据」先查是不是密文/编码而非风控垃圾——看站点前端
+  JS 是否会处理该响应；②设备黑匣子 241 轮立功：一次输出排除三个假设+锁定卡点；
+  ③WebView 常驻方案在部分设备不可靠（evaluateJavascript 无回调），能原生就原生。**
+  版本：0.242/1242。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。
