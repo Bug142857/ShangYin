@@ -546,21 +546,59 @@ fun PlayerScreen(nav: NavHostController) {
                 bufferingSince = if (playbackState == Player.STATE_BUFFERING) System.currentTimeMillis() else 0L
             }
         }
+        // v0.247：加载错误进黑匣子——看门狗只知「卡在 BUFFERING」，不知「为什么」；
+        // onLoadError 带异常类型（InvalidResponseCodeException.responseCode=HTTP 码：
+        // 403=签名过期 / 404=切片缺失；SocketTimeout=慢源），一轮数据定性
+        val al = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onLoadError(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+                error: java.io.IOException,
+                wasCanceled: Boolean
+            ) {
+                val t = when (mediaLoadData.dataType) {
+                    androidx.media3.common.C.DATA_TYPE_MANIFEST -> "清单"
+                    androidx.media3.common.C.DATA_TYPE_MEDIA -> "切片"
+                    androidx.media3.common.C.DATA_TYPE_DRM -> "KEY"
+                    else -> "type${mediaLoadData.dataType}"
+                }
+                val code = (error as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER",
+                    "加载失败[$t] code=${code ?: "-"} ${error.javaClass.simpleName}: ${error.message?.take(60)}"
+                )
+            }
+        }
         player.addListener(l)
-        onDispose { player.removeListener(l) }
+        player.addAnalyticsListener(al)
+        onDispose { player.removeListener(l); player.removeAnalyticsListener(al) }
     }
     LaunchedEffect(player) {
         var lastPos = -1L
         var stuckSince = 0L
         var reloadRound = 0 // 本轮卡住的自愈次数（位置恢复前进即清零）
+        var gaveUp = false  // 连续 8 轮自愈无效 = 片源级故障，停止重试（换集自动复位）
+        var curUri: String? = null
         while (true) {
             delay(2000)
+            // 换集/换线路（MediaItem uri 变化）→ 自愈状态复位，看门狗重新上岗
+            val uriNow = player.currentMediaItem?.localConfiguration?.uri?.toString()
+            if (uriNow != curUri) {
+                curUri = uriNow
+                gaveUp = false
+                reloadRound = 0
+                stuckSince = 0L
+            }
+            if (gaveUp) continue
             val now = System.currentTimeMillis()
             val pos = player.currentPosition
-            // 位置在前进（真正在播）= 一切正常，自愈计数清零
+            // 位置在前进（真正在播）= 一切正常，自愈计数清零；曾放弃的流恢复播放
+            //（如用户点刷新成功）→ 看门狗自动重新上岗，不依赖换 uri
             if (player.isPlaying) {
                 reloadRound = 0
                 stuckSince = 0L
+                gaveUp = false
                 lastPos = pos
                 continue
             }
@@ -579,6 +617,16 @@ fun PlayerScreen(nav: NavHostController) {
             lastPos = pos
             if (needReload) {
                 reloadRound++
+                // 连续 8 轮自愈全部无效 = 片源级故障（后半段缺失/签名全过期等），
+                // 重试只是空转 → 放弃并明说（换集时 uri 变化会自动复位重新上岗）
+                if (reloadRound >= 8) {
+                    gaveUp = true
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "卡住自愈放弃 pos=$pos 连续8轮无效 → 停止重试"
+                    )
+                    Toast.makeText(context, "片源无法继续播放，建议点刷新或切换线路", Toast.LENGTH_LONG).show()
+                    continue
+                }
                 val item = player.currentMediaItem
                 runCatching {
                     when {

@@ -322,7 +322,9 @@ object MelonDiag {
                     if (!body.contains("#EXTM3U")) "HTTP 200 非清单(直链?)"
                     else {
                         val segs = body.lines().count { it.isNotBlank() && !it.startsWith("#") }
-                        val sb = StringBuilder("m3u8 OK: $segs 片")
+                        val totalSec = body.lines().filter { it.startsWith("#EXTINF") }
+                            .sumOf { it.substringAfter(':').substringBefore(',').toDoubleOrNull() ?: 0.0 }
+                        val sb = StringBuilder("m3u8 OK: $segs 片 时长%.0fs".format(totalSec))
                         val base = url.substringBeforeLast('/')
                         // KEY 实测（AES-128 的密钥拉不到 = 播放黑屏/下载解不开）
                         body.lines().firstOrNull { it.contains("EXT-X-KEY") }?.let { kl ->
@@ -341,13 +343,13 @@ object MelonDiag {
                                 }
                             }
                         }
-                        // 前 2 个切片实测（卡 seek/下载 0% 多半是切片请求失败）
+                        // 切片实测（v0.247）：0/1 + 中后段 10/20/40——seek 卡住区域定性，
+                        // 前 2 片好 ≠ 中后段好（0.246 黑匣子：105s 起每落点都卡）
                         val segUrls = body.lines()
                             .filter { it.isNotBlank() && !it.startsWith("#") }
-                            .take(2).map { s ->
-                                if (s.startsWith("http")) s else "$base/$s"
-                            }
-                        segUrls.forEachIndexed { i, su ->
+                            .map { s -> if (s.startsWith("http")) s else "$base/$s" }
+                        intArrayOf(0, 1, 10, 20, 40).filter { it < segUrls.size }.forEach { i ->
+                            val su = segUrls[i]
                             try {
                                 probeClient.newCall(
                                     Request.Builder().url(su).header("User-Agent", MelonClient.UA).build()
@@ -355,11 +357,15 @@ object MelonDiag {
                                     // TS 切片验证：每 188 字节首个应为 0x47；假切片（风控混淆
                                     // 字节）此处错乱 → ExoPlayer 解码卡死 / AES 解密失败下载挂
                                     val raw = sr.body?.bytes() ?: ByteArray(0)
-                                    val head = raw.take(8).joinToString(" ") { "%02X".format(it) }
                                     val tsOk = raw.size >= 377 &&
                                         raw[0] == 0x47.toByte() && raw[188] == 0x47.toByte() &&
                                         raw[376] == 0x47.toByte()
-                                    sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B head=[$head] TS对齐=${if (tsOk) "OK" else "错乱"}")
+                                    if (i <= 1) {
+                                        val head = raw.take(8).joinToString(" ") { "%02X".format(it) }
+                                        sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B head=[$head] TS对齐=${if (tsOk) "OK" else "错乱"}")
+                                    } else {
+                                        sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B TS=${if (tsOk) "OK" else "乱"}")
+                                    }
                                 }
                             } catch (e: Exception) {
                                 sb.append(" | 片$i:${e.javaClass.simpleName}: ${e.message?.take(40)}")
