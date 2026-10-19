@@ -58,6 +58,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -153,6 +154,17 @@ fun PlayerScreen(nav: NavHostController) {
     val isLive = PlayerSession.isLive
     // 下载确认弹窗（v0.225）：title to url；null = 不显示
     var pendingDownload by remember { mutableStateOf<Pair<String, String>?>(null) }
+    // v0.254：播放页实时下载进度角标——用户点下载后留在播放页，眼睛不在这，
+    // 「后台进度条没动」的感知一半来自这里没有可见反馈。订阅同一 StateFlow，
+    // 每次变化打观察日志（UI 侧是否真收到更新，下轮诊断一步定性）
+    val dlTasks by com.shangyin.app.data.download.VideoDownloadManager.active.collectAsState()
+    LaunchedEffect(dlTasks) {
+        val t = dlTasks.values.firstOrNull() ?: return@LaunchedEffect
+        com.shangyin.app.data.melon.MelonFlightLog.log(
+            "DOWNLOADUI", "播放页观察 ${t.title.take(20)} ${(t.progress * 100).toInt()}% " +
+                "${"%.1f".format(t.bytesCopied / 1048576f)}MB err=${t.error?.take(20) ?: "无"}"
+        )
+    }
     var groupIndex by remember {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
     }
@@ -469,6 +481,40 @@ fun PlayerScreen(nav: NavHostController) {
         player.playWhenReady = true
         currentEp = startIdx
         if (startPos > 0L) Toast.makeText(context, "已从上次位置继续播放", Toast.LENGTH_SHORT).show()
+        // v0.254：本地镜像修复「点进度条必卡」——站点 m3u8 缺 ENDLIST 被当直播流
+        // （黑匣子实锤 dur≈32天），进度条映射到天文数字，seek 落点必然在真实内容之外。
+        // 后台镜像全部切片+密钥本地化+补 ENDLIST，就绪后无缝切换（保持位置）。
+        // 仅单集视频且非直播时启用；镜像失败保持原流（看门狗自愈兜底）
+        if (!isLive && eps.size == 1 && eps[0].url.substringBefore('?').endsWith(".m3u8")) {
+            val epUrl = eps[0].url
+            scope.launch {
+                val mirror = runCatching {
+                    com.shangyin.app.data.melon.MelonVodMirror.prepare(context, epUrl)
+                }.getOrNull() ?: return@launch
+                // 还在这集且没离开页面才切换（自动连播/返回后镜像就绪则丢弃）
+                if (released) return@launch
+                val sameEp = groups.getOrNull(groupIndex)?.episodes?.firstOrNull()?.url == epUrl &&
+                    player.currentMediaItemIndex == startIdx
+                if (!sameEp) return@launch
+                val pos = run {
+                    // v0.254：钳制——直播化时间轴上被 seek 过的位置可达 28 亿 ms（dur 实锤），
+                    // 直接带入本地 VOD 会越界立刻 ENDED；超出镜像真实时长一律回片头
+                    val d = com.shangyin.app.data.melon.MelonVodMirror.durationOf(epUrl)
+                    val cur = player.currentPosition.coerceAtLeast(0)
+                    if (d > 0 && cur >= d) 0L else cur
+                }
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "MIRROR", "切换本地播放 pos=$pos"
+                )
+                val local = MediaItem.Builder()
+                    .setUri(android.net.Uri.fromFile(java.io.File(mirror, "index.m3u8")))
+                    .setMimeType(MimeTypes.APPLICATION_M3U8)
+                    .build()
+                player.setMediaItem(local, pos)
+                player.prepare()
+                // playWhenReady 保持原状（切换瞬间不打断播放意图）
+            }
+        }
     }
 
     // 换集同步（自动连播 / 控制器切集）+ 播放出错提示
@@ -1028,6 +1074,19 @@ fun PlayerScreen(nav: NavHostController) {
                                             modifier = Modifier.size(20.dp)
                                         )
                                     }
+                                }
+                                // v0.254：下载中角标——实时 % + MB，用户点完下载立刻有可见反馈
+                                dlTasks.values.firstOrNull()?.let { dt ->
+                                    Text(
+                                        if (dt.error != null) "下载失败"
+                                        else "↓${(dt.progress * 100).toInt()}%",
+                                        color = Color.White,
+                                        style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                                        modifier = Modifier
+                                            .align(Alignment.CenterVertically)
+                                            .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                                    )
                                 }
                                 IconButton(
                                     onClick = { toggleFullscreen() },

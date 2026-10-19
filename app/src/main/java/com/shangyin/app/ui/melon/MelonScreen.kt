@@ -55,12 +55,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -105,6 +105,7 @@ private object MelonHomeCache {
     var keyword: String = ""
     var items: List<MelonPost> = emptyList()
     var nextPath: String? = null
+    var pages: List<String> = listOf("") // v0.254 页码栈（""=首页哨兵），页码条导航用
     var loadedKey: String? = null
 }
 
@@ -127,13 +128,18 @@ fun MelonHomeScreen(nav: NavHostController) {
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
     var loadedKey by remember { mutableStateOf(MelonHomeCache.loadedKey) }
+    // v0.254：页码条导航——用户明确要求「需要分页 不要无限翻」。页码栈（""=首页哨兵）
+    // 记录已访问页路径：下一页 push、上一页 pop+重载上一页路径。页码 = 栈深
+    val pageStack = remember { mutableStateListOf<String>().apply { addAll(MelonHomeCache.pages) } }
+    var lastNavWasNext by remember { mutableStateOf(true) } // 失败重试要重复上次导航动作
     val lastSeen = remember { MelonCache.last }
     // 列表状态须在 fetch 之前定义：reset 加载成功后要 scrollToItem(0) 回第一条
     val listState = rememberLazyListState()
 
-    suspend fun fetch(reset: Boolean, next: String? = null) {
+    /** 整页加载（target=null=首页/分类/搜索第一页；非空=指定页路径）。每次整页替换 */
+    suspend fun fetchPage(target: String?) {
         runCatching {
-            if (next != null) MelonClient.nextPage(next)
+            if (target != null) MelonClient.nextPage(target)
             else when {
                 keyword.isNotBlank() -> MelonClient.search(keyword)
                 catPath.isNotBlank() -> MelonClient.category(catPath)
@@ -142,53 +148,85 @@ fun MelonHomeScreen(nav: NavHostController) {
         }.onFailure { e ->
             // 协程取消不是加载失败，必须原样重抛，否则离屏取消被记成"网络错误"噪音
             if (e is kotlinx.coroutines.CancellationException) throw e
-            if (reset || next == null) items = emptyList()
+            if (target == null) items = emptyList()
             error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
-            if (next != null) {
+            if (target != null) {
                 com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "LIST", "翻页失败 $next ${e.javaClass.simpleName}: ${e.message?.take(60)}"
+                    "LIST", "翻页失败 $target ${e.javaClass.simpleName}: ${e.message?.take(60)}"
                 )
             }
         }.onSuccess { page ->
-            items = (if (reset || next == null) page.items else items + page.items)
-                .distinctBy { it.id }
+            items = page.items.distinctBy { it.id }
             nextPath = page.nextPath
-            // v0.251：分页取证——0.249/0.250 两轮用户都说"没有分页"，但日志里从未出现
-            // /page/2/ 的 DOC/PARSE：要么触发被吞、要么请求失败无痕迹。三行日志定责
-            if (next != null) {
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "LIST", "追加${page.items.size}条 共${items.size}条 next=${page.nextPath ?: "null"}"
-                )
-            }
-            // 重置加载（进模块/切分类/搜索/下拉刷新）后强制回到第一条：
-            // 任何来源的历史滚动锚点（状态恢复/触底加载残留）都不该把首屏停在中间
-            if (reset) listState.scrollToItem(0)
+            // 翻页/重置后回顶部：页码条模式下每页都是新列表
+            listState.scrollToItem(0)
             // 成功后同步现场缓存（返回再进不重载、不丢位置）
             MelonHomeCache.catPath = catPath
             MelonHomeCache.keyword = keyword
             MelonHomeCache.items = items
             MelonHomeCache.nextPath = nextPath
+            MelonHomeCache.pages = pageStack.toList()
             MelonHomeCache.loadedKey = "$catPath|$keyword"
+        }.getOrThrow() // 回调内异常抛给 loadNav 的 catch（loading 复位由 finally 保证）
+    }
+
+    /** 页码条导航：isNext=true 加载下一页（push 栈）；false 加载上一页（pop 栈） */
+    fun loadNav(target: String?, isNext: Boolean) {
+        if (loading) return
+        loading = true
+        lastNavWasNext = isNext
+        error = null
+        scope.launch {
+            try {
+                // ""=首页哨兵：上一页回到第 1 页时走初始加载
+                val t = target?.takeIf { it.isNotBlank() }
+                fetchPage(t)
+                if (target != null) {
+                    if (isNext) pageStack.add(target) else if (pageStack.size > 1) pageStack.removeLast()
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "LIST", "页码=${pageStack.size} ${items.size}条 next=${nextPath ?: "null"}"
+                    )
+                    // 栈操作后再写缓存（fetchPage 写的是操作前快照，会滞后一页）
+                    MelonHomeCache.pages = pageStack.toList()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // 协程取消不是错误，原样重抛（finally 照常复位 loading）
+            } catch (e: Exception) {
+                // fetch 回调（scrollToItem/缓存写入）抛异常会杀掉协程 → loading 永久 true
+                // → 之后所有翻页被 if(loading) return 吞掉（v0.251 教训）。finally 保证复位
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "LIST", "加载协程异常 ${e.javaClass.simpleName}: ${e.message?.take(60)}"
+                )
+                if (target == null) items = emptyList()
+                error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
+            } finally {
+                loading = false
+            }
         }
     }
 
-    fun load(reset: Boolean, next: String? = null) {
+    fun loadPrev() {
+        if (pageStack.size >= 2) loadNav(pageStack[pageStack.size - 2], false)
+    }
+
+    /** 初始/刷新/切分类：回到第 1 页 */
+    fun load(reset: Boolean) {
         if (loading) return
         loading = true
         error = null
         scope.launch {
             try {
-                fetch(reset, next)
+                fetchPage(null)
+                pageStack.clear()
+                pageStack.add("")
+                MelonHomeCache.pages = pageStack.toList()
             } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e // 协程取消不是错误，原样重抛（finally 照常复位 loading）
+                throw e
             } catch (e: Exception) {
-                // v0.251：fetch 的 onSuccess 回调（scrollToItem/缓存写入）抛异常会直接杀掉
-                // 协程 → loading 永远 true → 之后所有触底加载被 if(loading) return 静默吞掉
-                // = "没有分页"。catch+finally 保证复位 + 异常留痕
                 com.shangyin.app.data.melon.MelonFlightLog.log(
                     "LIST", "加载协程异常 ${e.javaClass.simpleName}: ${e.message?.take(60)}"
                 )
-                if (reset || next == null) items = emptyList()
+                items = emptyList()
                 error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
             } finally {
                 loading = false
@@ -205,22 +243,8 @@ fun MelonHomeScreen(nav: NavHostController) {
         }
     }
 
-    // 触底自动加载更多（倒数第 4 个条目进入可视区）
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
-            .map { idx -> items.isNotEmpty() && idx >= items.size - 3 }
-            .distinctUntilChanged()
-            .filter { it }
-            .collect {
-                if (!loading && nextPath != null) {
-                    // v0.251：触发留痕——"没有分页"的最后一环：到底有没有触发过
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "LIST", "触底触发 加载${nextPath} (已有${items.size}条)"
-                    )
-                    load(false, nextPath)
-                }
-            }
-    }
+    // v0.254：触底自动加载已移除（用户明确要求「需要分页 不要无限翻」）——
+    // 翻页改由底部页码条 [上一页 / 第N页 / 下一页] 显式导航
 
     Scaffold(
         topBar = {
@@ -374,7 +398,15 @@ fun MelonHomeScreen(nav: NavHostController) {
                         scope.launch {
                             refreshing = true
                             error = null
-                            fetch(true)
+                            runCatching { fetchPage(null) }
+                                .onFailure { e ->
+                                    if (e is kotlinx.coroutines.CancellationException) throw e
+                                }
+                            // v0.254：刷新=回到第 1 页，页码栈必须复位（审查发现：第 3 页刷新
+                            // 后显示第 1 页内容仍标"第 3 页"，栈/锚点错位）
+                            pageStack.clear()
+                            pageStack.add("")
+                            MelonHomeCache.pages = pageStack.toList()
                             refreshing = false
                         }
                     },
@@ -422,23 +454,21 @@ fun MelonHomeScreen(nav: NavHostController) {
                     itemsIndexed(items, key = { _, p -> p.id }) { _, post ->
                         MelonPostCard(post) { nav.safeNavigate("melonDetail/${post.id}") }
                     }
-                    // 底部状态
+                    // 底部状态：页码条导航（v0.254，用户要求「需要分页 不要无限翻」）
                     item(key = "footer") {
-                        // v0.250：触底加载失败此前静默——items 保留、error 只在空列表显示，
-                        // 且 snapshotFlow 条件值不变不再触发 → 用户滚到底没反应像「没有分页」。
-                        // 失败时给出可点的重试入口
                         Box(
                             Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 14.dp),
+                                .padding(vertical = 10.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             when {
-                                loading -> CircularProgressIndicator(
-                                    modifier = Modifier.size(20.dp),
-                                    strokeWidth = 2.dp
+                                items.isEmpty() -> Text(
+                                    if (keyword.isNotBlank()) "没有找到相关内容" else "暂无内容",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.outline
                                 )
-                                error != null && items.isNotEmpty() -> Column(
+                                error != null -> Column(
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
                                     // v0.252：失败原因直接亮出来——"加载失败"四个字没法定位
@@ -451,19 +481,29 @@ fun MelonHomeScreen(nav: NavHostController) {
                                         "点击重试",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.clickable { load(false, nextPath) }
+                                        modifier = Modifier.clickable {
+                                            // 重复上次导航动作（失败时栈/锚点均未变动，重算即可）
+                                            if (lastNavWasNext) nextPath?.let { loadNav(it, true) }
+                                            else loadPrev()
+                                        }
                                     )
                                 }
-                                nextPath == null && items.isNotEmpty() -> Text(
-                                    "没有更多了",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
-                                items.isEmpty() -> Text(
-                                    if (keyword.isNotBlank()) "没有找到相关内容" else "暂无内容",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.outline
-                                )
+                                else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
+                                        enabled = pageStack.size > 1 && !loading,
+                                        onClick = { loadPrev() }
+                                    ) { Text("上一页") }
+                                    Text(
+                                        "第 ${pageStack.size} 页",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.outline,
+                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                    )
+                                    TextButton(
+                                        enabled = nextPath != null && !loading,
+                                        onClick = { nextPath?.let { loadNav(it, true) } }
+                                    ) { Text("下一页") }
+                                }
                             }
                         }
                     }
