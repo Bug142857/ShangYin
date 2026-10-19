@@ -139,10 +139,27 @@ fun MelonHomeScreen(nav: NavHostController) {
                 catPath.isNotBlank() -> MelonClient.category(catPath)
                 else -> MelonClient.home()
             }
+        }.onFailure { e ->
+            // 协程取消不是加载失败，必须原样重抛，否则离屏取消被记成"网络错误"噪音
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (reset || next == null) items = emptyList()
+            error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
+            if (next != null) {
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "LIST", "翻页失败 $next ${e.javaClass.simpleName}: ${e.message?.take(60)}"
+                )
+            }
         }.onSuccess { page ->
             items = (if (reset || next == null) page.items else items + page.items)
                 .distinctBy { it.id }
             nextPath = page.nextPath
+            // v0.251：分页取证——0.249/0.250 两轮用户都说"没有分页"，但日志里从未出现
+            // /page/2/ 的 DOC/PARSE：要么触发被吞、要么请求失败无痕迹。三行日志定责
+            if (next != null) {
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "LIST", "追加${page.items.size}条 共${items.size}条 next=${page.nextPath ?: "null"}"
+                )
+            }
             // 重置加载（进模块/切分类/搜索/下拉刷新）后强制回到第一条：
             // 任何来源的历史滚动锚点（状态恢复/触底加载残留）都不该把首屏停在中间
             if (reset) listState.scrollToItem(0)
@@ -152,9 +169,6 @@ fun MelonHomeScreen(nav: NavHostController) {
             MelonHomeCache.items = items
             MelonHomeCache.nextPath = nextPath
             MelonHomeCache.loadedKey = "$catPath|$keyword"
-        }.onFailure { e ->
-            if (reset || next == null) items = emptyList()
-            error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
         }
     }
 
@@ -163,8 +177,22 @@ fun MelonHomeScreen(nav: NavHostController) {
         loading = true
         error = null
         scope.launch {
-            fetch(reset, next)
-            loading = false
+            try {
+                fetch(reset, next)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e // 协程取消不是错误，原样重抛（finally 照常复位 loading）
+            } catch (e: Exception) {
+                // v0.251：fetch 的 onSuccess 回调（scrollToItem/缓存写入）抛异常会直接杀掉
+                // 协程 → loading 永远 true → 之后所有触底加载被 if(loading) return 静默吞掉
+                // = "没有分页"。catch+finally 保证复位 + 异常留痕
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "LIST", "加载协程异常 ${e.javaClass.simpleName}: ${e.message?.take(60)}"
+                )
+                if (reset || next == null) items = emptyList()
+                error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
+            } finally {
+                loading = false
+            }
         }
     }
 
@@ -183,7 +211,15 @@ fun MelonHomeScreen(nav: NavHostController) {
             .map { idx -> items.isNotEmpty() && idx >= items.size - 3 }
             .distinctUntilChanged()
             .filter { it }
-            .collect { if (!loading && nextPath != null) load(false, nextPath) }
+            .collect {
+                if (!loading && nextPath != null) {
+                    // v0.251：触发留痕——"没有分页"的最后一环：到底有没有触发过
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "LIST", "触底触发 加载${nextPath} (已有${items.size}条)"
+                    )
+                    load(false, nextPath)
+                }
+            }
     }
 
     Scaffold(

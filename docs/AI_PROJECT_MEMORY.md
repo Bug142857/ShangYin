@@ -889,6 +889,26 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.251（第四盲区：视频停帧检测 / 分页 loading 卡死 / 下载里程碑，2026-10-19）**：
+  0.250 黑匣子分舱立功（PLAYER 置顶可见），用户"还是都没修好"的真相分三线：
+  **播放器**：9 次「首帧渲染」、**0 条卡住自愈**、1 条加载失败[切片]Connection reset——
+  seek 后解码器只出 1 帧就停，但 isPlaying=true 位置照走 = **媒体时钟与画面脱钩**，
+  state/pos/suppression 全部"健康"，前三判（BUFFERING 超时/READY 不播/error 态）全部
+  被骗过 = 第四盲区。用户只能反复 seek（pos=23940/2002 的首帧即手动 seek 尝试）。
+  修复：**DecoderCounters.renderedOutputBufferCount 停帧检测**——AnalyticsListener
+  onVideoEnabled/onVideoDisabled 捕获计数器引用（AtomicReference），看门狗每 2s 采样：
+  时钟在走（isPlaying）而帧数 12s 不涨（rendered>0）→ videoStalled → 接入现有自愈梯子
+  （stop+prepare→原位重建→跳段），日志前缀「停帧自愈」区分「卡住自愈」。停帧时不走
+  正常在播清零通道，但 lastPos 照常更新。**分页**：日志仍无 /page/2/ 的 DOC/PARSE →
+  page-2 请求从未成功发出。定位两个真 bug：① load() 的 `loading=false` 在协程内
+  fetch 之后——fetch 的 onSuccess/onFailure 回调（scrollToItem/缓存写入）抛异常直接杀
+  协程 → loading 永久 true → 所有触底加载被 if(loading) return 静默吞；try/catch/finally
+  重构保证复位+异常留痕。② 翻页失败/触发全程零日志无痕迹 → LIST 标签取证（触底触发/
+  成功追加/失败原因/协程异常）。**下载**：诊断无进行中任务无法直观测速 → DOWNLOAD
+  标签里程碑（HLS开始 slices=N / 切片完成耗时→写盘 / 完成 MB+用时）。**黑匣子**：
+  低频取证标签（PLAYER/DOWNLOAD/LIST）统一入优先缓冲（cap 24→32），与刷屏标签隔离
+  ——**低频取证标签一律不与刷屏标签抢缓冲**。版本：0.251/1251。
+
 - **v0.250（三反馈第二轮：error 态盲区 / 黑匣子分舱 / 写盘权重，2026-10-19）**：
   用户反馈 0.249 三项"都没修复"。黑匣子半份捷报+新线索：
   **分页**：`PARSE next=/page/2/`——0.249 选择器修复**已生效**，断点移到下一环：触底

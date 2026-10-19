@@ -12,13 +12,14 @@ package com.shangyin.app.data.melon
  *
  * v0.250：PLAYER 标签独立缓冲——0.247~0.249 连续三轮取证都栽在同一件事上：图片
  * FETCH 日志刷屏（一次列表加载几十条），把播放器卡住瞬间的 PLAYER 记录全部挤出
- * 60 条环形缓冲，诊断页拿到的永远是「卡完之后」的图墙日志。PLAYER 独立 24 条 +
- * dump 置顶，播放取证不再靠运气。
+ * 60 条环形缓冲，诊断页拿到的永远是「卡完之后」的图墙日志。
+ * v0.251：DOWNLOAD（下载里程碑）与 LIST（分页取证）同入优先缓冲——低频取证标签
+ * 一律不该与刷屏标签抢缓冲；PLAYER_CAP 24→32。
  */
 object MelonFlightLog {
 
     private const val CAP = 60
-    private const val PLAYER_CAP = 24
+    private const val PLAYER_CAP = 32
     private val buf = ArrayDeque<String>()
     private val playerBuf = ArrayDeque<String>()
 
@@ -26,7 +27,9 @@ object MelonFlightLog {
         val line = "[${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US)
             .format(java.util.Date())}] $tag: ${msg.take(220)}"
         synchronized(buf) {
-            if (tag == "PLAYER") {
+            // v0.251：DOWNLOAD 与 PLAYER 同入优先缓冲——下载全程只打 ~5 条里程碑，
+            // 混进主缓冲照样被 FETCH 刷屏挤掉；两取证源都不该靠运气活下来
+            if (tag == "PLAYER" || tag == "DOWNLOAD" || tag == "LIST") {
                 playerBuf.addLast(line)
                 while (playerBuf.size > PLAYER_CAP) playerBuf.removeFirst()
             } else {

@@ -544,6 +544,13 @@ fun PlayerScreen(nav: NavHostController) {
     // 认为目标位置就是当前位置，复用现有请求不重新加载，卡死照旧。必须 stop()+prepare()
     // 强制丢弃已加载的 MediaPeriod 重新拉清单/切片，seekTo 只用于钉住进度，再恢复播放。
     var bufferingSince by remember { mutableLongStateOf(0L) }
+    // v0.251：视频渲染帧计数器引用——0.250 黑匣子实锤第四盲区：seek 后解码器只出 1 帧
+    //（9 次首帧渲染、0 条卡住自愈）但 isPlaying=true 位置照走 = 媒体时钟与画面脱钩，
+    // state/pos/suppression 全部"健康"，看门狗无从下手。DecoderCounters.renderedOutputBufferCount
+    // 每渲染一帧 +1，停帧检测的唯一可靠信号
+    val countersRef = remember {
+        java.util.concurrent.atomic.AtomicReference<androidx.media3.exoplayer.DecoderCounters?>(null)
+    }
     DisposableEffect(player) {
         val l = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -557,6 +564,21 @@ fun PlayerScreen(nav: NavHostController) {
         // ① 播放抑制（音频焦点被抢：isPlaying=false 但 state=READY，画面定帧缓冲照走）
         // ② 解码器不渲染（首帧后不再出帧）。两个回调落日志，下轮黑匣子直接区分
         val al = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            // v0.251：捕获视频渲染计数器（renderer 启用/停用生命周期），供看门狗停帧检测
+            override fun onVideoEnabled(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                counters: androidx.media3.exoplayer.DecoderCounters
+            ) {
+                countersRef.set(counters)
+            }
+
+            override fun onVideoDisabled(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                counters: androidx.media3.exoplayer.DecoderCounters
+            ) {
+                countersRef.compareAndSet(counters, null)
+            }
+
             override fun onPlaybackSuppressionReasonChanged(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                 playbackSuppressionReason: Int
@@ -625,6 +647,8 @@ fun PlayerScreen(nav: NavHostController) {
         var reloadRound = 0 // 本轮卡住的自愈次数（位置恢复前进即清零）
         var gaveUp = false  // 连续 8 轮自愈无效 = 片源级故障，停止重试（换集自动复位）
         var curUri: String? = null
+        var lastRendered = -1 // 上次采样的已渲染帧数（停帧检测，Int=renderedOutputBufferCount）
+        var stallSince = 0L    // 帧数首次停止增长的时刻
         while (true) {
             delay(2000)
             // 换集/换线路（MediaItem uri 变化）→ 自愈状态复位，看门狗重新上岗
@@ -670,15 +694,33 @@ fun PlayerScreen(nav: NavHostController) {
                 return@let
             }
             if (gaveUp) continue
-            // 位置在前进（真正在播）= 一切正常，自愈计数清零；曾放弃的流恢复播放
-            //（如用户点刷新成功）→ 看门狗自动重新上岗，不依赖换 uri
-            if (player.isPlaying) {
+            // v0.251：视频停帧检测（第四盲区）——0.250 黑匣子实锤：seek 后 9 次首帧渲染、
+            // 0 条卡住自愈 = 解码器只出 1 帧就停，但 isPlaying=true 位置照走（媒体时钟与
+            // 画面脱钩），state/pos/suppression 全部"健康"，前三种判据全部被骗过。
+            // renderedOutputBufferCount 每渲染一帧 +1：时钟在走而帧数 12s 不涨 = 停帧
+            var videoStalled = false
+            countersRef.get()?.let { cnt ->
+                val rendered = cnt.renderedOutputBufferCount
+                if (rendered != lastRendered) {
+                    lastRendered = rendered
+                    stallSince = 0L
+                } else if (rendered > 0 && player.isPlaying && !isLive) {
+                    if (stallSince == 0L) stallSince = now
+                    else if (now - stallSince > 12_000) videoStalled = true
+                } else {
+                    stallSince = 0L
+                }
+            }
+            // 停帧时不能走正常"在播"清零通道（会把自愈计数清掉），但位置确实在动，
+            // lastPos 仍要跟上，避免 READY-不播分支误判位置停滞
+            if (player.isPlaying && !videoStalled) {
                 reloadRound = 0
                 stuckSince = 0L
                 gaveUp = false
                 lastPos = pos
                 continue
             }
+            if (player.isPlaying) lastPos = pos
             // v0.226/v0.248：BUFFERING 超 25s 才判卡——黑匣子实锤（0.247）：seek 后
             // BUFFERING 期间**没有任何加载错误**、探针实测全部切片 200/完整、浏览器能播，
             // = 「慢」不是「死」：首切片 1.6MB 下载 5s 级 + 解密 + 关键帧对齐，10s 窗口
@@ -697,7 +739,8 @@ fun PlayerScreen(nav: NavHostController) {
                 else if (now - stuckSince > 25_000) needReload = true
             } else stuckSince = 0L
             lastPos = pos
-            if (needReload) {
+            if (needReload || videoStalled) {
+                val src = if (videoStalled) "停帧" else "卡住"
                 reloadRound++
                 // 连续 8 轮自愈全部无效 = 片源级故障（后半段缺失/签名全过期等），
                 // 重试只是空转 → 放弃并明说（换集时 uri 变化会自动复位重新上岗）
@@ -717,7 +760,7 @@ fun PlayerScreen(nav: NavHostController) {
                         // media3 认为目标位置就是当前位置不重新加载；seekTo 只用于钉住进度）
                         reloadRound <= 1 || item == null -> {
                             com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "卡住自愈#$reloadRound state=${player.playbackState} pos=$pos → stop+prepare"
+                                "PLAYER", "${src}自愈#$reloadRound state=${player.playbackState} pos=$pos → stop+prepare"
                             )
                             player.stop()
                             player.prepare()
@@ -740,7 +783,7 @@ fun PlayerScreen(nav: NavHostController) {
                                 else -> "重建+跳过坏段至${target / 1000}s"
                             }
                             com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "卡住自愈#$reloadRound state=${player.playbackState} pos=$pos → $msg"
+                                "PLAYER", "${src}自愈#$reloadRound state=${player.playbackState} pos=$pos → $msg"
                             )
                             player.setMediaItem(item, target)
                             player.prepare()
@@ -758,6 +801,8 @@ fun PlayerScreen(nav: NavHostController) {
                 }
                 bufferingSince = System.currentTimeMillis() // 重置计时避免无限循环
                 stuckSince = 0L
+                stallSince = 0L
+                lastRendered = -1 // 自愈后渲染器重建，计数器归零重来
             }
         }
     }

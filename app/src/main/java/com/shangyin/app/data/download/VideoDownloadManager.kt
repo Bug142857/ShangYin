@@ -351,6 +351,10 @@ object VideoDownloadManager {
         val tmp = tmpDir(context, task.url).apply { mkdirs() }
         var written = 0L
         var lastNotif = 0L
+        val t0 = System.currentTimeMillis()
+        com.shangyin.app.data.melon.MelonFlightLog.log(
+            "DOWNLOAD", "HLS开始 slices=${segments.size} key=${if (keyBytes != null) "有" else "无"}"
+        )
         try {
             val semaphore = Semaphore(3)
             val total = segments.size
@@ -391,6 +395,9 @@ object VideoDownloadManager {
                     }
                 }
             }.awaitAll()
+            com.shangyin.app.data.melon.MelonFlightLog.log(
+                "DOWNLOAD", "切片完成 ${System.currentTimeMillis() - t0}ms → 写盘"
+            )
             // v0.250：拼接写盘按字节平滑推进（0.5→1.0）——长视频写盘几百 MB 要 1-2 分钟，
             // 此前固定占 10% 区间且每片才动 0.4%，观感「进度条没动」；按 written/totalBytes
             // 计算后每写 1% 字节进度就走 0.5%，与切片段衔接连续
@@ -412,6 +419,9 @@ object VideoDownloadManager {
         } finally {
             tmp.deleteRecursively()
         }
+        com.shangyin.app.data.melon.MelonFlightLog.log(
+            "DOWNLOAD", "HLS完成 ${written / 1048576}MB 用时${(System.currentTimeMillis() - t0) / 1000}s"
+        )
         return written
     }
 
