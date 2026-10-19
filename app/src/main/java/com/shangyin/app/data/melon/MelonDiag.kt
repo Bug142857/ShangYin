@@ -351,20 +351,25 @@ object MelonDiag {
                         intArrayOf(0, 1, 10, 20, 40).filter { it < segUrls.size }.forEach { i ->
                             val su = segUrls[i]
                             try {
+                                val t0 = System.currentTimeMillis()
                                 probeClient.newCall(
                                     Request.Builder().url(su).header("User-Agent", MelonClient.UA).build()
                                 ).execute().use { sr ->
-                                    // TS 切片验证：每 188 字节首个应为 0x47；假切片（风控混淆
-                                    // 字节）此处错乱 → ExoPlayer 解码卡死 / AES 解密失败下载挂
+                                    // v0.248：耗时单独输出——1.6MB 切片若 5s 级，seek 首片
+                                    // 加载（切片+解密+关键帧）10s 窗口不够，「慢」即卡根因
+                                    val ms = System.currentTimeMillis() - t0
+                                    val cost = if (ms >= 1000) "%.1fs".format(ms / 1000.0) else "${ms}ms"
+                                    // TS 切片验证：每 188 字节首个应为 0x47；AES-128 加密流
+                                    // 解密前 TS 对齐必然「错乱」≠ 异常（片0 同样错乱但能播）
                                     val raw = sr.body?.bytes() ?: ByteArray(0)
                                     val tsOk = raw.size >= 377 &&
                                         raw[0] == 0x47.toByte() && raw[188] == 0x47.toByte() &&
                                         raw[376] == 0x47.toByte()
                                     if (i <= 1) {
                                         val head = raw.take(8).joinToString(" ") { "%02X".format(it) }
-                                        sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B head=[$head] TS对齐=${if (tsOk) "OK" else "错乱"}")
+                                        sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B $cost head=[$head] 加密流TS=${if (tsOk) "明文OK" else "密文(正常)"}")
                                     } else {
-                                        sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B TS=${if (tsOk) "OK" else "乱"}")
+                                        sb.append(" | 片$i:HTTP ${sr.code} ${raw.size}B $cost TS=${if (tsOk) "明文OK" else "密文(正常)"}")
                                     }
                                 }
                             } catch (e: Exception) {

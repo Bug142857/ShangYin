@@ -602,17 +602,19 @@ fun PlayerScreen(nav: NavHostController) {
                 lastPos = pos
                 continue
             }
-            // v0.226：BUFFERING 超 10s——seek 到未缓冲区后，慢源/签名切片下重新拉切片
-            // 可能长时间卡在 STATE_BUFFERING（TS 加密流尤其如此）。
+            // v0.226/v0.248：BUFFERING 超 25s 才判卡——黑匣子实锤（0.247）：seek 后
+            // BUFFERING 期间**没有任何加载错误**、探针实测全部切片 200/完整、浏览器能播，
+            // = 「慢」不是「死」：首切片 1.6MB 下载 5s 级 + 解密 + 关键帧对齐，10s 窗口
+            // 不够且每次自愈 stop+prepare 把已下载进度全扔掉重来，反而把慢打成死循环。
             var needReload = !isLive && bufferingSince > 0 &&
-                now - bufferingSince > 10_000
+                now - bufferingSince > 25_000
             // v0.231：READY 却不播——seek 后 STATE_READY、playWhenReady=true 但画面不动
-            //（位置停滞），原自愈只认 STATE_BUFFERING 覆盖不到这种。位置 10s 无变化即重载。
+            //（位置停滞）。位置 25s 无变化即重载（阈值与 BUFFERING 同步放宽）。
             if (!needReload && !isLive && player.playWhenReady && !player.isPlaying &&
                 !player.isPlayingAd && pos == lastPos
             ) {
                 if (stuckSince == 0L) stuckSince = now
-                else if (now - stuckSince > 10_000) needReload = true
+                else if (now - stuckSince > 25_000) needReload = true
             } else stuckSince = 0L
             lastPos = pos
             if (needReload) {
