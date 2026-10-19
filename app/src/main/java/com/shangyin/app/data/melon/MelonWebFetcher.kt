@@ -29,28 +29,46 @@ import kotlin.coroutines.resume
 class MelonWebFetcher(private val url: String, private val options: Options) : Fetcher {
 
     override suspend fun fetch(): FetchResult {
+        MelonFlightLog.log("FETCH", "入口 url=$url")
         val cacheFile = cacheFile(options.context, url)
         val bytes = if (cacheFile.isFile && cacheFile.length() > 0) {
             (cacheFile.readBytes().takeIf { looksLikeImage(it) } ?: run {
                 // 0.238 轮诊断到「Coil 报 BitmapFactory null」：缓存里进过垃圾字节。
                 // 读出非图片魔数直接删除重拉
+                MelonFlightLog.log("FETCH", "磁盘缓存垃圾拒收 size=${cacheFile.length()} 已删")
                 runCatching { cacheFile.delete() }
                 null
             })
         } else null
+        if (bytes != null) MelonFlightLog.log("FETCH", "磁盘缓存命中 ${bytes.size}B")
         val fresh = bytes ?: run {
             val ok = ensureReady(options.context)
-            if (!ok) throw IOException("WebView 管线未就绪")
-            val b = MelonWebImage.fetchDecrypted(url) ?: throw IOException("图床解密失败")
-            if (!looksLikeImage(b)) throw IOException("解密结果非图片")
+            if (!ok) {
+                MelonFlightLog.log("FETCH", "失败: 管线未就绪(ensure=false)")
+                throw IOException("WebView 管线未就绪")
+            }
+            val b = MelonWebImage.fetchDecrypted(url)
+            if (b == null) {
+                MelonFlightLog.log("FETCH", "失败: 解密返回null")
+                throw IOException("图床解密失败")
+            }
+            if (!looksLikeImage(b)) {
+                MelonFlightLog.log("FETCH", "失败: 解密${b.size}B非图片魔数 head=${b.take(4).joinToString(" ") { "%02X".format(it) }}")
+                throw IOException("解密结果非图片")
+            }
             runCatching {
                 cacheFile.parentFile?.mkdirs()
                 cacheFile.writeBytes(b)
             }
+            MelonFlightLog.log("FETCH", "解密成功 ${b.size}B 已缓存")
             b
         }
         val bmp = android.graphics.BitmapFactory.decodeByteArray(fresh, 0, fresh.size)
-            ?: throw IOException("明文解码失败")
+        if (bmp == null) {
+            MelonFlightLog.log("FETCH", "失败: 明文${fresh.size}B解码null")
+            throw IOException("明文解码失败")
+        }
+        MelonFlightLog.log("FETCH", "成功 ${bmp.width}x${bmp.height}")
         return DrawableResult(
             drawable = android.graphics.drawable.BitmapDrawable(options.context.resources, bmp),
             isSampled = false,
@@ -96,7 +114,9 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
         override fun create(data: android.net.Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
             if (data.scheme != "http" && data.scheme != "https") return null
             val host = runCatching { data.toString().toHttpUrl().host }.getOrNull() ?: return null
-            return if (host.matches(MELON_PIC_HOST)) MelonWebFetcher(data.toString(), options) else null
+            val hit = host.matches(MELON_PIC_HOST)
+            MelonFlightLog.log("FACTORY", "Uri分派 host=$host 命中=$hit")
+            return if (hit) MelonWebFetcher(data.toString(), options) else null
         }
     }
 
@@ -104,7 +124,9 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
     class StringFactory : Fetcher.Factory<String> {
         override fun create(data: String, options: Options, imageLoader: ImageLoader): Fetcher? {
             val host = runCatching { data.toHttpUrl().host }.getOrNull() ?: return null
-            return if (host.matches(MELON_PIC_HOST)) MelonWebFetcher(data, options) else null
+            val hit = host.matches(MELON_PIC_HOST)
+            MelonFlightLog.log("FACTORY", "String分派 host=$host 命中=$hit")
+            return if (hit) MelonWebFetcher(data, options) else null
         }
     }
 

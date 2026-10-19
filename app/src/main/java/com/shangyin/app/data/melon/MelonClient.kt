@@ -289,6 +289,12 @@ object MelonClient {
                 // path 通常为站内相对路径；翻页链路里若残留绝对地址（换线场景）也直接可用
                 val url = if (path.startsWith("http")) path else "$base$path"
                 val html = httpGet(url)
+                // v0.241 黑匣子：HTML 长度 + 封面脚本出现次数——「cover=null 纯文字卡片」
+                // 之谜的一手证据（PC 无法复现，只能设备自证）
+                MelonFlightLog.log(
+                    "DOC", "url=${url.substringAfter(base)} len=${html.length} " +
+                        "loadBannerDirect×${Regex("loadBannerDirect").findAll(html).count()}"
+                )
                 if (html.isBlank()) throw IOException("站点返回空内容")
                 collectPicHosts(html) // 顺手收集页面里的图床域名（图片 fallback 候选）
                 return@withContext Jsoup.parse(html, url)
@@ -339,13 +345,19 @@ object MelonClient {
     /** 加载任意列表页（firstPath 为首页/分类/搜索的第一页路径；nextPath 直接透传翻页） */
     private suspend fun list(firstPath: String, nextPath: String? = null): MelonPage {
         val page = parseList(doc(nextPath ?: firstPath))
+        // v0.241 黑匣子：解析层统计——「有封面=0」说明 App 拿的 HTML 里没有封面脚本
+        // （服务器按客户端下发），与截图里纯文字卡片互证
+        MelonFlightLog.log(
+            "PARSE", "items=${page.items.size} 有封面=${page.items.count { it.cover != null }} " +
+                "首条cover=${page.items.firstOrNull()?.cover ?: "null"}"
+        )
         // v0.238 预热：列表能拉到 = 镜像可达；后台开始加载隐藏 WebView 的解密管线页
         // （慢站点首载 25s+，提前加载——用户往下翻到图片时管线多半已就绪）
         runCatching {
             MelonWebImage.ensure(
                 com.shangyin.app.App.instance,
                 lastBase.ifBlank { "https://boy.fugkjqjmg.cc" }
-            ) { }
+            ) { ok -> MelonFlightLog.log("PREHEAT", "ensure=$ok") }
         }
         return page
     }

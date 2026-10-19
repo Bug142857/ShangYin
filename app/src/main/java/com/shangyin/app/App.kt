@@ -72,7 +72,15 @@ class App : Application(), ImageLoaderFactory {
                 // 命中垃圾 → 校验拒绝 → 换域也是缓存垃圾 → 图片全挂。设备诊断证实网络本身
                 // 通（裸 client 拿真图成功），App 内唯一差异就是这层缓存。
                 runCatching { deleteRecursive(File(cacheDir, "http")) }
+                // v0.241 补充：WebView 解密明文缓存（melon_web_img）一并清——多轮带病迭代
+                // 期间该目录进过什么没人说得清，升级即清最干净（文件本来就是可重建的）
+                runCatching {
+                    com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(this@App).deleteRecursively()
+                }
                 SettingsStore.cacheClearedVersion = BuildConfig.VERSION_CODE.toLong()
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "BOOT", "版本升级缓存清理完成 v${BuildConfig.VERSION_NAME}"
+                )
             }
         }
     }

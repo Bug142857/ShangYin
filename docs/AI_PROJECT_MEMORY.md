@@ -832,6 +832,23 @@
   真被调用**（如 fetch() 首行打日志），不能只看「图片还挂着」归因网络。
   版本：0.240/1240。
 
+- **v0.241（飞行黑匣子：设备自证卡点，2026-10-19）**：
+  0.240 用户反馈「跟原来一样」。截图新证据：**列表卡片纯文字**——MelonScreen
+  `if (post.cover != null)` 才渲染封面 → 疑似解析层 cover=null（App 拿的 HTML 里没有
+  loadBannerDirect），非「加载失败」；正文视频区黑块（海报同管线失败）。PC 复现尝试
+  全灭：curl/360headless 对两个镜像均 0 字节（风控连 PC 也挡了，三天前还能拿到完整
+  HTML——风控状态动态收紧）；agent-browser 未装且代理未开装不了。**结论：决定性证据
+  只能来自设备端**。0.241 装黑匣子：①新建 MelonFlightLog（内存环形 60 条，带时戳）；
+  ②打点全覆盖——doc()（HTML len+loadBannerDirect×N）、list()（items/有封面数/首条
+  cover 原文，验证 .jpe 截断与 cover=null 假设）、Factory.create（分派命中与否，直接
+  回答「Fetcher 是否被执行」）、fetch()（缓存命中/垃圾拒收/ensure/解密/魔数/解码每步）、
+  fetchDecrypted()（JS 异常原文/明文长度/waited）、ensure（stub 加载/就绪 waited/25s
+  超时 readyState/后台轮询）、App 启动（版本清缓存）；③诊断页输出「飞行日志」段
+  （最近 28 条）；④升级清缓存补 melon_web_img。教训固化：**风控站点的问题必须设备
+  端自证（黑匣子/日志），PC 复现不可靠且状态会漂移；发版前 Fetcher 等框架插件必须
+  有运行时命中证据**。
+  版本：0.241/1241。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

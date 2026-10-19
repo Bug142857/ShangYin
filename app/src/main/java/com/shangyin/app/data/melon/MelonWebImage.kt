@@ -92,6 +92,7 @@ object MelonWebImage {
                 val stub =
                     "<!DOCTYPE html><html><head><meta charset='utf-8'>" +
                         "<script src='$jsUrl'></script></head><body></body></html>"
+                MelonFlightLog.log("PIPE", "stub加载 page=$page")
                 wv.loadDataWithBaseURL(page, stub, "text/html", "utf-8", null)
                 var waited = 0
                 fun pollReady() {
@@ -102,6 +103,7 @@ object MelonWebImage {
                             val ok = v?.trim()?.removeSurrounding("\"")?.startsWith("1") == true
                             when {
                                 ok -> {
+                                    MelonFlightLog.log("PIPE", "就绪 waited=${waited}ms")
                                     pageReady = true
                                     starting.set(false)
                                     onReady(true)
@@ -115,6 +117,7 @@ object MelonWebImage {
                                     // 慢站点首载一次后管线常驻，下次请求直接可用
                                     readyState = v?.trim()?.removeSurrounding("\"")?.takeAfter("0:")
                                         ?: "unknown"
+                                    MelonFlightLog.log("PIPE", "25s未就绪 readyState=$readyState 转后台轮询")
                                     starting.set(false)
                                     onReady(false)
                                     fun slowPoll() {
@@ -123,6 +126,7 @@ object MelonWebImage {
                                                 "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':'0'"
                                             ) { vv ->
                                                 if (vv?.contains("1") == true) {
+                                                    MelonFlightLog.log("PIPE", "后台轮询就绪 waited=${waited}ms")
                                                     pageReady = true
                                                 } else if (waited < 60_000) {
                                                     waited += 1000
@@ -153,8 +157,14 @@ object MelonWebImage {
      * 内部串行（mutex）；单张整体 20s 超时。
      */
     suspend fun fetchDecrypted(url: String): ByteArray? = withContext(Dispatchers.Main) {
-        val wv = webView ?: return@withContext null
-        if (!pageReady) return@withContext null
+        val wv = webView ?: run {
+            MelonFlightLog.log("DECRYPT", "失败: WebView未初始化")
+            return@withContext null
+        }
+        if (!pageReady) {
+            MelonFlightLog.log("DECRYPT", "失败: 页面未就绪 url=$url")
+            return@withContext null
+        }
         withTimeout(20_000) {
             mutex.withLock {
                 suspendCancellableCoroutine { cont ->
@@ -171,6 +181,7 @@ object MelonWebImage {
                             .catch(function(e){window.__mj_err=''+e});
                         })();
                     """.trimIndent()
+
                     wv.evaluateJavascript(js, null)
                     // 轮询结果（fetch+解密一张典型 0.5~2s）
                     var waited = 0
@@ -184,7 +195,10 @@ object MelonWebImage {
                                     waited += 250
                                     wv.postDelayed({ poll() }, 250)
                                 }
-                                s.contains("\"ERR") -> if (cont.isActive) cont.resume(null)
+                                s.contains("\"ERR") -> {
+                                    MelonFlightLog.log("DECRYPT", "JS异常 waited=${waited}ms err=${s.take(90)}")
+                                    if (cont.isActive) cont.resume(null)
+                                }
                                 s.length > 4 -> {
                                     // v 是 JS 字符串字面量："<base64>" → 去引号 + JS 转义还原
                                     val b64 = s.removeSurrounding("\"")
@@ -192,9 +206,15 @@ object MelonWebImage {
                                     val bytes = runCatching {
                                         android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
                                     }.getOrNull()
+                                    MelonFlightLog.log(
+                                        "DECRYPT", "完成 waited=${waited}ms b64=${b64.length}B 明文=${bytes?.size ?: -1}B"
+                                    )
                                     if (cont.isActive) cont.resume(bytes)
                                 }
-                                else -> if (cont.isActive) cont.resume(null)
+                                else -> {
+                                    MelonFlightLog.log("DECRYPT", "空结果 waited=${waited}ms")
+                                    if (cont.isActive) cont.resume(null)
+                                }
                             }
                         }
                     }

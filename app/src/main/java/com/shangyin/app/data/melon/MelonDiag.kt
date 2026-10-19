@@ -226,6 +226,14 @@ object MelonDiag {
             }
             // v0.239：管线页已改为极简 stub（仅 zzz.js），首页 HTML 不再进 WebView——
             // 「首页WebView」对照行失去意义，删除。管线健康度看「WebView管线」raw 行。
+
+            // v0.241 飞行黑匣子：管线每一步的实跑记录（Factory 分派是否命中/解密各环节
+            // 结果/解析层统计），设备自己说出卡在哪一步
+            val flight = MelonFlightLog.dump().take(28)
+            out.appendLine("")
+            out.appendLine("――― 飞行日志（最近${flight.size}条，新→旧） ―――")
+            if (flight.isEmpty()) out.appendLine("（空：进列表/文章页后再跑诊断才有记录）")
+            flight.forEach { out.appendLine(it) }
         }
         out.toString()
     }
