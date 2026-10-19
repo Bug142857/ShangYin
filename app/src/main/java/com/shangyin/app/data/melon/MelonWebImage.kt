@@ -3,6 +3,7 @@ package com.shangyin.app.data.melon
 import android.annotation.SuppressLint
 import android.content.Context
 import android.webkit.WebView
+import com.shangyin.app.App
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
@@ -18,23 +19,29 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
 /**
- * 吃瓜图床 WebView 解密管线（v0.235）——「内容级风控」的终极修复。
+ * 吃瓜图床 WebView 原始拉取管线（v0.243）。
  *
- * ## 根因（0.233/0.234 两轮字节级诊断定案）
- * 图床服务器按 **TLS/JA3 指纹**下发不同数据：Chromium（WebView）→ 真密文（CryptoJS
- * OpenSSL 格式，可被站点前端 decryptImage 解开）；其余所有栈（curl/okhttp/Conscrypt/
- * node undici，PC 与设备实测一致）→ 200 + 固定头 `3E AA 70 8E` 的混淆假字节
- * （表面 200/octet-stream/正常大小，内容是垃圾）。假说排除史：DNS 污染（权威 DoH 对照）、
- * Cookie 挑战（无 Cookie 的 WebView 也能看）、UA/Referer（多栈同头全假）、Sec-Fetch 头
- * （PC curl 带全套仍假）、Conscrypt 兜底（设备实测同样假字节）。
+ * ## 风控真相（0.241 黑匣子 + 0.242/0.243 两轮对照实验定案）
+ * 图床 CDN 按 **TLS/JA3 指纹**下发数据：Chromium（WebView）→ 真*密文*（站点 zzz.js
+ * 前端解密）；其余栈（okhttp/Conscrypt/curl）→ 200 + 随机垃圾字节（每次头都不同：
+ * 4F E8 / 3E AA / DD E2 / C2 8F——0.242 飞行日志实证，同 URL 多次拉取头均不同）。
  *
- * ## 方案
- * 唯一被白名单的客户端 = App 内 WebView（Chromium 网络栈）。站点页 zzz.js 提供了完整
- * 解密函数（`fetch → ab2b64 → decryptImage → 明文 base64`，密钥/IV 在混淆表）。
- * 所以：隐藏 WebView 加载一次镜像站点页，借页面上下文执行站点自己的解密管线，
- * 拿**明文 base64** 回传 App → BitmapFactory 直接解码。密钥轮换无需关心（JS 现场取）。
+ * ## v0.235~0.242 七轮 ensure=false 的真正根因（v0.243 定案）
+ * 管线用 `context.applicationContext` 创建常驻 WebView——**ApplicationContext 创建的
+ * WebView 在该设备上 Chromium 静默瘫痪**（evaluateJavascript 回调一次都不执行，
+ * 25s/60s 轮询全空）；而诊断探针用 Activity context 的 WebView 每次都 OK，同设备
+ * 同网络对照实锤。修复：WebView 一律改用 [App.currentActivity] 创建。
  *
- * 串行队列（单 WebView），整体超时 20s；任何环节失败返回 null（调用方自行兜底）。
+ * ## v0.243 管线设计
+ * 1. stub 页**不再加载 zzz.js**（0.239 方案依赖镜像可达 + 慢加载）：极简空页，
+ *    `loadDataWithBaseURL(图床origin)` 只借 origin——fetch 同源无 CORS 限制；
+ * 2. 就绪判定 = `location.protocol==='https:'`（stub 已提交、origin 已建立），
+ *    秒级达成；看门狗 20s 内 JS 回调一次都没触发 → 判定瘫痪 WebView → destroy
+ *    重建（旧方案失败后继续用坏 WebView 轮询到 60s，永不自愈）；
+ * 3. [fetchViaWeb] 页面内 `fetch → 分块 btoa → base64` 回传原始字节（可能是密文），
+ *    Kotlin 侧做魔数判定与 AES 解密（[MelonImageCipher]，KEY/IV 自 zzz.js 逆向）。
+ *
+ * 串行队列（单 WebView）；任何环节失败返回 null（调用方自行兜底）。
  */
 object MelonWebImage {
 
@@ -44,32 +51,21 @@ object MelonWebImage {
     private val starting = AtomicBoolean(false)
     @Volatile private var pageReady = false
     @Volatile private var pageUrl: String = ""
-    /** 25s 未就绪时的 document.readyState（诊断用：loading=HTML没到 / complete=JS没到） */
-    @Volatile var readyState: String = ""
-
-    /** 字符串截取（首次出现 s 之后的剩余部分，无 s 返回空） */
-    private fun String.takeAfter(s: String): String {
-        val i = indexOf(s)
-        return if (i < 0) "" else substring(i + s.length)
-    }
-
-    /** 页面上下文是否就绪（站点 JS 已加载，decryptImage 可用） */
-    val isReady: Boolean get() = pageReady
 
     /**
-     * 确保隐藏 WebView 已加载站点页（主线程执行；重复调用幂等，页面变更时重载）。
+     * 确保隐藏 WebView 已加载 origin=图床的 stub 页（主线程执行；重复调用幂等）。
      * onReady 在页面就绪（或失败）后回调一次。
      */
-    fun ensure(context: Context, baseUrl: String, onReady: (Boolean) -> Unit) {
-        val page = baseUrl.toHttpUrl().let { "${it.scheme}://${it.host}/" }
+    fun ensure(context: Context, targetUrl: String, onReady: (Boolean) -> Unit) {
+        val page = targetUrl.toHttpUrl().let { "${it.scheme}://${it.host}/" }
         if (pageReady && page == pageUrl) {
             onReady(true); return
         }
         if (!starting.compareAndSet(false, true)) {
-            // 已在加载中：轮询等结果（v0.238 慢站点首载可达 30s+，等待上限 35s）
+            // 已在加载中：轮询等结果（上限 30s，与下方看门狗同量级）
             scope.launch {
                 var waited = 0
-                while (!pageReady && waited < 35_000) { delay(500); waited += 500 }
+                while (!pageReady && waited < 30_000) { delay(500); waited += 500 }
                 onReady(pageReady)
             }
             return
@@ -77,74 +73,64 @@ object MelonWebImage {
         pageUrl = page
         scope.launch(Dispatchers.Main) {
             try {
+                // 宿主 Activity 已销毁的旧 WebView 必须重建（Activity context 的生命周期）
+                val existing = webView
+                if (existing != null) {
+                    val act = existing.context as? android.app.Activity
+                    if (act?.isDestroyed == true || act?.isFinishing == true) {
+                        MelonFlightLog.log("PIPE", "宿主Activity已销毁 → 重建WebView")
+                        runCatching { existing.destroy() }
+                        webView = null
+                        pageReady = false
+                    }
+                }
                 @SuppressLint("SetJavaScriptEnabled")
-                val wv = webView ?: WebView(context.applicationContext).also {
+                val wv = webView ?: WebView(App.currentActivity ?: context.applicationContext).also {
                     it.settings.javaScriptEnabled = true
                     it.settings.domStorageEnabled = true
                     it.settings.blockNetworkImage = true // 只借 JS/网络，不渲染图片（省流量）
                     webView = it
                 }
-                // v0.238 实测：镜像首页带一堆重资源，设备上 25s 都加载不完（readyState
-                // 都拿不到）——而解密管线只需要 zzz.js 一个文件。v0.239 改用
-                // loadDataWithBaseURL 加载**极简页**（仅一个 <script src=zzz.js>）：
-                // baseUrl 设镜像根（同源策略/Cookie 正确），静态 JS 文件请求远快于整页。
-                val jsUrl = "$page/usr/plugins/tbxw/js/zzz.js"
-                val stub =
-                    "<!DOCTYPE html><html><head><meta charset='utf-8'>" +
-                        "<script src='$jsUrl'></script></head><body></body></html>"
-                MelonFlightLog.log("PIPE", "stub加载 page=$page")
+                // v0.243：stub 页无任何外部依赖（zzz.js 已移出，解密在 Kotlin 侧）——
+                // baseUrl=图床 origin，页面内 fetch 目标图 = 同源请求（无 CORS 限制）。
+                val stub = "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body></body></html>"
+                MelonFlightLog.log("PIPE", "stub加载 page=$page ctx=${wv.context.javaClass.simpleName}")
                 wv.loadDataWithBaseURL(page, stub, "text/html", "utf-8", null)
+
                 var waited = 0
-                fun pollReady() {
+                var settled = false
+                fun settle(ok: Boolean) {
+                    if (settled) return
+                    settled = true
+                    starting.set(false)
+                    if (ok) {
+                        pageReady = true
+                        MelonFlightLog.log("PIPE", "就绪 waited=${waited}ms")
+                    } else {
+                        // v0.243：失败即销毁，下次请求从头重建（旧方案带病轮询永不自愈）
+                        MelonFlightLog.log("PIPE", "未就绪 waited=${waited}ms → 销毁待重建")
+                        runCatching { wv.destroy() }
+                        if (webView === wv) { webView = null; pageReady = false }
+                    }
+                    onReady(ok)
+                }
+                // 看门狗：evaluateJavascript 回调一次都不执行 = Chromium 瘫痪实锤
+                val watchdog = Runnable { settle(false) }
+                wv.postDelayed(watchdog, 20_000)
+                fun poll() {
+                    if (settled) return
                     runCatching {
-                        wv.evaluateJavascript(
-                            "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':('0:'+document.readyState)"
-                        ) { v ->
-                            val ok = v?.trim()?.removeSurrounding("\"")?.startsWith("1") == true
+                        wv.evaluateJavascript("location.protocol==='https:'?'1':'0'") { v ->
                             when {
-                                ok -> {
-                                    MelonFlightLog.log("PIPE", "就绪 waited=${waited}ms")
-                                    pageReady = true
-                                    starting.set(false)
-                                    onReady(true)
-                                }
-                                waited < 25_000 -> {
-                                    waited += 500
-                                    wv.postDelayed({ pollReady() }, 500)
-                                }
-                                else -> {
-                                    // 25s 未就绪：报告失败，但后台继续轮询到 60s——
-                                    // 慢站点首载一次后管线常驻，下次请求直接可用
-                                    readyState = v?.trim()?.removeSurrounding("\"")?.takeAfter("0:")
-                                        ?: "unknown"
-                                    MelonFlightLog.log("PIPE", "25s未就绪 readyState=$readyState 转后台轮询")
-                                    starting.set(false)
-                                    onReady(false)
-                                    fun slowPoll() {
-                                        runCatching {
-                                            wv.evaluateJavascript(
-                                                "(typeof decryptImage==='function'&&typeof ab2b64==='function')?'1':'0'"
-                                            ) { vv ->
-                                                if (vv?.contains("1") == true) {
-                                                    MelonFlightLog.log("PIPE", "后台轮询就绪 waited=${waited}ms")
-                                                    pageReady = true
-                                                } else if (waited < 60_000) {
-                                                    waited += 1000
-                                                    wv.postDelayed({ slowPoll() }, 1000)
-                                                }
-                                            }
-                                        }.onFailure { return }
-                                    }
-                                    slowPoll()
-                                }
+                                v?.contains("'1'") == true -> settle(true)
+                                v != null && waited < 15_000 -> { waited += 250; wv.postDelayed({ poll() }, 250) }
+                                v == null && waited < 15_000 -> { waited += 500; wv.postDelayed({ poll() }, 500) }
+                                else -> settle(false)
                             }
                         }
-                    }.onFailure {
-                        starting.set(false)
-                        onReady(false)
-                    }
+                    }.onFailure { settle(false) }
                 }
-                pollReady()
+                poll()
             } catch (t: Throwable) {
                 starting.set(false)
                 onReady(false)
@@ -153,158 +139,88 @@ object MelonWebImage {
     }
 
     /**
-     * 经 WebView 执行站点解密管线取图：返回明文图片字节（JPEG/PNG/WebP），失败 null。
-     * 内部串行（mutex）；单张整体 20s 超时。
+     * v0.243 核心：经隐藏 WebView（Chromium 网络栈）拉取图片**原始字节**。
+     * 图床风控指纹只放行 Chromium——okhttp 拿到的是 200+随机垃圾。stub 页 origin=
+     * 图床自身，fetch 为同源请求（无 CORS 限制），Chromium 指纹下发的真密文原样
+     * 回传；是明文还是密文由调用方魔数判定 + [MelonImageCipher] 解密。
+     * 内部串行（mutex）；失败返回 null。
      */
-    suspend fun fetchDecrypted(url: String): ByteArray? = withContext(Dispatchers.Main) {
-        val wv = webView ?: run {
-            MelonFlightLog.log("DECRYPT", "失败: WebView未初始化")
-            return@withContext null
+    suspend fun fetchViaWeb(context: Context, url: String): ByteArray? {
+        val ready = suspendCancellableCoroutine { cont ->
+            ensure(context, url) { ok -> if (cont.isActive) cont.resume(ok) }
         }
-        if (!pageReady) {
-            MelonFlightLog.log("DECRYPT", "失败: 页面未就绪 url=$url")
-            return@withContext null
+        if (!ready) {
+            MelonFlightLog.log("WEBFETCH", "管线未就绪 url=$url")
+            return null
         }
-        withTimeout(20_000) {
-            mutex.withLock {
-                suspendCancellableCoroutine { cont ->
-                    // 借站点页上下文：fetch(密文) → ab2b64 → decryptImage → 明文 base64
-                    // 结果挂 window.__mj_out；轮询取回后清空。异常 → __mj_err。
-                    val js = """
-                        (function(){
-                          window.__mj_out=null; window.__mj_err=null;
-                          fetch('$url')
-                            .then(function(r){return r.arrayBuffer()})
-                            .then(function(ab){return ab2b64(ab)})
-                            .then(function(b64){return decryptImage(b64)})
-                            .then(function(plain){window.__mj_out=plain||'ERR:EMPTY'})
-                            .catch(function(e){window.__mj_err=''+e});
-                        })();
-                    """.trimIndent()
-
-                    wv.evaluateJavascript(js, null)
-                    // 轮询结果（fetch+解密一张典型 0.5~2s）
-                    var waited = 0
-                    fun poll() {
-                        wv.evaluateJavascript(
-                            "(window.__mj_err?('ERR:'+window.__mj_err):(window.__mj_out===null?null:window.__mj_out))"
-                        ) { v ->
-                            val s = v?.trim().orEmpty()
-                            when {
-                                s == "null" && waited < 15_000 -> {
-                                    waited += 250
-                                    wv.postDelayed({ poll() }, 250)
+        return withContext(Dispatchers.Main) {
+            val wv = webView ?: return@withContext null
+            withTimeout(30_000) {
+                mutex.withLock {
+                    suspendCancellableCoroutine { cont ->
+                        // fetch → arrayBuffer → 分块转 base64（String.fromCharCode.apply
+                        // 参数上限 ~64k，0x8000 分块安全）→ btoa → 挂 window.__mj_out
+                        val js = """
+                            (function(){
+                              window.__mj_out=null; window.__mj_err=null;
+                              fetch('$url').then(function(r){
+                                if(!r.ok) throw new Error('HTTP '+r.status);
+                                return r.arrayBuffer();
+                              }).then(function(ab){
+                                var u8=new Uint8Array(ab), s='', CH=0x8000;
+                                for(var i=0;i<u8.length;i+=CH){
+                                  s+=String.fromCharCode.apply(null,u8.subarray(i,Math.min(i+CH,u8.length)));
                                 }
-                                s.contains("\"ERR") -> {
-                                    MelonFlightLog.log("DECRYPT", "JS异常 waited=${waited}ms err=${s.take(90)}")
-                                    if (cont.isActive) cont.resume(null)
-                                }
-                                s.length > 4 -> {
-                                    // v 是 JS 字符串字面量："<base64>" → 去引号 + JS 转义还原
-                                    val b64 = s.removeSurrounding("\"")
-                                        .replace("\\\"", "\"").replace("\\\\", "\\")
-                                    val bytes = runCatching {
-                                        android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
-                                    }.getOrNull()
-                                    MelonFlightLog.log(
-                                        "DECRYPT", "完成 waited=${waited}ms b64=${b64.length}B 明文=${bytes?.size ?: -1}B"
-                                    )
-                                    if (cont.isActive) cont.resume(bytes)
-                                }
-                                else -> {
-                                    MelonFlightLog.log("DECRYPT", "空结果 waited=${waited}ms")
-                                    if (cont.isActive) cont.resume(null)
-                                }
-                            }
+                                return btoa(s);
+                              }).then(function(b64){ window.__mj_out=b64; })
+                                .catch(function(e){ window.__mj_err=''+e; });
+                            })();
+                        """.trimIndent()
+                        runCatching { wv.evaluateJavascript(js, null) }
+                            .onFailure { if (cont.isActive) cont.resume(null) }
+                        var waited = 0
+                        var settled = false
+                        fun settle(v: ByteArray?) {
+                            if (settled) return
+                            settled = true
+                            if (cont.isActive) cont.resume(v)
                         }
-                    }
-                    wv.postDelayed({ poll() }, 300)
-                }
-            }
-        }
-    }
-
-    /** 页面上下文内直接求值（诊断用；表达式同步出结果，无需轮询） */
-    suspend fun evalJs(js: String): String? = withContext(Dispatchers.Main) {
-        val wv = webView ?: return@withContext null
-        if (!pageReady) return@withContext null
-        runCatching {
-            withTimeout(15_000) {
-                suspendCancellableCoroutine { cont ->
-                    wv.evaluateJavascript(js) { v ->
-                        if (cont.isActive) {
-                            cont.resume(
-                                v?.trim()?.removeSurrounding("\"")
-                                    ?.replace("\\\"", "\"")?.replace("\\\\", "\\")
-                            )
-                        }
-                    }
-                }
-            }
-        }.getOrNull()
-    }
-
-    /**
-     * 诊断探针（v0.236）：WebView fetch 拿 raw 字节头（判定 Chromium 是否也被下发假数据）
-     * + decryptImage 输出长度（判定解密环节）。一次区分「网络层混淆」vs「解密失败」。
-     */
-    suspend fun probeRaw(url: String): String = withContext(Dispatchers.Main) {
-        val wv = webView ?: return@withContext "未初始化"
-        if (!pageReady) return@withContext "页面未就绪"
-        withTimeout(20_000) {
-            mutex.withLock {
-                suspendCancellableCoroutine { cont ->
-                    wv.evaluateJavascript(
-                        """
-                        (function(){
-                          window.__mj_out=null; window.__mj_err=null;
-                          fetch('$url')
-                            .then(function(r){return r.arrayBuffer()})
-                            .then(function(ab){
-                              var b=new Uint8Array(ab); var h='';
-                              for(var i=0;i<8&&i<b.length;i++){h+=(b[i]<16?'0':'')+b[i].toString(16).toUpperCase(); if(i<7)h+=' ';}
-                              var raw=ab2b64(ab); window.__mj_rawHead=h; window.__mj_rawLen=b.length;
-                              try{var p=decryptImage(raw); window.__mj_out='plainLen='+(p?p.length:0);}catch(e){window.__mj_err='dec:'+e}
-                            })
-                            .catch(function(e){window.__mj_err=''+e});
-                        })();
-                        """.trimIndent(), null
-                    )
-                    var waited = 0
-                    fun poll() {
-                        wv.evaluateJavascript(
-                            "(window.__mj_err?('ERR:'+window.__mj_err):((window.__mj_out===null)?null:(window.__mj_rawHead+' raw='+window.__mj_rawLen+' '+window.__mj_out)))"
-                        ) { v ->
-                            val s = v?.trim().orEmpty()
-                            when {
-                                s == "null" && waited < 15_000 -> {
-                                    waited += 250
-                                    wv.postDelayed({ poll() }, 250)
-                                }
-                                s.contains("\"ERR") -> if (cont.isActive) cont.resume(null)
-                                s.length > 4 -> {
-                                    if (cont.isActive) {
-                                        val out = s.removeSurrounding("\"")
-                                            .replace("\\\"", "\"").replace("\\\\", "\\")
-                                        cont.resume(out)
+                        val watchdog = Runnable { settle(null) }
+                        wv.postDelayed(watchdog, 29_000)
+                        fun poll() {
+                            if (settled) return
+                            wv.evaluateJavascript(
+                                "(window.__mj_err===null&&window.__mj_out===null)?null:(window.__mj_err===null?window.__mj_out:('ERR:'+window.__mj_err))"
+                            ) { v ->
+                                val s = v?.trim().orEmpty()
+                                when {
+                                    s == "null" && waited < 25_000 -> {
+                                        waited += 250
+                                        wv.postDelayed({ poll() }, 250)
                                     }
+                                    s.contains("\"ERR") -> {
+                                        MelonFlightLog.log("WEBFETCH", "JS异常 waited=${waited}ms ${s.take(90)}")
+                                        settle(null)
+                                    }
+                                    s.length > 4 -> {
+                                        // v 是 JS 字符串字面量："<base64>"（base64 字母表无引号/反斜杠，直接去引号）
+                                        val b64 = s.removeSurrounding("\"")
+                                        val bytes = runCatching {
+                                            android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                                        }.getOrNull()
+                                        MelonFlightLog.log(
+                                            "WEBFETCH", "完成 waited=${waited}ms b64=${b64.length}B 字节=${bytes?.size ?: -1}B"
+                                        )
+                                        settle(bytes)
+                                    }
+                                    else -> settle(null)
                                 }
-                                else -> if (cont.isActive) cont.resume(null)
                             }
                         }
+                        wv.postDelayed({ poll() }, 300)
                     }
-                    wv.postDelayed({ poll() }, 300)
                 }
-            } ?: "超时/失败"
-        }
-    }
-
-    /** 释放（低内存回调时调用） */
-    fun destroy() {
-        scope.launch(Dispatchers.Main) {
-            runCatching { webView?.destroy() }
-            webView = null
-            pageReady = false
+            }
         }
     }
 }

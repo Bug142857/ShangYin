@@ -23,6 +23,21 @@ class App : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // v0.243：记录前台 Activity——隐藏 WebView 必须用 Activity context 创建。
+        // ApplicationContext 创建的 WebView 在部分设备上 Chromium 静默瘫痪
+        // （evaluateJavascript 回调一次都不执行——0.235~0.242 七轮 ensure=false 的根因，
+        // 而诊断探针用 Activity context 的 WebView 每次都成功，同设备同网络对照实锤）
+        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityResumed(activity: android.app.Activity) { currentActivity = activity }
+            override fun onActivityPaused(activity: android.app.Activity) { }
+            override fun onActivityStarted(activity: android.app.Activity) { }
+            override fun onActivityStopped(activity: android.app.Activity) { }
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) { }
+            override fun onActivityDestroyed(activity: android.app.Activity) {
+                if (currentActivity === activity) currentActivity = null
+            }
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) { }
+        })
         Repo.init(this)
         SettingsStore.init(this)
         // 记录 WebView 的真实默认 UA：登录页与接口请求必须用同一个 UA（Cookie 与 UA 绑定），
@@ -289,6 +304,10 @@ class App : Application(), ImageLoaderFactory {
     companion object {
         lateinit var instance: App
             private set
+
+        /** 前台 Activity：隐藏 WebView 必须用它创建（ApplicationContext 创建的 WebView
+         *  在部分设备上 Chromium 静默瘫痪，详见 onCreate 里的注释） */
+        var currentActivity: android.app.Activity? = null
 
         /**
          * WebView 真实默认 UA（启动时捕获）；站点登录页与接口请求共用，保证 Cookie 与 UA 一致。

@@ -869,6 +869,25 @@
   ③WebView 常驻方案在部分设备不可靠（evaluateJavascript 无回调），能原生就原生。**
   版本：0.242/1242。
 
+- **v0.243（图片根因终审：ApplicationContext WebView Chromium 瘫痪 + Activity context 重建，2026-10-19）**：
+  0.242 的「okhttp 拉密文+本地解密」被设备黑匣子反证：同一 URL 多次拉取密文头**每次不同**
+  （4F E8 / 3E AA / DD E2 / C2 8F）——固定 KEY 的 AES-CBC 密文必然每次相同 → okhttp 拿到的
+  是**随机垃圾**，真密文只下发 Chromium 指纹（0.242 的密钥本身没错，是输入字节就是垃圾）。
+  0.243 对照实验定案：诊断 probeWebView（Activity context）每轮「WebView: OK」，而常驻管线
+  用 `context.applicationContext` 创建 WebView → **ApplicationContext 创建的 WebView 在该设备
+  上 Chromium 静默瘫痪（evaluateJavascript 回调一次都不执行）——0.235~0.242 七轮 ensure=false
+  的真正根因**。修复：① App.kt 增加 ActivityLifecycleCallbacks 记录 `App.currentActivity`；
+  ② MelonWebImage 重写——WebView 一律用 currentActivity（fallback applicationContext）创建；
+  stub 页**去掉 zzz.js 依赖**（解密移 Kotlin 侧，页面只借图床 origin → fetch 同源无 CORS），
+  就绪判定 `location.protocol==='https:'` 秒级达成；**失败/看门狗（20s 无 JS 回调）即 destroy
+  重建**（旧方案失败后带病轮询到 60s 永不自愈）；宿主 Activity 销毁时检测重建；新增
+  `fetchViaWeb(url)`：页面内 fetch → 分块 btoa → base64 回传原始字节；③ MelonWebFetcher
+  数据流：缓存 → okhttp（直接明文则用）→ fetchViaWeb（非图魔数时）→ MelonImageCipher.decrypt
+  （仍非图=真密文：硬编码 KEY → 动态提取）→ 魔数 → 缓存；④ 诊断「原生解密」探针改
+  「WebView拉取」（okhttp头 → WebView字节 → 解密结果一行定案）。教训固化：**同一 URL
+  响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
+  自愈重建而非原地轮询**。版本：0.243/1243。
+
 - **v0.221（吃瓜：图床加载修复 + 分类改下拉，2026-09-24）**：
   ① 图片全挂排查：本机 curl 各种 UA/Referer 全 200，问题只在设备端。站点**所有图都在单一图床
   `pic.ndhixj.cn`**（列表封面 = 卡内脚本 `loadBannerDirect('…')`、正文图 = img `data-xkrkllgl` 等属性）。

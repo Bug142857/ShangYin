@@ -177,10 +177,17 @@ object MelonDiag {
                 n++
             }
 
-            // v0.242 原生解密探针：okhttp 拉密文 → 本地 AES-128-CBC 解密 → 魔数。
-            // 一行定案：密文头 + 解密结果（FFD8=成功，方案闭环；null=密钥错，看动态提取）
+            // v0.243 WebView 原始拉取探针：okhttp 拿到的字节先验魔数（垃圾/明文）→
+            // 非图则走 Chromium 同源拉取 → Kotlin 侧解密。一行定案全链路：
+            // okhttp头 → WebView字节 → 解密结果（FFD8=成功闭环；null=管线某环节卡死）
             val cipherTarget = covers.firstOrNull()
             if (cipherTarget != null) {
+                fun imgName(b: ByteArray): String? = when {
+                    b.size < 16 -> null
+                    b[0] == 0xFF.toByte() && b[1] == 0xD8.toByte() -> "JPEG"
+                    b[0] == 0x89.toByte() && b[1] == 0x50.toByte() -> "PNG"
+                    else -> null
+                }
                 val r = try {
                     val cipher = kotlinx.coroutines.withTimeoutOrNull(10_000) {
                         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -193,26 +200,43 @@ object MelonDiag {
                         }
                     }
                     when {
-                        cipher == null -> "拉密文失败/超时(10s)"
-                        cipher.isEmpty() -> "密文 0B（CDN 拦截）"
+                        cipher == null -> "拉取失败/超时(10s)"
+                        cipher.isEmpty() -> "0B（CDN 拦截）"
                         else -> {
                             val head = cipher.take(4).joinToString(" ") { "%02X".format(it) }
-                            val plain = MelonImageCipher.decrypt(cipher)
-                            val plainHead = plain?.take(4)?.joinToString(" ") { "%02X".format(it) }
-                            if (plain != null) "密文${cipher.size}B[$head] → 解密${plain.size}B[$plainHead] ✓"
-                            else {
-                                val (k, iv) = MelonImageCipher.fetchKeyIv(MelonClient.lastBase)
-                                val p2 = if (k != null && iv != null) MelonImageCipher.decrypt(cipher, k, iv) else null
-                                if (p2 != null) "密文${cipher.size}B → 动态密钥解密${p2.size}B ✓（硬编码密钥已轮换）"
-                                else "密文${cipher.size}B[$head] → 解密失败（密钥不可用）"
+                            when (imgName(cipher)) {
+                                "JPEG", "PNG" -> "okhttp明文${cipher.size}B ${imgName(cipher)} ✓（CDN未加密）"
+                                else -> {
+                                    val web = runCatching {
+                                        kotlinx.coroutines.withTimeoutOrNull(30_000) {
+                                            MelonWebImage.fetchViaWeb(context, cipherTarget)
+                                        }
+                                    }.getOrNull()
+                                    val wh = web?.take(4)?.joinToString(" ") { "%02X".format(it) } ?: "无"
+                                    when {
+                                        web == null -> "okhttp垃圾${cipher.size}B[$head] → WebView拉取失败"
+                                        imgName(web) != null -> "WebView明文${web.size}B ${imgName(web)} ✓（无需解密）"
+                                        else -> {
+                                            val plain = MelonImageCipher.decrypt(web)
+                                            if (plain != null) {
+                                                "WebView密文${web.size}B[$wh] → 解密${plain.size}B ${imgName(plain)} ✓"
+                                            } else {
+                                                val (k, iv) = MelonImageCipher.fetchKeyIv(MelonClient.lastBase)
+                                                val p2 = if (k != null && iv != null) MelonImageCipher.decrypt(web, k, iv) else null
+                                                if (p2 != null) "WebView密文${web.size}B → 动态密钥解密${p2.size}B ✓（硬编码密钥已轮换）"
+                                                else "WebView密文${web.size}B[$wh] → 解密失败"
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 } catch (e: Exception) {
                     "异常 ${e.javaClass.simpleName}: ${e.message?.take(50)}"
                 }
-                out.appendLine("原生解密: $r")
-            } else out.appendLine("原生解密: 跳过（无封面URL）")
+                out.appendLine("WebView拉取: $r")
+            } else out.appendLine("WebView拉取: 跳过（无封面URL）")
 
             // 首页 HTML 双栈对照：App 解析的封面 URL 是截断版 .jpe 而 PC 同镜像完整——
             // okhttp（FORCE_NETWORK）与 WebView 各拉一次首页，比较首条 loadBannerDirect
