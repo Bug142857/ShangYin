@@ -336,8 +336,18 @@ object MelonClient {
             items += MelonPost(id, title, cover, author, date, cats)
         }
         // 下一页：跟随站点自己的 next 链接（转成相对路径，换线后仍走统一的线路管理）
-        val next = d.selectFirst(".page-navigator li.next a[href]")?.attr("abs:href")
-            ?.takeIf { it.isNotBlank() }
+        // v0.249：主选择器命中不到 → 用户侧表现为「没有分页」。放宽三个常见变体兜底
+        //（Typecho 主题 next 链接的 DOM 结构不唯一），并以 PARSE 日志打点定性
+        val nextRaw = listOf(
+            ".page-navigator li.next a[href]",
+            ".page-navigator a.next[href]",
+            ".pagination li.next a[href]",
+            "a.next[href]"
+        ).firstNotNullOfOrNull { sel ->
+            d.selectFirst(sel)?.attr("abs:href")?.takeIf { it.isNotBlank() }
+        }
+        val next = nextRaw
+            ?.takeIf { it.startsWith("http") }
             ?.let { it.substringAfter(base, it).ifBlank { null } }
         return MelonPage(items.distinctBy { it.id }, next)
     }
@@ -349,7 +359,7 @@ object MelonClient {
         // （服务器按客户端下发），与截图里纯文字卡片互证
         MelonFlightLog.log(
             "PARSE", "items=${page.items.size} 有封面=${page.items.count { it.cover != null }} " +
-                "首条cover=${page.items.firstOrNull()?.cover ?: "null"}"
+                "next=${page.nextPath ?: "null"} 首条cover=${page.items.firstOrNull()?.cover ?: "null"}"
         )
         // v0.242：WebView 管线预热已删除（0.235~0.241 ensure 从未就绪，死路退役；
         // 图片走 MelonImageCipher 原生解密，无需预热）

@@ -48,7 +48,8 @@ data class DownloadedVideo(
 data class VideoTask(
     val title: String,
     val url: String,
-    val progress: Float = 0f, // 0..1（切片完成比例）
+    val progress: Float = 0f, // 0..1（切片完成比例）；-1 = 总量未知（UI 转不确定圈）
+    val bytesCopied: Long = 0L, // 已下载字节（v0.249：progress=-1 时 UI 显示"已下载 x MB"，转圈不再是"没动"）
     val error: String? = null,
 )
 
@@ -378,8 +379,8 @@ object VideoDownloadManager {
                             }
                         }
                         val n = done.incrementAndGet()
-                        val p = n.toFloat() / total
-                        active.update { it + (task.url to task.copy(progress = p)) }
+                        val p = 0.9f * n / total // v0.249：切片段映射 0→0.9，拼接段 0.9→1.0（避免 100%→90% 回跳）
+                        active.update { it + (task.url to task.copy(progress = p, bytesCopied = written)) }
                         // 状态栏通知 ~1s 节流
                         if (System.currentTimeMillis() - lastNotif > 1_000) {
                             lastNotif = System.currentTimeMillis()
@@ -388,8 +389,16 @@ object VideoDownloadManager {
                     }
                 }
             }.awaitAll()
-            segments.indices.forEach { idx ->
+            // v0.249：拼接阶段计入进度（0.9→1.0）——大片顺序写盘是可见的时间黑洞，
+            // 此前进度停在 100% 看似卡死，完成后才突然消失
+            segments.indices.forEachIndexed { idx2, idx ->
                 File(tmp, "seg-%05d".format(idx)).inputStream().use { written += it.copyTo(out) }
+                val p = 0.9f + 0.1f * (idx2 + 1) / segments.size
+                active.update { it + (task.url to task.copy(progress = p, bytesCopied = written)) }
+                if (System.currentTimeMillis() - lastNotif > 1_000) {
+                    lastNotif = System.currentTimeMillis()
+                    notifyProgress(context, task.url.hashCode(), task.title, p)
+                }
             }
         } finally {
             tmp.deleteRecursively()
@@ -434,7 +443,7 @@ object VideoDownloadManager {
                     copied += n
                     if (copied % (1024 * 512) < buf.size) { // 每 ~512KB 刷一次进度，别把 StateFlow 刷爆
                         val p = if (total > 0) copied.toFloat() / total else -1f
-                        active.update { it + (task.url to task.copy(progress = p)) }
+                        active.update { it + (task.url to task.copy(progress = p, bytesCopied = copied)) }
                         // 状态栏通知 ~1s 节流
                         if (System.currentTimeMillis() - lastNotif > 1_000) {
                             lastNotif = System.currentTimeMillis()
@@ -443,7 +452,7 @@ object VideoDownloadManager {
                     }
                 }
                 val p = if (total > 0) copied.toFloat() / total else -1f
-                active.update { it + (task.url to task.copy(progress = p)) }
+                active.update { it + (task.url to task.copy(progress = p, bytesCopied = copied)) }
                 return copied
             }
         }

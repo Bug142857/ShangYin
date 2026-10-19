@@ -210,10 +210,12 @@ fun PlayerScreen(nav: NavHostController) {
                     )
             )
             .setLoadControl(loadControl)
-            // seek 稳定性（v0.224）：TS/HLS 切片流默认 EXACT seek 要回退到前一关键帧再解码到
-            // 精确位置，切片加载稍慢（超时/慢源）画面就卡住转圈。CLOSEST_SYNC 直接跳最近
-            // 关键帧，秒出画面（位置误差最多几秒，点进度条选点场景完全可接受）
-            .setSeekParameters(androidx.media3.exoplayer.SeekParameters.CLOSEST_SYNC)
+            // seek 参数（v0.249 回滚到 EXACT）：v0.224 换 CLOSEST_SYNC 的前提是「切片加载
+            // 稍慢就卡」，0.248 探针实测 CDN 单切片仅 15-34ms，前提已不成立；且 CLOSEST_SYNC
+            // 是「画面定住但缓冲在走」的头号嫌疑——跳到切片中间最近关键帧，media3 对加密 TS
+            // 的 seek-to-sync 处理不如 EXACT 路径标准（EXACT 从关键帧解码到目标位，时间戳
+            // 偏移处理成熟）。25s 自愈阈值已兜底加载慢的场景
+            .setSeekParameters(androidx.media3.exoplayer.SeekParameters.EXACT)
             .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dsFactory))
             .build()
     }
@@ -549,7 +551,35 @@ fun PlayerScreen(nav: NavHostController) {
         // v0.247：加载错误进黑匣子——看门狗只知「卡在 BUFFERING」，不知「为什么」；
         // onLoadError 带异常类型（InvalidResponseCodeException.responseCode=HTTP 码：
         // 403=签名过期 / 404=切片缺失；SocketTimeout=慢源），一轮数据定性
+        // v0.249：画面定住取证——「缓冲在走但画面定住」的两大嫌疑：
+        // ① 播放抑制（音频焦点被抢：isPlaying=false 但 state=READY，画面定帧缓冲照走）
+        // ② 解码器不渲染（首帧后不再出帧）。两个回调落日志，下轮黑匣子直接区分
         val al = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onPlaybackSuppressionReasonChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                playbackSuppressionReason: Int
+            ) {
+                val why = when (playbackSuppressionReason) {
+                    1 -> "AUDIO_BECOMING_NOISY"; 2 -> "TRANSIENT_AUDIO_LOSS"
+                    else -> "$playbackSuppressionReason"
+                }
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER",
+                    if (playbackSuppressionReason == 0) "播放抑制解除 pos=${player.currentPosition}"
+                    else "播放抑制=$why pos=${player.currentPosition} state=${player.playbackState}"
+                )
+            }
+
+            override fun onRenderedFirstFrame(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                output: Any,
+                mediaDurationMs: Long
+            ) {
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER", "首帧渲染 pos=${player.currentPosition} dur=${mediaDurationMs}ms"
+                )
+            }
+
             override fun onLoadError(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
                 loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
@@ -610,8 +640,11 @@ fun PlayerScreen(nav: NavHostController) {
                 now - bufferingSince > 25_000
             // v0.231：READY 却不播——seek 后 STATE_READY、playWhenReady=true 但画面不动
             //（位置停滞）。位置 25s 无变化即重载（阈值与 BUFFERING 同步放宽）。
+            // v0.249：播放抑制（音频焦点被抢）时 isPlaying=false 但那不是流的问题，
+            // stop+prepare 无用 → 不自愈，等抑制解除（或用户点播放键重新夺回焦点）
             if (!needReload && !isLive && player.playWhenReady && !player.isPlaying &&
-                !player.isPlayingAd && pos == lastPos
+                !player.isPlayingAd && pos == lastPos &&
+                player.playbackSuppressionReason == Player.PLAYBACK_SUPPRESSION_REASON_NONE
             ) {
                 if (stuckSince == 0L) stuckSince = now
                 else if (now - stuckSince > 25_000) needReload = true

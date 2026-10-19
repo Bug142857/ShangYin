@@ -889,6 +889,27 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.249（三反馈一包：画面定住取证 / 下载进度可见 / 分页修复，2026-10-19）**：
+  用户反馈 3 项：①下载后台进度条"还没等动呢等了一会下载完了"；②没有分页功能（网站有）；
+  ③seek 后"缓冲在走但画面定住不动"。0.248 诊断探针新证据：片 0/1/10/20/40 全部 200 且
+  **下载仅 15-34ms**（CDN 极快）→「慢」也解释不了定住。三项处理：
+  **③画面定住**：两大新嫌疑落黑匣子——a) 播放抑制（音频焦点被抢：isPlaying=false 但
+  state=READY，画面定帧缓冲照走，完全吻合症状）→ AnalyticsListener 加
+  onPlaybackSuppressionReasonChanged（抑制=为什么/解除=恢复点）+ onRenderedFirstFrame
+  （首帧渲染点）日志；自愈 READY-不播分支加 `playbackSuppressionReason==NONE` 门控
+  （被抑制时 stop+prepare 无用，不自愈）。b) **seek 参数 CLOSEST_SYNC→EXACT 回滚**：
+  v0.224 换 CLOSEST_SYNC 的前提（切片加载稍慢就卡）已被 15-34ms 实测推翻，且其跳切片
+  中间关键帧路径对加密 TS 的 seek 处理不如 EXACT 标准。
+  **①下载进度**：切片阶段本身全正常（每片 update active）——问题在两处不可见：
+  a) 直链 chunked 无 Content-Length → progress=-1 纯转圈「看起来没动」→ VideoTask 加
+  `bytesCopied` 字段，转圈附显示「已下载 x.x MB」；b) HLS 拼接阶段（71 片 113MB 顺序
+  写盘，进度可见黑洞）此前不计入 → 拼接段计入 0.9→1.0。
+  **②分页**：数据层（parseList next 解析）/UI 层（触底倒数第 4 条加载/footer「没有更多了」）
+  全都已实现——断点在 `.page-navigator li.next a[href]` 选择器命中不到真实 HTML →
+  nextPath 恒 null → 触底加载永不触发。选择器放宽 4 变体（page-navigator li.next /
+  a.next / pagination li.next / a.next）+ PARSE 日志加 `next=` 打点（下轮黑匣子可验证）。
+  版本：0.249/1249。
+
 - **v0.248（seek 卡住真根因：看门狗 10s 把「慢」打成「死」，阈值放宽 25s，2026-10-19）**：
   0.247 取证一轮定性，三证据联合推翻「CDN 缺失/过期」假设：① 用户浏览器播同一视频正常；
   ② 探针片 0/1/10/20/40 **全部 HTTP 200 完整 1.6MB+**（数据是全的）；③ PLAYER 黑匣子

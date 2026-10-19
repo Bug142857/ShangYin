@@ -422,6 +422,7 @@ private fun VideoTaskCard(task: VideoTask, onCancel: () -> Unit, onDismiss: () -
                 }
             } else if (task.progress < 0) {
                 // v0.230：服务器未告知总大小（chunked）→ 不确定进度（转圈）
+                // v0.249：转圈附带"已下载 x MB"——纯转圈看起来像没动（用户反馈 0.248）
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     LinearProgressIndicator(
                         modifier = Modifier.weight(1f)
@@ -430,7 +431,10 @@ private fun VideoTaskCard(task: VideoTask, onCancel: () -> Unit, onDismiss: () -
                     TextButton(onClick = onCancel) { Text("取消") }
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("下载中…", style = MaterialTheme.typography.labelSmall)
+                Text(
+                    "下载中… 已下载 ${"%.1f".format(task.bytesCopied / 1048576f)} MB",
+                    style = MaterialTheme.typography.labelSmall
+                )
             } else {
                 LinearProgressIndicator(
                     progress = { task.progress },
