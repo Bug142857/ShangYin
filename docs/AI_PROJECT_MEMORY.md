@@ -14,6 +14,7 @@
 4. **失败要说出来**：不许静默吞异常让界面显示「空/无数据」（用户会当成站点没内容）；必须区分「真的没有」与「请求失败/登录失效」。
 5. **不许过度设计**：核查后确认无风险的（如稳定常量、已有双主机切换）就不动，不为「统一」加无意义兜底。
 6. **「测不出来」不许当结论**：任何探测/校验（登录态、连通性、分类数、可用线路…）都必须区分「确认失败」与「没测出来」。没测出来时按「不影响用户」的那一侧处理（例：登录态不确定 → 不报失效、但也不挡住重新登录入口），并给探测本身加超时，避免界面卡在"检测中"。
+7. **假设必须能被证伪，单一假设要解释全部观测（2026-10-19 图片十轮盲修教训）**：图床图片问题连修十轮的根因是第一个假设（「CDN 按 TLS 指纹给 okhttp 下发随机垃圾」）只解释了部分观测，后续矛盾观测（同批同头/跨批换头、全响应 16B 对齐、PC curl 与设备逐字节一致）出现时被打了补丁绕过而不是推翻假设。固化：① 动手前先写下「本假设如何被证伪」，证伪点出现了就换假设；② 能用对方自己的代码验证的必须先验证（站点 zzz.js 载 Node 沙箱跑它自己的 decryptImage，一测便知密钥指派对错）；③ 结构性特征（密文 16B 对齐、跨端逐字节一致）比表象特征（响应头变化）更可信；④ 密钥/协议类修复默认 TDD + **真实字节 fixture** 锁定指派方向（melon_cover1.cipher 就是这么来的）；⑤ 修复手段要分级可逃逸（如播放器自愈：轻量重载失败就升级整条重建），单一姿势无限重试 = 把自愈变成死循环。
 
 ## Hard Constraints
 - **第二十九轮（电视「有画面没声音」的**正解**：内置 FFmpeg 软解；含 0.198 的失败尝试与 0.199 回退）= v0.199 + v0.200**：①**用户反馈链**：0.198 装机后「一直显示线路播放出错」→ 追问确认**只有 CCTV3/CCTV5 这类以前没声音的频道**（其它频道正常）→ 坐实是 0.198 那处改动；用户拍板「接 FFmpeg 软解」。②**0.198 的失败尝试（重要教训）**：把 MP2 音轨的 MIME `audio/mpeg-L2` **映射成 `audio/mpeg`** 交给系统解码器（自定义 `DefaultRenderersFactory` + `MediaCodecAudioRenderer`，在 `supportsFormat`/`getDecoderInfos`/`getMediaCodecConfiguration` 三处传改写后的 Format）→ **平台那个"MP3 解码器"根本不接受 Layer II 帧**，解码器初始化/解码直接失败 → ExoPlayer 报错 + 我们的直播自动重连反复重试 = 用户看到的「一直出错」。**结论：MIME 映射救不了 MP2，Android 平台（至少这台机器）没有能解 MP2 帧的解码器 → 只能软件解码**。**核对手段（可复用）**：从本地 Gradle 缓存的 media3 AAR 里 `javap` 出关键签名（`DefaultRenderersFactory.buildAudioRenderers`、`MediaCodecAudioRenderer.supportsFormat/getDecoderInfos/getMediaCodecConfiguration`），并读 media3 源码确认 `getMediaFormat(format, codecInfo.codecMimeType, ...)` 用的是**解码器**的 MIME、`onOutputFormatChanged` 用 mediaFormat 的通道/采样率 —— 所以 relabel 只影响"选哪个解码器"，而选中的解码器解不了 —— 这才是根因。③**0.199（回退 + 把失败说出来）= v0.199**：整体删除该渲染器（回到 media3 默认渲染器，MP2 频道恢复"有画面没声音"而不是报错）；`onPlayerError` 文案细分（新增「本机解不了这个编码」= `ERROR_CODE_DECODER_INIT_FAILED/QUERY_FAILED`、「音频输出失败」= `ERROR_CODE_AUDIO_TRACK_INIT_FAILED/WRITE_FAILED`，兜底文案带上 `error.errorCodeName`）；新增 `Player.Listener.onTracksChanged` 检测「存在 type=audio 且**未被选中**、MIME 是 `audio/mpeg-L1/L2` 的音轨组」→ Toast「该频道音频是 MP2，本机解码器不支持：会有画面没声音，建议换线路或换源」（只弹一次）—— 把"被静默丢掉的音轨"变成明说。④**0.200（正解）= v0.200**：media3 `1.5.1 → 1.7.1`；新增依赖 **`io.github.anilbeesetti:nextlib-media3ext:1.7.1-0.9.0`**（预编译 FFmpeg 解码 AAR；⚠️ **GPL-3.0**，随 App 分发要求整个 App GPL 兼容 —— 已告知用户）；`PlayerScreen` 改用 `NextRenderersFactory(context).setEnableDecoderFallback(true).setExtensionRendererMode(EXTENSION_RENDERER_MODE_ON)` —— **ON = 只在平台渲染器不支持时才交给 FFmpeg**，AAC/MP3 照旧走平台/硬件解码（不影响性能）；`defaultConfig` 加 `ndk { abiFilters += listOf("arm64-v8a","armeabi-v7a") }`（AAR 自带 4 个 ABI，去掉 x86/x86_64）。**APK 9.0MB → 19.7MB**。⑤**⚠️ 本轮最值得记的坑**：**(a) 依赖坐标写错会被 Gradle 报 `Could not find`** —— NextLib 的 groupId 是 `io.github.anilbeesetti`（`io.github.anilbeesetti.nextlib` 是包名/仓库名，不是 groupId）；**报错里 Gradle 打印的查找 URL 能直接反推 groupId**（本轮它去查 `.../io/github/anilbeesetti/nextlib/nextlib-media3ext/...` 就说明多写了一层）。**(b) NextLib 版本号格式 = `<media3 版本>-<nextlib 版本>`**（`1.7.1-0.9.0` 对应 media3 1.7.1）→ media3 必须配套升到该版本；**官方 media3 的 FFmpeg 扩展不发 Maven 制品**（要用 media3 源码 + NDK 自己编），所以只能走 NextLib 这类预编译包。**(c) NextLib 的 MIME→FFmpeg 解码器映射**：`audio/mpeg`/`audio/mpeg-L1`/`audio/mpeg-L2` 都映射到 FFmpeg 的 **`mp3`** 解码器（同源实现，能解 Layer I/II 帧）。**(d) `audio/mpeg-L1|L2` 这两个 MIME 是 AOSP 自己定义、且很多设备不注册解码器**（实测这台设备就没有），社区日志里也常见 `Unsupported mime audio/mpeg-L1, -L2`。⑥**发版**：0.199 = commit `1f5f3d8` / tag `v0.199` / **Release `394241624`** / 资产 `LaoZhengFenXiang-0.199.apk`（8,983,518 字节，SHA256 `BEB9125915AE5B42FF883967A55DE6792F49EEE70EF9BF8E34B54328B8588D87`）；0.200 = commit `e579ac6` / tag `v0.200` / **Release `394258937`** / 资产 `LaoZhengFenXiang-0.200.apk`（19,709,368 字节，SHA256 `FD76408C9A7C8B8750C46CA58C9E2DDFD1BF1C00F7299989E59B3B9A009BD8C0`）；桌面只留中文名一份 `老郑分享-0.200.apk`。⑦**✅ 已装机验证（2026-09-23）**：用户确认「**有声音了**」—— CCTV3/CCTV5 出声，FFmpeg 软解这条路走通了（NextLib 把 `audio/mpeg-L1|L2` 交给 FFmpeg 的 `mp3` 解码器，它确实能吃 Layer II 帧）。**以后遇到「平台没有解码器的音频编码」（MP2 / AC3 / EAC3 / DTS…）就照这套路做：挂 FFmpeg 扩展渲染器（`EXTENSION_RENDERER_MODE_ON` 兜底），不要再尝试改 MIME 映射去骗平台解码器**（0.198 已验证那条路走不通）。
@@ -887,6 +888,18 @@
   「WebView拉取」（okhttp头 → WebView字节 → 解密结果一行定案）。教训固化：**同一 URL
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
+
+- **v0.245（播放器 seek 卡住自愈分级 v2 + 十轮盲修复盘，2026-10-19）**：
+  0.244 装机确认图片全通（封面/正文秒出，诊断「okhttp密文→本地解密 ✓ 主路径」，Coil 成功）。
+  遗留：**个别视频 seek 到未缓冲区仍卡住**——0.226/0.231 看门狗只有一种恢复姿势
+  （stop+prepare），对切片地址过期/坏节点/解密密钥失效等「轻量重载救不回」的情况会
+  10s 一轮无限空转（自愈变死循环）。PlayerScreen 自愈升级分级：第 1 次轻量
+  stop+prepare+seekTo；**第 2 次起整条 MediaItem 重建**（`setMediaItem(item, pos)` 彻底
+  丢弃清单/解密密钥/切片状态从头重解析）；位置恢复前进（isPlaying）即清零计数；第 3 次
+  Toast「多次自动恢复未成功，建议点刷新或切换线路」；每次自愈写 `PLAYER` 飞行日志
+  （黑匣子可查 state/pos/轮次，下次卡住的黑匣子能直接定位卡在哪一级）。另：本轮教训
+  固化进 Working Discipline 第 7 条（假设可证伪/站点自有代码验证/结构特征优先/真实字节
+  fixture/恢复手段分级）。版本：0.245/1245。
 
 - **v0.244（图片根因真反转：0.242 把 zzz.js 的 KEY/IV 装反——密文是真的，2026-10-19）**：
   0.243 的「okhttp 拿到随机垃圾」结论被 PC 实验**推翻**：① PC curl 拉设备黑匣子同款封面

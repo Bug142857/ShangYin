@@ -552,14 +552,24 @@ fun PlayerScreen(nav: NavHostController) {
     LaunchedEffect(player) {
         var lastPos = -1L
         var stuckSince = 0L
+        var reloadRound = 0 // 本轮卡住的自愈次数（位置恢复前进即清零）
         while (true) {
             delay(2000)
             val now = System.currentTimeMillis()
+            val pos = player.currentPosition
+            // 位置在前进（真正在播）= 一切正常，自愈计数清零
+            if (player.isPlaying) {
+                reloadRound = 0
+                stuckSince = 0L
+                lastPos = pos
+                continue
+            }
+            // v0.226：BUFFERING 超 10s——seek 到未缓冲区后，慢源/签名切片下重新拉切片
+            // 可能长时间卡在 STATE_BUFFERING（TS 加密流尤其如此）。
             var needReload = !isLive && bufferingSince > 0 &&
                 now - bufferingSince > 10_000
             // v0.231：READY 却不播——seek 后 STATE_READY、playWhenReady=true 但画面不动
             //（位置停滞），原自愈只认 STATE_BUFFERING 覆盖不到这种。位置 10s 无变化即重载。
-            val pos = player.currentPosition
             if (!needReload && !isLive && player.playWhenReady && !player.isPlaying &&
                 !player.isPlayingAd && pos == lastPos
             ) {
@@ -568,12 +578,41 @@ fun PlayerScreen(nav: NavHostController) {
             } else stuckSince = 0L
             lastPos = pos
             if (needReload) {
+                reloadRound++
+                val item = player.currentMediaItem
                 runCatching {
-                    val p = player.currentPosition
-                    player.stop()
-                    player.prepare()
-                    player.seekTo(p)
-                    player.playWhenReady = true
+                    when {
+                        // 第 1 次：轻量重载——stop()+prepare() 强制丢弃已加载的 MediaPeriod
+                        // 重新拉清单/切片（⚠️ v0.225 教训：seekTo(当前位置) 是 no-op，
+                        // media3 认为目标位置就是当前位置不重新加载；seekTo 只用于钉住进度）
+                        reloadRound <= 1 || item == null -> {
+                            com.shangyin.app.data.melon.MelonFlightLog.log(
+                                "PLAYER", "卡住自愈#$reloadRound state=${player.playbackState} pos=$pos → stop+prepare"
+                            )
+                            player.stop()
+                            player.prepare()
+                            player.seekTo(pos)
+                            player.playWhenReady = true
+                        }
+                        // 第 2 次起：整条 MediaItem 重建——彻底丢弃清单/解密密钥/切片状态，
+                        // 从头重新解析（对付切片地址过期、坏节点、密钥失效等轻量重载救不回的情况）
+                        else -> {
+                            com.shangyin.app.data.melon.MelonFlightLog.log(
+                                "PLAYER", "卡住自愈#$reloadRound state=${player.playbackState} pos=$pos → MediaItem重建"
+                            )
+                            player.setMediaItem(item, pos)
+                            player.prepare()
+                            player.playWhenReady = true
+                        }
+                    }
+                }.onFailure { e ->
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "卡住自愈#$reloadRound 异常 ${e.javaClass.simpleName}: ${e.message?.take(80)}"
+                    )
+                }
+                // 第 3 次仍卡：自愈姿势已用尽，明说让用户主动干预（刷新/切线路）
+                if (reloadRound == 3) {
+                    Toast.makeText(context, "多次自动恢复未成功，建议点刷新或切换线路", Toast.LENGTH_LONG).show()
                 }
                 bufferingSince = System.currentTimeMillis() // 重置计时避免无限循环
                 stuckSince = 0L
