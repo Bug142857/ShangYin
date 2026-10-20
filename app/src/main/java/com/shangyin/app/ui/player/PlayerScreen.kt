@@ -490,23 +490,9 @@ fun PlayerScreen(nav: NavHostController) {
                             }
 
                             override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
+                                // v0.267：重载逻辑已上移到 Player 级 onPositionDiscontinuity
+                                // （0.266 此处有绑定缺口，13:45 日志 pos 跳 97.9s 无 seek重载 行）
                                 scrubbingMs = null
-                                // v0.266：seek 饿死根因修复——源站视频是 33 天连续直播流切片，
-                                // TS 带绝对 PTS（0.265 定案 2.9e9ms 偏移），原生 seek 后样本时间轴
-                                // 与播放位置失配：数据 3 秒下完却 BUFFERING 卡满 25s（13:32 日志
-                                // 实锤），重载校零 PTS 后立即正常。统一改走重载路径
-                                if (canceled || isLive) return
-                                val cur = player.currentPosition
-                                if (kotlin.math.abs(position - cur) < 3000L) return
-                                runCatching {
-                                    player.stop()
-                                    player.seekTo(position)
-                                    player.prepare()
-                                    player.playWhenReady = true
-                                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                                        "PLAYER", "seek重载: 目标=${position / 1000}s (绕过PTS饿死,直接重载校零)"
-                                    )
-                                }
                             }
                         })
                     }
@@ -532,6 +518,33 @@ fun PlayerScreen(nav: NavHostController) {
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
                 videoAspect = if (videoSize.height == 0) 0f
                 else videoSize.width.toFloat() / videoSize.height.toFloat()
+            }
+
+            // v0.267：seek 全局拦截——0.266 的 TimeBar onScrubStop 有绑定缺口（13:45 日志
+            // 实锤 pos 0→97883 却无 seek重载 行），改在 Player 级监听不连续事件：
+            // 任何 UI 路径（进度条/手势/代码 seek）的 seek 都会触发 SEEK 原因的不连续，
+            // 统一走重载路径绕过 33 天绝对 PTS 的样本时间轴失配（数据 3s 下完仍卡 25s）
+            var seekReloadBusy = false
+            override fun onPositionDiscontinuity(
+                oldPosition: androidx.media3.common.Player.PositionInfo,
+                newPosition: androidx.media3.common.Player.PositionInfo,
+                reason: Int
+            ) {
+                if (seekReloadBusy || isLive) return
+                if (reason != androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) return
+                val target = newPosition.positionMs
+                seekReloadBusy = true
+                try {
+                    player.stop()
+                    player.seekTo(target)
+                    player.prepare()
+                    player.playWhenReady = true
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "seek重载: 目标=${target / 1000}s (Player级拦截,PTS饿死规避)"
+                    )
+                } finally {
+                    seekReloadBusy = false
+                }
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {

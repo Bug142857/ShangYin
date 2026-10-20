@@ -889,6 +889,21 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.267（seek 拦截上移 Player 级 onPositionDiscontinuity——0.266 TimeBar 绑定缺口实锤，2026-10-20）**：
+  13:45 日志：首帧正常（时长=353033ms 正确）、pos 0→97883 发生 seek、**却零条
+  seek重载**——0.266 挂在 onScrubStop 上的重载没拦到（绑定时机缺口，具体链条未查明：
+  barBound 记忆态/控制器首显竞态皆有可能）。修复=不再依赖任何 UI 监听：
+  **Player.Listener.onPositionDiscontinuity(reason=SEEK) 全局拦截**——进度条/手势/代码
+  任何路径的 seek 都触发，统一 stop→seekTo(new)→prepare 重载（PTS 饿死规避）；
+  onScrubStop 回退为纯 scrubbingMs 记录避免双重重载。重载自身的 stop 产生 REMOVE
+  原因、prepare 无 SEEK 原因 → 无循环；busy 标志兜底。
+  **API 坑：media3 1.7.1 无 DISCONTINUITY_REASON_SEEK_ADJUSTED**（那是 ExoPlayer v2
+  的 ADJUSTMENT），常量集=AUTO_TRANSITION/SEEK/SEEK_INITIAL_SEEK_TO_ITEM/REMOVED/
+  DETACHED/INTERNAL。
+  **教训：拦截器挂 UI 控件=依赖控件生命周期与绑定时机，靠不住；要拦行为就挂行为
+  发生处（Player 级事件），一处兜全部路径**。
+  版本：0.267/1267。
+
 - **v0.266（seek 饿死根因修复：原生 seek 统一改走重载路径，2026-10-20）**：
   13:32 日志拼上最后一块：seek 到 87s → 切片 17~22 **3 秒内全部 200**（数据充足）→
   state=BUFFERING 卡满 25s → 自愈重载后**立即正常**。下载快却进不了播放态 =
