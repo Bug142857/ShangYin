@@ -30,6 +30,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowDropUp
@@ -37,6 +39,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,6 +73,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -480,39 +484,56 @@ fun MelonHomeScreen(nav: NavHostController) {
                                     )
                                 }
                                 else -> {
-                                    if (lastPage > 0) {
-                                        // v0.255 数字页码条（用户要求「中间可以选页，知道最后一页」）：
-                                        // 窗口 = 1 … cur-1 cur cur+1 … N，当前页高亮，点击跳页
+                                    // v0.257 页码条 v3：[←] [1] … [cur±w] … [N] [→]
+                                    // - 溢出根因（0.255/0.256 用户实测）：TextButton 默认 minWidth=58dp，
+                                    //   「上一页/下一页」文字按钮 + 多个数字必然超屏 → 改紧凑文本 chip，
+                                    //   去掉 horizontalScroll：左右箭头固定两端、任何页码量都在屏内（用户明确要求）
+                                    // - 选页：数字点按直达；「…」点开跳页输入框（可直达末页/任意页）
+                                    // - 窗口宽度自适应：总页数 ≥1000（页码 4 位数）时收窄为 ±1，防止挤爆
+                                    var showJump by remember { mutableStateOf(false) }
+                                    val half = if (lastPage >= 1000) 1 else 2
+                                    val nums = buildList {
+                                        if (lastPage > 0) {
+                                            val s = (currentPage - half).coerceAtLeast(1)
+                                            val e = (currentPage + half).coerceAtMost(lastPage)
+                                            if (s > 1) {
+                                                add(1)
+                                                if (s > 2) add(-1) // -1 = 省略号占位（点击弹跳页框）
+                                            }
+                                            for (p in s..e) add(p)
+                                            if (e < lastPage) {
+                                                if (e < lastPage - 1) add(-1)
+                                                add(lastPage)
+                                            }
+                                        } else {
+                                            // 末页未知（分页器没解析到）→ 只显示当前页附近窗口
+                                            for (d in -half..half) {
+                                                val p = currentPage + d
+                                                if (p >= 1) add(p)
+                                            }
+                                        }
+                                    }
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                                        PageArrow(enabled = currentPage > 1 && !loading, forward = false) {
+                                            loadNav(pathFor(currentPage - 1), currentPage - 1)
+                                        }
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                            modifier = Modifier.horizontalScroll(rememberScrollState())
+                                            horizontalArrangement = Arrangement.Center,
+                                            modifier = Modifier.weight(1f)
                                         ) {
-                                            TextButton(
-                                                enabled = currentPage > 1 && !loading,
-                                                onClick = { loadNav(pathFor(currentPage - 1), currentPage - 1) },
-                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
-                                            ) { Text("上一页") }
-                                            // v0.256：窗口 cur±3（用户要求显示更多页码，方便连续选页）
-                                            val window = buildList {
-                                                add(1); add(lastPage)
-                                                for (d in -3..3) {
-                                                    val p = currentPage + d
-                                                    if (p in 1..lastPage) add(p)
-                                                }
-                                            }.distinct().sorted()
-                                            var prevNum = 0
-                                            window.forEach { p ->
-                                                if (p - prevNum > 1) {
+                                            nums.forEach { p ->
+                                                if (p == -1) {
                                                     Text(
                                                         "…",
                                                         style = MaterialTheme.typography.labelMedium,
-                                                        color = MaterialTheme.colorScheme.outline,
-                                                        modifier = Modifier.padding(horizontal = 2.dp)
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(6.dp))
+                                                            .clickable(enabled = !loading) { showJump = true }
+                                                            .padding(horizontal = 5.dp, vertical = 8.dp)
                                                     )
-                                                }
-                                                prevNum = p
-                                                if (p == currentPage) {
+                                                } else if (p == currentPage) {
                                                     Surface(
                                                         shape = RoundedCornerShape(8.dp),
                                                         color = MaterialTheme.colorScheme.primary
@@ -521,41 +542,70 @@ fun MelonHomeScreen(nav: NavHostController) {
                                                             "$p",
                                                             style = MaterialTheme.typography.labelMedium,
                                                             color = MaterialTheme.colorScheme.onPrimary,
-                                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                                                         )
                                                     }
                                                 } else {
-                                                    TextButton(
-                                                        enabled = !loading,
-                                                        onClick = { loadNav(pathFor(p), p) },
-                                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
-                                                    ) { Text("$p") }
+                                                    Text(
+                                                        "$p",
+                                                        style = MaterialTheme.typography.labelMedium,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier
+                                                            .clip(RoundedCornerShape(8.dp))
+                                                            .clickable(enabled = !loading) { loadNav(pathFor(p), p) }
+                                                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                                                    )
                                                 }
                                             }
-                                            TextButton(
-                                                enabled = nextPath != null && !loading,
-                                                onClick = { nextPath?.let { loadNav(it, currentPage + 1) } },
-                                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
-                                            ) { Text("下一页") }
                                         }
-                                    } else {
-                                        // 末页未知（分页器没解析到）→ 退回上一页/下一页形态
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            TextButton(
-                                                enabled = currentPage > 1 && !loading,
-                                                onClick = { loadNav(pathFor(currentPage - 1), currentPage - 1) }
-                                            ) { Text("上一页") }
-                                            Text(
-                                                "第 ${currentPage} 页",
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.outline,
-                                                modifier = Modifier.padding(horizontal = 10.dp)
-                                            )
-                                            TextButton(
-                                                enabled = nextPath != null && !loading,
-                                                onClick = { nextPath?.let { loadNav(it, currentPage + 1) } }
-                                            ) { Text("下一页") }
+                                        PageArrow(
+                                            enabled = !loading &&
+                                                (nextPath != null || (lastPage > 0 && currentPage < lastPage)),
+                                            forward = true
+                                        ) {
+                                            // nextPath 优先（站点真实解析路径）；缺失时按版块形态构造（pathFor 兜底）
+                                            if (nextPath != null) loadNav(nextPath, currentPage + 1)
+                                            else loadNav(pathFor(currentPage + 1), currentPage + 1)
                                         }
+                                    }
+                                    if (showJump) {
+                                        var jumpText by remember { mutableStateOf("") }
+                                        val jump = jumpText.toIntOrNull() ?: 0
+                                        AlertDialog(
+                                            onDismissRequest = { showJump = false },
+                                            title = { Text("跳转到指定页") },
+                                            text = {
+                                                Column {
+                                                    if (lastPage > 0) {
+                                                        Text(
+                                                            "共 $lastPage 页（末页 $lastPage），输入 1 ~ $lastPage",
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    Spacer(Modifier.height(8.dp))
+                                                    OutlinedTextField(
+                                                        value = jumpText,
+                                                        onValueChange = { jumpText = it.filter { ch -> ch.isDigit() } },
+                                                        singleLine = true,
+                                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                                        placeholder = { Text("页码") }
+                                                    )
+                                                }
+                                            },
+                                            confirmButton = {
+                                                TextButton(
+                                                    enabled = jump >= 1 && (lastPage <= 0 || jump <= lastPage),
+                                                    onClick = {
+                                                        showJump = false
+                                                        loadNav(pathFor(jump), jump)
+                                                    }
+                                                ) { Text("跳转") }
+                                            },
+                                            dismissButton = {
+                                                TextButton(onClick = { showJump = false }) { Text("取消") }
+                                            }
+                                        )
                                     }
                                 }
                             }
@@ -565,6 +615,28 @@ fun MelonHomeScreen(nav: NavHostController) {
                 }
             }
         }
+    }
+}
+
+/** 页码条左右箭头：紧凑 34dp 图标（0.255/0.256 的「上一页/下一页」TextButton 默认 minWidth=58dp，
+ *  是页码条超屏的根因之一），固定在页码条两端永不滚出屏幕（用户明确要求箭头恒在屏内） */
+@Composable
+private fun PageArrow(enabled: Boolean, forward: Boolean, onClick: () -> Unit) {
+    val tint = if (enabled) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(34.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+    ) {
+        Icon(
+            if (forward) Icons.AutoMirrored.Rounded.KeyboardArrowRight
+            else Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+            contentDescription = if (forward) "下一页" else "上一页",
+            tint = tint
+        )
     }
 }
 
