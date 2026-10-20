@@ -240,7 +240,10 @@ fun PlayerScreen(nav: NavHostController) {
                             "PLAYER", "补丁跳过: 非列表 len=${bytes.size} path=…${req.url.encodedPath.takeLast(40)}"
                         )
                     }
-                    return@addInterceptor resp
+                    // v0.264 修复：bytes() 已消费原 body，必须用原字节重建——0.263 直接返回
+                    // 原响应导致 media3 再读时 IOException: closed（装机实锤 KEY 全挂）
+                    return@addInterceptor resp.newBuilder()
+                        .body(okhttp3.ResponseBody.create(null, bytes)).build()
                 }
                 val text = bytes.decodeToString()
                 val hasInf = text.contains("#EXTINF")
@@ -260,8 +263,15 @@ fun PlayerScreen(nav: NavHostController) {
                         .map { it.value }.distinct().take(12).joinToString(",")
                     val firstInf = Regex("#EXTINF:[0-9.,]+").find(text)?.value ?: "无"
                     val pdtCount = Regex("#EXT-X-PROGRAM-DATE-TIME").findAll(text).count()
+                    val mediaSeq = Regex("#EXT-X-MEDIA-SEQUENCE:(-?\\d+)").find(text)?.groupValues?.get(1) ?: "-"
+                    val wjSample = Regex("#EXT-X-WJ-T:[^\r\n]*").findAll(text).take(2)
+                        .map { it.value.take(50) }.joinToString(" / ")
+                    val firstSeg = text.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("#") }?.take(80) ?: "无"
                     com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "清单诊断: 标签[$tagNames] $firstInf PDT=$pdtCount len=${text.length}"
+                        "PLAYER", "清单诊断: 标签[$tagNames] $firstInf PDT=$pdtCount MSEQ=$mediaSeq"
+                    )
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "清单诊断2: WJ[$wjSample] 首片=$firstSeg"
                     )
                     val cleaned = text.lineSequence()
                         .filter { !it.startsWith("#EXT-X-PROGRAM-DATE-TIME") && !it.startsWith("#EXT-X-WJ-") }
@@ -718,8 +728,18 @@ fun PlayerScreen(nav: NavHostController) {
                 output: Any,
                 mediaDurationMs: Long
             ) {
+                // v0.264：dur 直播化解剖——dur 随墙钟增长（2901→2909e6 跟真实时间同步），
+                // 嫌疑在 media3 窗口计算。dump 全部窗口字段一步定位
+                var wdur = -1L; var wLive = "?"; var wStart = -1L; var wDefault = -1L
+                runCatching {
+                    val w = androidx.media3.common.Timeline.Window()
+                    player.currentTimeline.getWindow(player.currentMediaItemIndex, w)
+                    wdur = w.durationUs; wLive = w.isLive.toString()
+                    wStart = w.windowStartTimeMs; wDefault = w.defaultPositionUs
+                }
                 com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "首帧渲染 pos=${player.currentPosition} dur=${mediaDurationMs}ms"
+                    "PLAYER", "首帧渲染 pos=${player.currentPosition} dur=${mediaDurationMs}ms " +
+                        "playerDur=${player.duration} win[us=$wdur live=$wLive start=$wStart default=$wDefault]"
                 )
             }
 

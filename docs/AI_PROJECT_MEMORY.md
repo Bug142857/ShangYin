@@ -889,6 +889,21 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.264（closed 崩溃修复 / dur 解剖取证，2026-10-20）**：
+  0.263 装机双信息：①清单诊断落地——标签全集
+  `[#EXT-X-WJ-T,#EXT-X-VERSION,#EXT-X-KEY,#EXT-X-MEDIA-SEQUENCE,#EXT-X-TARGETDURATION,
+  #EXT-X-ENDLIST]`，EXTINF:5.000，**PDT=0**（PDT 嫌疑排除），KEY URI 嵌反引号；
+  ②**0.263 新崩点：KEY 请求 `IOException: closed`**——bytes() 消费了原 body 后直接
+  返回原响应，media3 再读即 closed（「非清单路径忘了重建」）。修复=非清单分支同样
+  用原字节重建响应。新增取证：清单诊断2（MEDIA-SEQUENCE 值+WJ-T 值样本+首片 URL 行），
+  首帧渲染 dur 解剖（mediaDurationMs + player.duration + window.durationUs/isLive/
+  windowStartTimeMs/defaultPositionUs）——dur 随墙钟增长（2901→2909e6 与真实时间同步，
+  09:43→11:54 五个采样点全吻合），win 字段一步定位是 media3 哪个层在直播化。
+  **教训：消费 body 后返回重建响应——每个 return 路径都要过一遍「body 还活着吗」；
+  WJ-T 值样本和 MSEQ 值是下轮定案关键（469261×6.2s≈32.8d 与 dur 量级吻合的线索
+  尚未核实——需 MSEQ 实值）**。
+  版本：0.264/1264。
+
 - **v0.263（0.254 根因结论推翻 / 字节级嗅探救回密钥 / PDT-WJ 剥离假设，2026-10-20）**：
   0.262 分支留痕一击定案两条：①**清单本来就有 #EXT-X-ENDLIST**（头尾 dump 实锤：
   `#EXTM3U|#EXT-X-WJ-T:-0|#EXT-X-VERSION:3|#EXT-X-KEY:URI="`https://m`"…|#EXT-X-ENDLIST`，
