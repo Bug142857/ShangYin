@@ -202,17 +202,28 @@ fun PlayerScreen(nav: NavHostController) {
                 }
                 chain.proceed(b.build())
             }
-        if (!isLive) okhttpBuilder.addInterceptor { chain ->
+        var sniffLogCount = 0 // v0.261：前 3 次拦截请求留痕——消灭「门没开/没触发/没装上」盲区
+        okhttpBuilder.addInterceptor { chain ->
             val req = chain.request()
+            if (sniffLogCount < 3) {
+                sniffLogCount++
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER", "拦截#$sniffLogCount live=$isLive path=…${req.url.encodedPath.takeLast(60)}"
+                )
+            }
+            // 直播不补 ENDLIST（真直播列表本就无 ENDLIST，补了播完即停）
+            if (isLive) return@addInterceptor chain.proceed(req)
             // ⚠️ 0.255 教训：站点 HLS 地址无 .m3u8 后缀（hls.tpbbwcc.cn/videos5/…/…）——
             // 0.258/0.259 用后缀门漏补了无后缀清单（装机零条补丁日志+dur 仍 2.9e9 实锤）。
-            // 门改为：.m3u8 或最后一段无扩展名 → 整读嗅探（清单/密钥均为小响应；
-            // 切片/直链文件有扩展名直接放行不缓冲）
+            // 门改为：.m3u8 或最后一段无扩展名 → 整读嗅探（清单/密钥均为小响应）；
+            // >512KB 的响应（切片/直链文件）不缓冲直接放行
             val lastSeg = req.url.encodedPath.substringAfterLast('/')
-            if (!lastSeg.endsWith(".m3u8") && lastSeg.contains('.')) {
-                return@addInterceptor chain.proceed(req)
-            }
+            val maybePlaylist = lastSeg.endsWith(".m3u8") || !lastSeg.contains('.')
+            if (!maybePlaylist) return@addInterceptor chain.proceed(req)
             val resp = chain.proceed(req)
+            if ((resp.header("Content-Length")?.toLongOrNull() ?: 0L) > 512_000L) {
+                return@addInterceptor resp
+            }
             // v0.258 根因修复（v0.259 落点）：站点 m3u8 缺 #EXT-X-ENDLIST（0.254 定案）
             // → 353s 的 VOD 被当 32 天直播流，进度条全长失真、seek 落点必然在内容外。
             // 这里原位补一行 ENDLIST，media3 按 EXTINF 求和得真实时长，seek/进度条恢复正确
@@ -537,6 +548,10 @@ fun PlayerScreen(nav: NavHostController) {
         player.prepare()
         player.playWhenReady = true
         currentEp = startIdx
+        // v0.261：完整留痕 ep.url 形态（后缀有无一步定性，替代截断展示的猜谜）
+        com.shangyin.app.data.melon.MelonFlightLog.log(
+            "PLAYER", "加载列表 url=${eps.getOrNull(startIdx)?.url?.take(160)}"
+        )
         if (startPos > 0L) Toast.makeText(context, "已从上次位置继续播放", Toast.LENGTH_SHORT).show()
         // v0.258：本地镜像整片下载方案已移除——根因（m3u8 缺 ENDLIST 被当直播流）改由
         // EndlistPatchDataSource 在线列表补丁直接修复，无需下载整片。镜像方案 0.254~0.257
