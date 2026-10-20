@@ -199,7 +199,15 @@ fun PlayerScreen(nav: NavHostController) {
             }
             .build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okhttpClient)
-        val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
+        // v0.258 根因修复：站点 m3u8 缺 #EXT-X-ENDLIST（0.254 定案）→ 353s 的 VOD 被当
+        // 32 天直播流，进度条全长失真、seek 落点必然在内容外。列表加载时原位补 ENDLIST
+        // （几 KB 内存补丁），时长/进度条/seek 直接恢复正确；
+        // 0.254~0.257 的整片下载镜像方案被取代并移除。
+        // 仅点播页启用——电视直播（isLive）的列表本来就无 ENDLIST（真直播），补了会被
+        // 强转 VOD 播完即停（code-review 拦截）
+        val baseDsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
+        val dsFactory = if (isLive) baseDsFactory
+        else com.shangyin.app.data.melon.EndlistPatchDataSourceFactory(baseDsFactory)
         // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms
         // 直播的缓冲与点播分开：直播流可能"发一段就断"，
@@ -460,7 +468,7 @@ fun PlayerScreen(nav: NavHostController) {
         runCatching { player.release() }
     }
 
-    // v0.257：BUFFERING 起算时刻（看门狗判卡 + 镜像切换都要用，声明前移到本 effect 之前）
+    // v0.257：BUFFERING 起算时刻（看门狗判卡用；换源 uri 变化复位也用它，声明前移）
     var bufferingSince by remember { mutableLongStateOf(0L) }
 
     // 剧集列表（每次加载线路时重建播放列表）
@@ -484,73 +492,10 @@ fun PlayerScreen(nav: NavHostController) {
         player.playWhenReady = true
         currentEp = startIdx
         if (startPos > 0L) Toast.makeText(context, "已从上次位置继续播放", Toast.LENGTH_SHORT).show()
-        // v0.254：本地镜像修复「点进度条必卡」——站点 m3u8 缺 ENDLIST 被当直播流
-        // （黑匣子实锤 dur≈32天），进度条映射到天文数字，seek 落点必然在真实内容之外。
-        // 后台镜像全部切片+密钥本地化+补 ENDLIST，就绪后无缝切换（保持位置）。
-        // v0.255：拆除 .m3u8 后缀门——站点 HLS 地址无后缀（hls.tpbbwcc.cn/videos5/…/…），
-        // 后缀门把镜像挡死从未启动（0.254 装机日志零条 MIRROR）。改为排除直链文件
-        // （mp4 等无 ENDLIST 问题），非 HLS 响应由 prepare 内 peek 校验快速失败保持原流
-        if (!isLive && eps.size == 1) {
-            val epUrl = eps[0].url
-            val isDirectFile = Regex("""\.(mp4|mkv|flv|avi|mov|webm|ts)$""", RegexOption.IGNORE_CASE)
-                .containsMatchIn(epUrl.substringBefore('?'))
-            if (isDirectFile) return@LaunchedEffect
-            com.shangyin.app.data.melon.MelonFlightLog.log("MIRROR", "镜像准备开始 url=$epUrl")
-            scope.launch {
-                val mirror = runCatching {
-                    com.shangyin.app.data.melon.MelonVodMirror.prepare(context, epUrl)
-                }.getOrNull() ?: return@launch
-                // 还在这集且没离开页面才切换（自动连播/返回后镜像就绪则丢弃）
-                if (released) return@launch
-                val sameEp = groups.getOrNull(groupIndex)?.episodes?.firstOrNull()?.url == epUrl &&
-                    player.currentMediaItemIndex == startIdx
-                if (!sameEp) return@launch
-                val pos = run {
-                    // v0.254：钳制——直播化时间轴上被 seek 过的位置可达 28 亿 ms（dur 实锤），
-                    // 直接带入本地 VOD 会越界立刻 ENDED；超出镜像真实时长一律回片头
-                    val d = com.shangyin.app.data.melon.MelonVodMirror.durationOf(epUrl)
-                    val cur = player.currentPosition.coerceAtLeast(0)
-                    if (d > 0 && cur >= d) 0L else cur
-                }
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "MIRROR", "切换本地播放 pos=$pos"
-                )
-                // v0.256：切换是用户可感知的节点（此前镜像静默切换，用户不知进度条已修复）
-                android.widget.Toast.makeText(context, "本地镜像就绪，进度条已修复", Toast.LENGTH_SHORT).show()
-                val local = MediaItem.Builder()
-                    .setUri(android.net.Uri.fromFile(java.io.File(mirror, "index.m3u8")))
-                    .setMimeType(MimeTypes.APPLICATION_M3U8)
-                    .build()
-                player.setMediaItem(local, pos)
-                player.prepare()
-                // v0.257：切换即重置缓冲计时（与看门狗 uri 变化复位同式：仅 BUFFERING 才重新起算，
-                // 否则清零——无条件起算会破坏「bufferingSince>0=在缓冲」的判据语义）。切换瞬间通常
-                // 正卡在远程流的 BUFFERING 里，旧计时若不清，看门狗可能误判「已卡 25s」
-                bufferingSince = if (player.playbackState == Player.STATE_BUFFERING)
-                    System.currentTimeMillis() else 0L
-                // playWhenReady 保持原状（切换瞬间不打断播放意图）
-                // v0.257：切换后 3s 验证实际落点——0.256 装机日志「切换本地播放」后 21s 的首帧
-                // 仍是远程直播化 dur（2.9e9ms）：本地到底有没有接管、还是被自愈/重载覆盖掉，
-                // 一条硬证据直接区分（本地 VOD dur≈真实时长；远程直播化 dur≈32 天）。
-                // 锁定本次切换的本地 uri，3s 内已换源（换集/线路/再切换）则标记跳过，防证据张冠李戴
-                val localUri = local.localConfiguration?.uri?.toString()
-                scope.launch {
-                    delay(3_000)
-                    if (released) return@launch
-                    val nowUri = player.currentMediaItem?.localConfiguration?.uri?.toString()
-                    if (nowUri != localUri) {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "MIRROR", "本地验证跳过(已换源 uri=…${nowUri?.takeLast(40) ?: "null"})"
-                        )
-                    } else {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "MIRROR", "本地验证 state=${player.playbackState} pos=${player.currentPosition} " +
-                                "dur=${player.duration} uri=…${nowUri?.takeLast(50)}"
-                        )
-                    }
-                }
-            }
-        }
+        // v0.258：本地镜像整片下载方案已移除——根因（m3u8 缺 ENDLIST 被当直播流）改由
+        // EndlistPatchDataSource 在线列表补丁直接修复，无需下载整片。镜像方案 0.254~0.257
+        // 补丁叠补丁（抢带宽拖慢起播/切换竞态/被看门狗误杀），且用户视角「在线看」根本
+        // 不该出现下载行为
     }
 
     // 换集同步（自动连播 / 控制器切集）+ 播放出错提示
@@ -625,7 +570,7 @@ fun PlayerScreen(nav: NavHostController) {
     // 缓冲超 10s 自动原地重载。⚠️ v0.225 教训：seekTo(当前精确位置) 是 no-op——media3
     // 认为目标位置就是当前位置，复用现有请求不重新加载，卡死照旧。必须 stop()+prepare()
     // 强制丢弃已加载的 MediaPeriod 重新拉清单/切片，seekTo 只用于钉住进度，再恢复播放。
-    // （bufferingSince 声明已上移到 LaunchedEffect(groupIndex) 之前——v0.257 镜像切换也要重置它）
+    // （bufferingSince 声明已上移到 LaunchedEffect(groupIndex) 之前）
     // v0.251：视频渲染帧计数器引用——0.250 黑匣子实锤第四盲区：seek 后解码器只出 1 帧
     //（9 次首帧渲染、0 条卡住自愈）但 isPlaying=true 位置照走 = 媒体时钟与画面脱钩，
     // state/pos/suppression 全部"健康"，看门狗无从下手。DecoderCounters.renderedOutputBufferCount
