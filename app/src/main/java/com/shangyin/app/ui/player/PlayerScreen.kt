@@ -481,8 +481,10 @@ fun PlayerScreen(nav: NavHostController) {
                     this@apply.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.let { bar ->
                         barBound.value = true
                         bar.addListener(object : TimeBar.OnScrubListener {
+                            var resumeMs = 0L // 拖动起点——超范围弹回用
                             override fun onScrubStart(timeBar: TimeBar, position: Long) {
                                 scrubbingMs = position
+                                resumeMs = player.currentPosition
                             }
 
                             override fun onScrubMove(timeBar: TimeBar, position: Long) {
@@ -490,9 +492,22 @@ fun PlayerScreen(nav: NavHostController) {
                             }
 
                             override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
-                                // v0.267：重载逻辑已上移到 Player 级 onPositionDiscontinuity
-                                // （0.266 此处有绑定缺口，13:45 日志 pos 跳 97.9s 无 seek重载 行）
                                 scrubbingMs = null
+                                // v0.269（用户决策：放弃远程拖动）：源站是直播流水线切片，
+                                // 时间轴基准随真实时刻漂移（0.268 定案，15 轮三种错误全指向它）
+                                // ——超出已缓冲范围的拖动必然失败。只放行缓冲内拖动（样本已
+                                // 重定基在队列里，原生 seek 安全），越界弹回拖动起点
+                                if (canceled || isLive) return
+                                val buffered = player.bufferedPosition
+                                if (position > buffered + 500L) {
+                                    player.seekTo(resumeMs)
+                                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                                        "PLAYER", "拖动限制: 目标=${position / 1000}s 超出缓冲(至${buffered / 1000}s)→弹回${resumeMs / 1000}s"
+                                    )
+                                    android.widget.Toast.makeText(
+                                        context, "超出已缓冲范围，需顺序播放推进", android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                         })
                     }
@@ -520,40 +535,10 @@ fun PlayerScreen(nav: NavHostController) {
                 else videoSize.width.toFloat() / videoSize.height.toFloat()
             }
 
-            // v0.267：seek 全局拦截——0.266 的 TimeBar onScrubStop 有绑定缺口（13:45 日志
-            // 实锤 pos 0→97883 却无 seek重载 行），改在 Player 级监听不连续事件：
-            // 任何 UI 路径（进度条/手势/代码 seek）的 seek 都会触发 SEEK 原因的不连续，
-            // 统一走重载路径绕过 33 天绝对 PTS 的样本时间轴失配（数据 3s 下完仍卡 25s）
-            var seekReloadBusy = false
-            override fun onPositionDiscontinuity(
-                oldPosition: androidx.media3.common.Player.PositionInfo,
-                newPosition: androidx.media3.common.Player.PositionInfo,
-                reason: Int
-            ) {
-                if (seekReloadBusy || isLive) return
-                if (reason != androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) return
-                val target = newPosition.positionMs
-                seekReloadBusy = true
-                // v0.268：post 到监听回调外执行——0.267 在回调内直接 stop/prepare 触发闪退
-                // （无栈，已装崩溃捕获下轮定案）；media3 推荐回调内只记录、回调外变更状态
-                android.os.Handler(android.os.Looper.getMainLooper()).post {
-                    try {
-                        player.stop()
-                        player.seekTo(target)
-                        player.prepare()
-                        player.playWhenReady = true
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "seek重载: 目标=${target / 1000}s (回调外执行,PTS饿死规避)"
-                        )
-                    } catch (e: Exception) {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "seek重载失败: ${e.toString().take(140)}"
-                        )
-                    } finally {
-                        seekReloadBusy = false
-                    }
-                }
-            }
+            // v0.269：0.267/0.268 的 onPositionDiscontinuity 重载拦截已删除——
+            // 14:10 日志实锤重载到 pos>0 必触发 PARSING_CONTAINER_MALFORMED（源站
+            // 时间轴基准漂移，重载无法在非零位置完成准备）。拖动限制已在
+            // onScrubStop 做（只放行缓冲内拖动），此处不再拦任何 seek
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 // 直播流可能断开 → 自动重新解析续上，最多连续 5 次
