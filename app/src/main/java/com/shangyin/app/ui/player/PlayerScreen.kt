@@ -203,6 +203,7 @@ fun PlayerScreen(nav: NavHostController) {
                 chain.proceed(b.build())
             }
         var sniffLogCount = 0 // v0.261：前 3 次拦截请求留痕——消灭「门没开/没触发/没装上」盲区
+        var bigLogCount = 0 // v0.266：大响应日志独立计数器
         okhttpBuilder.addInterceptor { chain ->
             val req = chain.request()
             if (sniffLogCount < 3) {
@@ -218,7 +219,8 @@ fun PlayerScreen(nav: NavHostController) {
             // 足够精确，切片 1.6MB 被体积保险放行。所有分支（含静默路径）全部留痕
             val resp = chain.proceed(req)
             if ((resp.header("Content-Length")?.toLongOrNull() ?: 0L) > 512_000L) {
-                if (sniffLogCount < 5) { // 0.265：限流防刷屏（每片一条曾淹没关键取证行）
+                if (bigLogCount < 2) { // 0.266：独立计数器（原 sniffLogCount 只在拦截#分支自增永远<5，每片都打）
+                    bigLogCount++
                     com.shangyin.app.data.melon.MelonFlightLog.log(
                         "PLAYER", "嗅探跳过: 大响应 CL=${resp.header("Content-Length")} path=…${req.url.encodedPath.takeLast(40)}"
                     )
@@ -489,6 +491,22 @@ fun PlayerScreen(nav: NavHostController) {
 
                             override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
                                 scrubbingMs = null
+                                // v0.266：seek 饿死根因修复——源站视频是 33 天连续直播流切片，
+                                // TS 带绝对 PTS（0.265 定案 2.9e9ms 偏移），原生 seek 后样本时间轴
+                                // 与播放位置失配：数据 3 秒下完却 BUFFERING 卡满 25s（13:32 日志
+                                // 实锤），重载校零 PTS 后立即正常。统一改走重载路径
+                                if (canceled || isLive) return
+                                val cur = player.currentPosition
+                                if (kotlin.math.abs(position - cur) < 3000L) return
+                                runCatching {
+                                    player.stop()
+                                    player.seekTo(position)
+                                    player.prepare()
+                                    player.playWhenReady = true
+                                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                                        "PLAYER", "seek重载: 目标=${position / 1000}s (绕过PTS饿死,直接重载校零)"
+                                    )
+                                }
                             }
                         })
                     }
