@@ -481,10 +481,11 @@ fun PlayerScreen(nav: NavHostController) {
                     this@apply.findViewById<DefaultTimeBar>(media3R.id.exo_progress)?.let { bar ->
                         barBound.value = true
                         bar.addListener(object : TimeBar.OnScrubListener {
-                            var resumeMs = 0L // 拖动起点——超范围弹回用
+                            // v0.270（用户决策）：拖动完全放开——部分视频源时间轴正常可拖，
+                            // 不做缓冲范围限制。问题源（直播流水线切片）拖动失败由既有
+                            // 看门狗/自愈梯子兜底
                             override fun onScrubStart(timeBar: TimeBar, position: Long) {
                                 scrubbingMs = position
-                                resumeMs = player.currentPosition
                             }
 
                             override fun onScrubMove(timeBar: TimeBar, position: Long) {
@@ -493,21 +494,6 @@ fun PlayerScreen(nav: NavHostController) {
 
                             override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
                                 scrubbingMs = null
-                                // v0.269（用户决策：放弃远程拖动）：源站是直播流水线切片，
-                                // 时间轴基准随真实时刻漂移（0.268 定案，15 轮三种错误全指向它）
-                                // ——超出已缓冲范围的拖动必然失败。只放行缓冲内拖动（样本已
-                                // 重定基在队列里，原生 seek 安全），越界弹回拖动起点
-                                if (canceled || isLive) return
-                                val buffered = player.bufferedPosition
-                                if (position > buffered + 500L) {
-                                    player.seekTo(resumeMs)
-                                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                                        "PLAYER", "拖动限制: 目标=${position / 1000}s 超出缓冲(至${buffered / 1000}s)→弹回${resumeMs / 1000}s"
-                                    )
-                                    android.widget.Toast.makeText(
-                                        context, "超出已缓冲范围，需顺序播放推进", android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }
                             }
                         })
                     }
