@@ -889,6 +889,20 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.272（里世界第九入口「X站」：pektino.com 排行榜，2026-10-20）**：
+  站点=Next.js SSR 壳 + 客户端 JSON API（HTML 无数据，抓 _next chunk 才找到端点）。**实测 API（2026-10-20）**：
+  列表 `GET /api/media?range={daily|weekly|monthly|all}&page=N&per_page=50&sort={favorite|pv|time|created}&category={tagCode}&lang=zh-CN`
+  → `{items[],currentPage,lastPage,total}`；详情 `GET /api/media/{url_cd}` → 直链 mp4+封面+tags(**仅 tag_id 数字**，名称要查 /api/tags 的 id 表)+posted_at；标签 `GET /api/tags`。
+  **视频直链在 video.twimg.com（无 Referer/UA 要求、CORS *），封面 pbs.twimg.com——直连可播可下，无需 DoH/解密管线**（与 melon 图床完全不同的路数）。
+  条目**无标题字段**（纯缩略图排行榜），展示名统一「@推主」(tweet_account)。实现：
+  `data/xsite/XSiteClient.kt`（object，OkHttp JSON；tags 表进程内缓存+synchronized 单飞+失败回退内置表；收藏前缀常量 `COLLECT_PREFIX="pektino|"`）
+  + `ui/xsite/XSiteScreens.kt`（榜单 tabs 4 枚/标签横滑+展开面板/排序下拉/双列网格+名次角标/XPageBar 页码条带省略号跳页/详情封面即播+收藏 category="X视频"+原推直达）。
+  路由 `xsiteHome`/`xsiteDetail/{urlCd}`；收藏恢复走 ItemDetailScreen 新增 X视频分支（doubanId=pektino|{urlCd}，popUpTo 回收自身）。
+  本轮 code-review 修复四项：**下拉刷新失败 Toast 明示**（错误态分支只在 items 空时显示，有旧数据时静默=违反"失败要说出来"）；
+  **路由编码统一**（列表入口/恢复分支都 Uri.encode(urlCd)，detail() 路径段用 Uri.encode 而非 URLEncoder——后者是表单编码空格变+）；
+  **列表请求竞态 reqSeq**（去掉 `if(loading)return` 丢请求，改请求代序号：响应到达时 seq 不匹配整体丢弃，快速切换榜单不串台）；
+  **navigate 失败 Toast+回退**。版本：0.272/1272。
+
 - **v0.271（诊断子系统整体拆除，2026-10-20，视频线收口）**：
   用户决策「告一段落，诊断相关的都移除」。删除：MelonDiag.kt、MelonFlightLog.kt
   （含 CrashCapture）、SettingsScreen 诊断入口+弹窗、PlayerScreen 的 ENDLIST/嗅探
