@@ -226,50 +226,69 @@ fun PlayerScreen(nav: NavHostController) {
                 return@addInterceptor resp
             }
             try {
-                val body = resp.body?.string()
-                if (body == null) {
+                // v0.263：字节级嗅探——0.262 用 string() 把 16B 二进制密钥当文本解码破坏了
+                // （装机实钥 InvalidKeyException）。bytes() 原样读，非清单内容原字节放行
+                val bytes = resp.body?.bytes()
+                if (bytes == null) {
                     com.shangyin.app.data.melon.MelonFlightLog.log("PLAYER", "补丁跳过: body=null")
                     return@addInterceptor resp
                 }
-                val hasM3U = body.contains("#EXTM3U")
-                val hasInf = body.contains("#EXTINF")
-                val hasEnd = body.contains("#EXT-X-ENDLIST")
-                when {
-                    hasM3U && hasInf && !hasEnd -> {
+                val head = bytes.decodeToString(0, minOf(bytes.size, 512))
+                if (!head.startsWith("#EXTM3U")) {
+                    if (sniffLogCount < 6) {
                         com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "ENDLIST补丁: 已转VOD (len=${body.length}) 尾=${body.takeLast(60).replace('\n', '|')}"
+                            "PLAYER", "补丁跳过: 非列表 len=${bytes.size} path=…${req.url.encodedPath.takeLast(40)}"
                         )
-                        resp.newBuilder()
-                            .body(okhttp3.ResponseBody.create(null, (body.trimEnd() + "\n#EXT-X-ENDLIST\n").toByteArray(Charsets.UTF_8)))
-                            .removeHeader("Content-Length")
-                            .removeHeader("Content-Encoding")
-                            .build()
                     }
-                    hasM3U && hasInf && hasEnd -> {
-                        // 清单已含 ENDLIST 但 media3 仍直播化（dur 随真实时间涨）→ 矛盾实锤，dump 头尾
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "补丁跳过: 已含ENDLIST! 头=${body.take(80).replace('\n', '|')} 尾=${body.takeLast(60).replace('\n', '|')}"
-                        )
-                        resp.newBuilder().body(okhttp3.ResponseBody.create(null, body.toByteArray(Charsets.UTF_8))).build()
-                    }
-                    hasM3U -> {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "补丁跳过: 主列表(无EXTINF) len=${body.length} 头=${body.take(80).replace('\n', '|')}"
-                        )
-                        resp.newBuilder().body(okhttp3.ResponseBody.create(null, body.toByteArray(Charsets.UTF_8))).build()
-                    }
-                    else -> {
-                        if (sniffLogCount < 6) {
-                            com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "补丁跳过: 非列表 len=${body.length} path=…${req.url.encodedPath.takeLast(40)}"
-                            )
-                        }
-                        resp.newBuilder().body(okhttp3.ResponseBody.create(null, body.toByteArray(Charsets.UTF_8))).build()
-                    }
+                    return@addInterceptor resp
                 }
+                val text = bytes.decodeToString()
+                val hasInf = text.contains("#EXTINF")
+                val hasEnd = text.contains("#EXT-X-ENDLIST")
+                if (!hasInf) {
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "补丁跳过: 主列表 len=${text.length} 头=${text.take(100).replace('\n', '|')}"
+                    )
+                    return@addInterceptor resp.newBuilder()
+                        .body(okhttp3.ResponseBody.create(null, bytes)).build()
+                }
+                if (hasEnd) {
+                    // v0.263 定案现场：清单已含 ENDLIST 但 media3 仍直播化（dur 随真实时间涨）。
+                    // 唯一可见异常=非标准标签（#EXT-X-WJ-T 等）/ PDT——剥离后喂 media3（修复假设），
+                    // 同时 dump 标签名+EXTINF 样本供下轮核验
+                    val tagNames = Regex("#EXT-X-[A-Za-z0-9-]+").findAll(text)
+                        .map { it.value }.distinct().take(12).joinToString(",")
+                    val firstInf = Regex("#EXTINF:[0-9.,]+").find(text)?.value ?: "无"
+                    val pdtCount = Regex("#EXT-X-PROGRAM-DATE-TIME").findAll(text).count()
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "清单诊断: 标签[$tagNames] $firstInf PDT=$pdtCount len=${text.length}"
+                    )
+                    val cleaned = text.lineSequence()
+                        .filter { !it.startsWith("#EXT-X-PROGRAM-DATE-TIME") && !it.startsWith("#EXT-X-WJ-") }
+                        .joinToString("\n")
+                    if (cleaned.length != text.length) {
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "标签剥离: ${text.length}→${cleaned.length} (PDT/WJ已除)"
+                        )
+                    }
+                    return@addInterceptor resp.newBuilder()
+                        .body(okhttp3.ResponseBody.create(null, cleaned.toByteArray(Charsets.UTF_8)))
+                        .removeHeader("Content-Length")
+                        .removeHeader("Content-Encoding")
+                        .build()
+                }
+                // 无 ENDLIST 的媒体清单（0.254 原场景）→ 补 ENDLIST 转 VOD
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER", "ENDLIST补丁: 已转VOD (len=${text.length})"
+                )
+                resp.newBuilder()
+                    .body(okhttp3.ResponseBody.create(null, (text.trimEnd() + "\n#EXT-X-ENDLIST\n").toByteArray(Charsets.UTF_8)))
+                    .removeHeader("Content-Length")
+                    .removeHeader("Content-Encoding")
+                    .build()
             } catch (e: Exception) {
                 com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "ENDLIST补丁异常: ${e.toString().take(200)}"
+                    "PLAYER", "补丁异常: ${e.toString().take(200)}"
                 )
                 throw e
             }
