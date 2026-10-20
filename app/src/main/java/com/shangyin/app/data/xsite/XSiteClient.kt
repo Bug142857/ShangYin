@@ -39,9 +39,6 @@ object XSiteClient {
     /** 排行范围（与站点 tab 一致：每日/每周/每月/总榜） */
     val RANGES = listOf("每日" to "daily", "每周" to "weekly", "每月" to "monthly", "总榜" to "all")
 
-    /** 排序（与站点一致：按点赞/按观看/按时长/最新添加） */
-    val SORTS = listOf("按点赞" to "favorite", "按观看" to "pv", "按时长" to "time", "最新" to "created")
-
     /** 每页条数（站点 web 端同款） */
     const val PER_PAGE = 50
 
@@ -153,20 +150,18 @@ object XSiteClient {
     /**
      * 拉取排行列表。
      * @param range 范围代码（RANGES 第二列）
-     * @param sort 排序代码（SORTS 第二列）
      * @param category 标签 code；空 = 全部
      */
     suspend fun list(
         range: String,
         page: Int,
-        sort: String,
         category: String = ""
     ): XPage = withContext(Dispatchers.IO) {
         val q = buildList {
             add("range=" + URLEncoder.encode(range, "UTF-8"))
             add("page=${page.coerceAtLeast(1)}")
             add("per_page=$PER_PAGE")
-            add("sort=" + URLEncoder.encode(sort, "UTF-8"))
+            add("sort=favorite") // 0.273：排序入口按用户要求移除，固定站点默认（按点赞）
             if (category.isNotBlank()) add("category=" + URLEncoder.encode(category, "UTF-8"))
             add("lang=zh-CN")
         }.joinToString("&")
