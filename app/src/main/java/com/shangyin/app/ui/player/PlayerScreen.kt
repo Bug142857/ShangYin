@@ -182,7 +182,12 @@ fun PlayerScreen(nav: NavHostController) {
         // 系统 DNS 解析到的 CDN 节点在本运营商网内不可达（个别坏节点）。ExoPlayer 内建
         // HTTP 栈无法接自定义 DNS；okhttp 栈 + GeneralDohDns（系统+DoH 合并解析）让
         // 坏节点被逐 IP 试连自动跳过。采集站校验 UA 的 http↔https 跳转 okhttp 默认跟随。
-        val okhttpClient = okhttp3.OkHttpClient.Builder()
+        // v0.259：ENDLIST 补丁从 DataSource 包装层下沉到 okhttp 拦截器层——v0.258 在
+        // open() 内整读+提前 close upstream，违反 Loader 的 open/read/close 一一对应
+        // 契约，装机实锤清单加载同步 NPE（Loader$UnexpectedLoaderException 包装）。
+        // 拦截器层零状态：直接改写 m3u8 响应体，media3 看到的是完全正常的 DataSource。
+        // 仅点播启用——真直播列表本来就无 ENDLIST，补了会被强转 VOD 播完即停
+        val okhttpBuilder = okhttp3.OkHttpClient.Builder()
             .dns(com.shangyin.app.data.melon.GeneralDohDns)
             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
             // v0.250：15s→10s——CDN 有间歇超时切片（0.249 探针片20 SocketTimeout），
@@ -197,17 +202,51 @@ fun PlayerScreen(nav: NavHostController) {
                 }
                 chain.proceed(b.build())
             }
-            .build()
+        if (!isLive) okhttpBuilder.addInterceptor { chain ->
+            val req = chain.request()
+            if (!req.url.encodedPath.endsWith(".m3u8")) return@addInterceptor chain.proceed(req)
+            val resp = chain.proceed(req)
+            // v0.258 根因修复（v0.259 落点）：站点 m3u8 缺 #EXT-X-ENDLIST（0.254 定案）
+            // → 353s 的 VOD 被当 32 天直播流，进度条全长失真、seek 落点必然在内容外。
+            // 这里原位补一行 ENDLIST，media3 按 EXTINF 求和得真实时长，seek/进度条恢复正确
+            try {
+                val body = resp.body?.string() ?: return@addInterceptor resp
+                val needsPatch = body.contains("#EXTM3U") && body.contains("#EXTINF") &&
+                    !body.contains("#EXT-X-ENDLIST")
+                val out = if (needsPatch) {
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "ENDLIST补丁: 直播化列表已转VOD (len=${body.length})"
+                    )
+                    body.trimEnd() + "\n#EXT-X-ENDLIST\n"
+                } else {
+                    if (!body.contains("#EXTM3U")) {
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "ENDLIST补丁跳过: 非列表内容 (len=${body.length})"
+                        )
+                    }
+                    body
+                }
+                // string() 已消费原 body，必须重建；去掉 Content-Length/Encoding（补丁后
+                // 长度已变且可能被透明 gzip 解码过），media3 按 EOF 读清单
+                resp.newBuilder()
+                    .body(
+                        okhttp3.ResponseBody.create(
+                            null, out.toByteArray(Charsets.UTF_8)
+                        )
+                    )
+                    .removeHeader("Content-Length")
+                    .removeHeader("Content-Encoding")
+                    .build()
+            } catch (e: Exception) {
+                com.shangyin.app.data.melon.MelonFlightLog.log(
+                    "PLAYER", "ENDLIST补丁异常: ${e.toString().take(200)}"
+                )
+                throw e
+            }
+        }
+        val okhttpClient = okhttpBuilder.build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okhttpClient)
-        // v0.258 根因修复：站点 m3u8 缺 #EXT-X-ENDLIST（0.254 定案）→ 353s 的 VOD 被当
-        // 32 天直播流，进度条全长失真、seek 落点必然在内容外。列表加载时原位补 ENDLIST
-        // （几 KB 内存补丁），时长/进度条/seek 直接恢复正确；
-        // 0.254~0.257 的整片下载镜像方案被取代并移除。
-        // 仅点播页启用——电视直播（isLive）的列表本来就无 ENDLIST（真直播），补了会被
-        // 强转 VOD 播完即停（code-review 拦截）
-        val baseDsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
-        val dsFactory = if (isLive) baseDsFactory
-        else com.shangyin.app.data.melon.EndlistPatchDataSourceFactory(baseDsFactory)
+        val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
         // 起播优化：ExoPlayer 默认攒 2500ms 缓冲才开播，调到 1200ms 明显加快出画面；
         // 后续仍缓冲 30~60s 保证播放流畅，卡住再播阈值 3000ms
         // 直播的缓冲与点播分开：直播流可能"发一段就断"，

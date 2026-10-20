@@ -889,6 +889,22 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.259（ENDLIST 补丁下沉 okhttp 拦截器 / DataSource 包装层翻车返工，2026-10-20）**：
+  v0.258 装机**直接打不开**：清单加载同步 NPE（`Loader$UnexpectedLoaderException` 包装
+  "Unexpected NullPointerException"），每秒自愈死循环。根因：DataSource 包装层在 open()
+  内整读清单+**提前 close upstream** 再从内存回放——违反 Loader 的 open/read/close
+  一一对应契约（Loader 收尾还会向已 close 的 upstream 取 uri/responseHeaders 等状态）。
+  反编译定位：`Loader$UnexpectedLoaderException` = media3 把 load 路径的 RuntimeException
+  包装成 "Unexpected <类名>: <消息>"（jarscan "Unexpected " 一击定位）。
+  修复 = 补丁整体**下沉 okhttp 拦截器层**：对 .m3u8 响应 string() 全读→补 ENDLIST→
+  重建 body（removeHeader Content-Length/Encoding，透明 gzip 已解码）→异常即 log
+  (toString 200 字符)重抛。media3 看到完全正常的 DataSource，零生命周期干预，NPE 向量
+  消灭。仅 !isLive 拦截（真直播列表本来就无 ENDLIST）。DataSource 包装文件删除。
+  **教训：①包装 DataSource 必须严守 open/read/close 对应契约，open 内提前 close upstream
+  = 状态机污染；②流改写能下沉网络栈层（拦截器）就下沉——那里没有生命周期；③
+  jar 反汇编 grep 常量字符串是定位异常包装点的最快手段。**
+  版本：0.259/1259。
+
 - **v0.258（ENDLIST 原位补丁根治 / 镜像方案整体拆除，2026-10-20）**：
   用户两点批评定调：①APK 没拷桌面（0.257 发版漏了拷贝步骤，已补）；②**「什么换源什么
   镜像什么本地，就一个源换什么，哪有本地文件，主要就是在线看的——解决出发点就错了，
