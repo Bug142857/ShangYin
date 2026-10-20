@@ -889,6 +889,17 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.274（X站四反馈修复：timely 实锤/位置恢复，2026-10-20）**：
+  四反馈：①封面下载角标移除（播放器里有下载即可，封面整块可点）②分类展开箭头方向对调（收起=ArrowDropDown/展开=ArrowDropUp）③「每日=总榜」④「播放返回不回原位」。
+  **③根因抓 chunk 实锤（XSiteScreens 反查站点 JS）**：站点 fetchMediaList（chunk 9446 模块）默认 range="timely"，tab 集合=timely/weekly/monthly/all+心形 favorite（favorite 是并列 tab 不是纯排序参数）；
+  **"daily" 是非法值，服务端静默忽略并回退全量**——0.273 固定 sort=favorite 后四个 tab 全变全量榜的真相。实测佐证：
+  timely 空窗口时返回 total=0（浏览器实测站点自身日間此刻也是空的），weekly+favorite=255、monthly+favorite=2069 各自独立。
+  修复=每日→timely；空窗口由 0.273 的空态文案明示（比站点还诚实）。④修复=XSiteCache 恢复存 items/page/lastPage/total/scrollIndex
+  （snapshotFlow 实时记滚动位；进入时 restoredRef 分支先恢复不重拉，数据停留离开时现场，下拉可刷新；0.273 旧缓存存了非法 "daily" 有归位兜底：
+  RANGES.any 校验失败回退 timely）。
+  review 修复三项：XSiteClient 头注释 range 文档同步 timely；恢复位钳制 coerceIn(0, items.lastIndex)（末页不足 50 条防越界定位）；恢复路径注释与行为对齐。
+  **方法论沉淀：站点行为的最终裁判是站点自己的 JS+浏览器实测**——curl 黑盒探测会撞上服务端静默回退（非法 range→全量、空窗口→回退）这类伪装成正常值的坑，先抓 chunk 看默认参数再下结论。版本：0.274/1274。
+
 - **v0.273（X站反馈改版：直接播放/去排序/去收藏/切榜必响应，2026-10-20）**：
   用户三条反馈：①「点每日不好使…点完没反应」②「排序筛选移除」③「视频点击直接播放，不需要收藏，只要播放和下载」。
   实测先排掉数据嫌疑：**daily 有 360433 条、50 条/页、lastPage=7209，全字段在、urlCd 无重复**——「空/没反应」是纯 UI 反馈问题
