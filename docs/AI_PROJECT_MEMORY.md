@@ -889,6 +889,19 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.273（X站反馈改版：直接播放/去排序/去收藏/切榜必响应，2026-10-20）**：
+  用户三条反馈：①「点每日不好使…点完没反应」②「排序筛选移除」③「视频点击直接播放，不需要收藏，只要播放和下载」。
+  实测先排掉数据嫌疑：**daily 有 360433 条、50 条/页、lastPage=7209，全字段在、urlCd 无重复**——「空/没反应」是纯 UI 反馈问题
+  （0.272 切榜单时旧列表冻结在屏上无任何加载指示，响应到了才换内容）。
+  修复/改动：**loadNav 先清 items 再发请求**（转圈立现）+ 空态明示「该榜单暂无内容，可换个榜单或标签试试」+
+  **点已选中的榜单/标签/全部 chip = 刷新该榜单**（任何点击都有响应）；排序下拉整块删除（client `sort=favorite` 固定）；
+  **卡片点击直接 playPost 进播放器**（列表项自带 twimg 直链，不再先过详情页；PlayerSession 字段与 melon.play 同款，itemId=mediaId 记进度）；
+  **收藏全拆**（CollectDialog/Repo/收藏按钮/XSiteCache 里 sort+loadedKey+items 全清，XSiteCache 只留 range/category——
+  每次进入重拉第 1 页，排行要新鲜）；**下载两入口**：卡片左下角标 + 详情顶栏（详情降级为收藏恢复遗留路径）。
+  code-review 修复三项：**下拉刷新纳入 reqSeq 竞态防护**（0.272 漏网：刷新在途切榜单旧响应会覆盖新现场）；
+  「全部」chip 死点击补齐（已是全部再点=刷新）；**下载角标用 Box 不用 IconButton**（M3 最小触控目标扩到 48dp
+  侵占卡片可点击区，点左下角会误触下载而非播放）。版本：0.273/1273。
+
 - **v0.272（里世界第九入口「X站」：pektino.com 排行榜，2026-10-20）**：
   站点=Next.js SSR 壳 + 客户端 JSON API（HTML 无数据，抓 _next chunk 才找到端点）。**实测 API（2026-10-20）**：
   列表 `GET /api/media?range={daily|weekly|monthly|all}&page=N&per_page=50&sort={favorite|pv|time|created}&category={tagCode}&lang=zh-CN`
