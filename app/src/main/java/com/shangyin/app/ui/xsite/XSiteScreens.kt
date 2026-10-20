@@ -65,6 +65,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -127,10 +128,15 @@ private fun downloadPost(context: android.content.Context, post: XPost) {
     ).show()
 }
 
-/** X站会话缓存（进程内）：只记所选榜单/标签（0.273 起每次进入都重拉第 1 页，排行要新鲜） */
+/** X站会话缓存（进程内）：榜单/标签/整页数据/滚动位——播放后返回原地继续（0.274 反馈4） */
 private object XSiteCache {
-    var range: String = "daily"
+    var range: String = "timely"
     var category: String = ""   // "" = 全部
+    var page: Int = 1
+    var lastPage: Int = 0
+    var total: Int = 0
+    var items: List<XPost> = emptyList()
+    var scrollIndex: Int = 0
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -139,15 +145,20 @@ fun XSiteHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    var range by remember { mutableStateOf(XSiteCache.range) }
+    // 0.273 的缓存可能存着非法 range("daily")，进来先归位到站点真实值，否则没有 chip 会亮
+    var range by remember {
+        mutableStateOf(XSiteCache.range.takeIf { r -> XSiteClient.RANGES.any { it.second == r } } ?: "timely")
+    }
     var category by remember { mutableStateOf(XSiteCache.category) }
-    var items by remember { mutableStateOf<List<XPost>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
+    // 有缓存现场则先恢复（播放后返回不丢位置，0.274 反馈4），恢复完成后走正常加载
+    var restoredRef by remember { mutableStateOf(XSiteCache.items.isNotEmpty()) }
+    var items by remember { mutableStateOf(XSiteCache.items) }
+    var loading by remember { mutableStateOf(XSiteCache.items.isEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
-    var currentPage by remember { mutableIntStateOf(1) }
-    var lastPage by remember { mutableIntStateOf(0) }
-    var total by remember { mutableIntStateOf(0) }
+    var currentPage by remember { mutableIntStateOf(XSiteCache.page) }
+    var lastPage by remember { mutableIntStateOf(XSiteCache.lastPage) }
+    var total by remember { mutableIntStateOf(XSiteCache.total) }
     var lastRequested by remember { mutableIntStateOf(1) } // 失败重试要重复的请求页码
     var reqSeq by remember { mutableIntStateOf(0) }        // 请求代序号：丢弃被更新的请求所取代的旧响应
     var catList by remember { mutableStateOf<List<XCategory>?>(null) } // null=标签加载中
@@ -177,9 +188,13 @@ fun XSiteHomeScreen(nav: NavHostController) {
                 total = p.total
                 currentPage = page
                 gridState.scrollToItem(0)
-                // 成功后同步现场缓存（下次进入回到同一榜单/标签）
+                // 成功后同步现场缓存（播放后返回原地恢复，0.274 反馈4）
                 XSiteCache.range = r
                 XSiteCache.category = c
+                XSiteCache.page = currentPage
+                XSiteCache.lastPage = lastPage
+                XSiteCache.total = total
+                XSiteCache.items = items
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -191,9 +206,23 @@ fun XSiteHomeScreen(nav: NavHostController) {
         }
     }
 
-    // 榜单/标签变化 → 清屏回第 1 页重载（转圈立即出现，加载失败显示错误+重试）
+    // 榜单/标签变化 → 回第 1 页重载；首次进入若有缓存现场则恢复滚动位（播放后返回原地，
+    // 数据停留在离开时的现场，顶部下拉可刷新）
     LaunchedEffect(range, category) {
-        loadNav(1)
+        if (restoredRef) {
+            restoredRef = false
+            // 缓存的滚动位可能超过本次列表长度（末页不足 50 条），钳到最后一个 item
+            val maxIdx = (XSiteCache.items.size - 1).coerceAtLeast(0)
+            val target = XSiteCache.scrollIndex.coerceIn(0, maxIdx)
+            if (target > 0) gridState.scrollToItem(target)
+        } else {
+            loadNav(1)
+        }
+    }
+
+    // 滚动位实时写缓存，离开页面（进播放器）后可恢复
+    LaunchedEffect(gridState) {
+        snapshotFlow { gridState.firstVisibleItemIndex }.collect { XSiteCache.scrollIndex = it }
     }
 
     Scaffold(
@@ -275,7 +304,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                         }
                     }
                     IconButton(onClick = { catExpanded = true }) {
-                        Icon(Icons.Rounded.ArrowDropUp, contentDescription = "展开标签")
+                        Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开标签")
                     }
                 }
             } else {
@@ -295,7 +324,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                             fontWeight = FontWeight.Bold
                         )
                         IconButton(onClick = { catExpanded = false }) {
-                            Icon(Icons.Rounded.ArrowDropDown, contentDescription = "收起标签")
+                            Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起标签")
                         }
                     }
                     FlowRow(
@@ -364,6 +393,10 @@ fun XSiteHomeScreen(nav: NavHostController) {
                                     gridState.scrollToItem(0)
                                     XSiteCache.range = r
                                     XSiteCache.category = c
+                                    XSiteCache.page = 1
+                                    XSiteCache.lastPage = lastPage
+                                    XSiteCache.total = total
+                                    XSiteCache.items = items
                                 }
                                 .onFailure { e ->
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -392,8 +425,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                             XPostCard(
                                 post = post,
                                 rank = (currentPage - 1) * XSiteClient.PER_PAGE + index + 1,
-                                onClick = { playPost(nav, post) },
-                                onDownload = { downloadPost(context, post) }
+                                onClick = { playPost(nav, post) }
                             )
                         }
                         // 底部：页码条（跨双列）
@@ -582,10 +614,11 @@ private fun XPageBar(currentPage: Int, lastPage: Int, loading: Boolean, onGo: (I
     }
 }
 
-/** 排行卡片：封面（3:4 裁切，兼容横竖屏缩略图）+ 名次角标 + 下载/时长角标 + 推主/点赞。
- *  点击 = 直接播放（0.273 用户定：这类模块点开就播，不设收藏） */
+/** 排行卡片：封面（3:4 裁切，兼容横竖屏缩略图）+ 名次角标 + 时长角标 + 推主/点赞。
+ *  点击 = 直接播放（0.273 用户定：这类模块点开就播，不设收藏）。
+ *  不放下载角标（0.274 反馈1：封面要整块可点，下载用播放器里的） */
 @Composable
-private fun XPostCard(post: XPost, rank: Int, onClick: () -> Unit, onDownload: () -> Unit) {
+private fun XPostCard(post: XPost, rank: Int, onClick: () -> Unit) {
     Column(Modifier.clickable(onClick = onClick)) {
         Box(
             Modifier
@@ -623,24 +656,6 @@ private fun XPostCard(post: XPost, rank: Int, onClick: () -> Unit, onDownload: (
                     fontWeight = FontWeight.Bold,
                     color = Color.White,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                )
-            }
-            // 下载角标（左下，独立点击区不与卡片播放冲突；用 Box 而非 IconButton——
-            // M3 最小触控目标会把命中区扩到 48dp 侵占卡片导致误触下载）
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(4.dp)
-                    .size(30.dp)
-                    .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(15.dp))
-                    .clickable(onClick = onDownload)
-            ) {
-                Icon(
-                    Icons.Rounded.Download,
-                    contentDescription = "下载",
-                    tint = Color.White,
-                    modifier = Modifier.size(18.dp)
                 )
             }
             // 时长角标（右下）

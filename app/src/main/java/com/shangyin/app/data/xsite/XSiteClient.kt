@@ -13,9 +13,10 @@ import java.util.concurrent.TimeUnit
  * X站（里世界第九入口）：pektino.com —— X(Twitter) 免费成人视频保存排行榜。
  *
  * 与其它模块不同，本站是 Next.js 站点，列表/详情全部走官方 JSON API（2026-10-20 实测）：
- *  - 排行列表：GET /api/media?range={daily|weekly|monthly|all}&page=N&per_page=50
- *      &sort={favorite|pv|time|created}&category={tagCode}&lang=zh-CN
+ *  - 排行列表：GET /api/media?range={timely|weekly|monthly|all}&page=N&per_page=50
+ *      &sort=favorite&category={tagCode}&lang=zh-CN
  *      → { items[], currentPage, lastPage, total, perPage }（数字分页，天然支持页码条）
+ *      （range 用站点默认 timely；"daily" 是非法值会被服务端忽略并回退全量）
  *  - 详情：GET /api/media/{url_cd} → 直链 mp4 + 封面 + 标签 + 评论 + 原推链接
  *  - 标签：GET /api/tags → 本地化名称（name_zh_cn）+ code（列表 category 参数用）
  *
@@ -36,8 +37,13 @@ object XSiteClient {
     const val UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
-    /** 排行范围（与站点 tab 一致：每日/每周/每月/总榜） */
-    val RANGES = listOf("每日" to "daily", "每周" to "weekly", "每月" to "monthly", "总榜" to "all")
+    /**
+     * 排行范围（与站点 tab 一致：日間/週間/月間/全期間）。
+     * 站点 fetchMediaList 默认 range="timely"（0.274 抓 chunk 实锤）；"daily" 是非法值，
+     * 服务端会静默忽略并回退全量（0.273 每日=总榜的根因）。24h 窗口无数据时 timely 返回空
+     * （站点自身同样空，浏览器实测 2026-10-20），由 UI 空态明示。
+     */
+    val RANGES = listOf("每日" to "timely", "每周" to "weekly", "每月" to "monthly", "总榜" to "all")
 
     /** 每页条数（站点 web 端同款） */
     const val PER_PAGE = 50
