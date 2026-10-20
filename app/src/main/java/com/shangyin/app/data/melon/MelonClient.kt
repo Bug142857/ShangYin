@@ -296,12 +296,6 @@ object MelonClient {
                     else -> "$base/$path"
                 }
                 val html = httpGet(url)
-                // v0.241 黑匣子：HTML 长度 + 封面脚本出现次数——「cover=null 纯文字卡片」
-                // 之谜的一手证据（PC 无法复现，只能设备自证）
-                MelonFlightLog.log(
-                    "DOC", "url=${url.substringAfter(base)} len=${html.length} " +
-                        "loadBannerDirect×${Regex("loadBannerDirect").findAll(html).count()}"
-                )
                 if (html.isBlank()) throw IOException("站点返回空内容")
                 collectPicHosts(html) // 顺手收集页面里的图床域名（图片 fallback 候选）
                 return@withContext Jsoup.parse(html, url)
@@ -392,12 +386,6 @@ object MelonClient {
     private suspend fun list(firstPath: String, nextPath: String? = null): MelonPage {
         // 消费端再归一一次：MelonHomeCache 里可能有旧版本写入的 "/2/" 形态脏数据
         val page = parseList(doc(nextPath?.let { normalizeNext(it) } ?: firstPath))
-        // v0.241 黑匣子：解析层统计——「有封面=0」说明 App 拿的 HTML 里没有封面脚本
-        // （服务器按客户端下发），与截图里纯文字卡片互证
-        MelonFlightLog.log(
-            "PARSE", "items=${page.items.size} 有封面=${page.items.count { it.cover != null }} " +
-                "next=${page.nextPath ?: "null"} 首条cover=${page.items.firstOrNull()?.cover ?: "null"}"
-        )
         // v0.242：WebView 管线预热已删除（0.235~0.241 ensure 从未就绪，死路退役；
         // 图片走 MelonImageCipher 原生解密，无需预热）
         return page

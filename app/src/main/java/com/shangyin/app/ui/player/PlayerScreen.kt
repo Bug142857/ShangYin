@@ -155,16 +155,8 @@ fun PlayerScreen(nav: NavHostController) {
     // 下载确认弹窗（v0.225）：title to url；null = 不显示
     var pendingDownload by remember { mutableStateOf<Pair<String, String>?>(null) }
     // v0.254：播放页实时下载进度角标——用户点下载后留在播放页，眼睛不在这，
-    // 「后台进度条没动」的感知一半来自这里没有可见反馈。订阅同一 StateFlow，
-    // 每次变化打观察日志（UI 侧是否真收到更新，下轮诊断一步定性）
+    // 「后台进度条没动」的感知一半来自这里没有可见反馈。订阅同一 StateFlow
     val dlTasks by com.shangyin.app.data.download.VideoDownloadManager.active.collectAsState()
-    LaunchedEffect(dlTasks) {
-        val t = dlTasks.values.firstOrNull() ?: return@LaunchedEffect
-        com.shangyin.app.data.melon.MelonFlightLog.log(
-            "DOWNLOADUI", "播放页观察 ${t.title.take(20)} ${(t.progress * 100).toInt()}% " +
-                "${"%.1f".format(t.bytesCopied / 1048576f)}MB err=${t.error?.take(20) ?: "无"}"
-        )
-    }
     var groupIndex by remember {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
     }
@@ -182,11 +174,6 @@ fun PlayerScreen(nav: NavHostController) {
         // 系统 DNS 解析到的 CDN 节点在本运营商网内不可达（个别坏节点）。ExoPlayer 内建
         // HTTP 栈无法接自定义 DNS；okhttp 栈 + GeneralDohDns（系统+DoH 合并解析）让
         // 坏节点被逐 IP 试连自动跳过。采集站校验 UA 的 http↔https 跳转 okhttp 默认跟随。
-        // v0.259：ENDLIST 补丁从 DataSource 包装层下沉到 okhttp 拦截器层——v0.258 在
-        // open() 内整读+提前 close upstream，违反 Loader 的 open/read/close 一一对应
-        // 契约，装机实锤清单加载同步 NPE（Loader$UnexpectedLoaderException 包装）。
-        // 拦截器层零状态：直接改写 m3u8 响应体，media3 看到的是完全正常的 DataSource。
-        // 仅点播启用——真直播列表本来就无 ENDLIST，补了会被强转 VOD 播完即停
         val okhttpBuilder = okhttp3.OkHttpClient.Builder()
             .dns(com.shangyin.app.data.melon.GeneralDohDns)
             .connectTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
@@ -202,109 +189,6 @@ fun PlayerScreen(nav: NavHostController) {
                 }
                 chain.proceed(b.build())
             }
-        var sniffLogCount = 0 // v0.261：前 3 次拦截请求留痕——消灭「门没开/没触发/没装上」盲区
-        var bigLogCount = 0 // v0.266：大响应日志独立计数器
-        okhttpBuilder.addInterceptor { chain ->
-            val req = chain.request()
-            if (sniffLogCount < 3) {
-                sniffLogCount++
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "拦截#$sniffLogCount live=$isLive path=…${req.url.encodedPath.takeLast(60)}"
-                )
-            }
-            // 直播不补 ENDLIST（真直播列表本就无 ENDLIST，补了播完即停）
-            if (isLive) return@addInterceptor chain.proceed(req)
-            // v0.262：不再按 URL 形态设门（0.261 铁证：门开着、请求流经、却零留痕）——
-            // 非直播下所有 ≤512KB 响应一律嗅探；补丁条件（#EXTM3U+#EXTINF+无ENDLIST）本身
-            // 足够精确，切片 1.6MB 被体积保险放行。所有分支（含静默路径）全部留痕
-            val resp = chain.proceed(req)
-            if ((resp.header("Content-Length")?.toLongOrNull() ?: 0L) > 512_000L) {
-                if (bigLogCount < 2) { // 0.266：独立计数器（原 sniffLogCount 只在拦截#分支自增永远<5，每片都打）
-                    bigLogCount++
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "嗅探跳过: 大响应 CL=${resp.header("Content-Length")} path=…${req.url.encodedPath.takeLast(40)}"
-                    )
-                }
-                return@addInterceptor resp
-            }
-            try {
-                // v0.263：字节级嗅探——0.262 用 string() 把 16B 二进制密钥当文本解码破坏了
-                // （装机实钥 InvalidKeyException）。bytes() 原样读，非清单内容原字节放行
-                val bytes = resp.body?.bytes()
-                if (bytes == null) {
-                    com.shangyin.app.data.melon.MelonFlightLog.log("PLAYER", "补丁跳过: body=null")
-                    return@addInterceptor resp
-                }
-                val head = bytes.decodeToString(0, minOf(bytes.size, 512))
-                if (!head.startsWith("#EXTM3U")) {
-                    if (sniffLogCount < 6) {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "补丁跳过: 非列表 len=${bytes.size} path=…${req.url.encodedPath.takeLast(40)}"
-                        )
-                    }
-                    // v0.264 修复：bytes() 已消费原 body，必须用原字节重建——0.263 直接返回
-                    // 原响应导致 media3 再读时 IOException: closed（装机实锤 KEY 全挂）
-                    return@addInterceptor resp.newBuilder()
-                        .body(okhttp3.ResponseBody.create(null, bytes)).build()
-                }
-                val text = bytes.decodeToString()
-                val hasInf = text.contains("#EXTINF")
-                val hasEnd = text.contains("#EXT-X-ENDLIST")
-                if (!hasInf) {
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "补丁跳过: 主列表 len=${text.length} 头=${text.take(100).replace('\n', '|')}"
-                    )
-                    return@addInterceptor resp.newBuilder()
-                        .body(okhttp3.ResponseBody.create(null, bytes)).build()
-                }
-                if (hasEnd) {
-                    // v0.263 定案现场：清单已含 ENDLIST 但 media3 仍直播化（dur 随真实时间涨）。
-                    // 唯一可见异常=非标准标签（#EXT-X-WJ-T 等）/ PDT——剥离后喂 media3（修复假设），
-                    // 同时 dump 标签名+EXTINF 样本供下轮核验
-                    val tagNames = Regex("#EXT-X-[A-Za-z0-9-]+").findAll(text)
-                        .map { it.value }.distinct().take(12).joinToString(",")
-                    val firstInf = Regex("#EXTINF:[0-9.,]+").find(text)?.value ?: "无"
-                    val pdtCount = Regex("#EXT-X-PROGRAM-DATE-TIME").findAll(text).count()
-                    val mediaSeq = Regex("#EXT-X-MEDIA-SEQUENCE:(-?\\d+)").find(text)?.groupValues?.get(1) ?: "-"
-                    val wjSample = Regex("#EXT-X-WJ-T:[^\r\n]*").findAll(text).take(2)
-                        .map { it.value.take(50) }.joinToString(" / ")
-                    val firstSeg = text.lineSequence().firstOrNull { it.isNotBlank() && !it.startsWith("#") }?.take(80) ?: "无"
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "清单诊断: 标签[$tagNames] $firstInf PDT=$pdtCount MSEQ=$mediaSeq"
-                    )
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "清单诊断2: WJ[$wjSample] 首片=$firstSeg"
-                    )
-                    val cleaned = text.lineSequence()
-                        .filter { !it.startsWith("#EXT-X-PROGRAM-DATE-TIME") && !it.startsWith("#EXT-X-WJ-") }
-                        .joinToString("\n")
-                    if (cleaned.length != text.length) {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "标签剥离: ${text.length}→${cleaned.length} (PDT/WJ已除)"
-                        )
-                    }
-                    return@addInterceptor resp.newBuilder()
-                        .body(okhttp3.ResponseBody.create(null, cleaned.toByteArray(Charsets.UTF_8)))
-                        .removeHeader("Content-Length")
-                        .removeHeader("Content-Encoding")
-                        .build()
-                }
-                // 无 ENDLIST 的媒体清单（0.254 原场景）→ 补 ENDLIST 转 VOD
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "ENDLIST补丁: 已转VOD (len=${text.length})"
-                )
-                resp.newBuilder()
-                    .body(okhttp3.ResponseBody.create(null, (text.trimEnd() + "\n#EXT-X-ENDLIST\n").toByteArray(Charsets.UTF_8)))
-                    .removeHeader("Content-Length")
-                    .removeHeader("Content-Encoding")
-                    .build()
-            } catch (e: Exception) {
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "补丁异常: ${e.toString().take(200)}"
-                )
-                throw e
-            }
-        }
         val okhttpClient = okhttpBuilder.build()
         val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okhttpClient)
         val dsFactory = androidx.media3.datasource.DefaultDataSource.Factory(context, httpFactory)
@@ -599,10 +483,6 @@ fun PlayerScreen(nav: NavHostController) {
         player.prepare()
         player.playWhenReady = true
         currentEp = startIdx
-        // v0.261：完整留痕 ep.url 形态（后缀有无一步定性，替代截断展示的猜谜）
-        com.shangyin.app.data.melon.MelonFlightLog.log(
-            "PLAYER", "加载列表 url=${eps.getOrNull(startIdx)?.url?.take(160)}"
-        )
         if (startPos > 0L) Toast.makeText(context, "已从上次位置继续播放", Toast.LENGTH_SHORT).show()
         // v0.258：本地镜像整片下载方案已移除——根因（m3u8 缺 ENDLIST 被当直播流）改由
         // EndlistPatchDataSource 在线列表补丁直接修复，无需下载整片。镜像方案 0.254~0.257
@@ -696,12 +576,6 @@ fun PlayerScreen(nav: NavHostController) {
                 bufferingSince = if (playbackState == Player.STATE_BUFFERING) System.currentTimeMillis() else 0L
             }
         }
-        // v0.247：加载错误进黑匣子——看门狗只知「卡在 BUFFERING」，不知「为什么」；
-        // onLoadError 带异常类型（InvalidResponseCodeException.responseCode=HTTP 码：
-        // 403=签名过期 / 404=切片缺失；SocketTimeout=慢源），一轮数据定性
-        // v0.249：画面定住取证——「缓冲在走但画面定住」的两大嫌疑：
-        // ① 播放抑制（音频焦点被抢：isPlaying=false 但 state=READY，画面定帧缓冲照走）
-        // ② 解码器不渲染（首帧后不再出帧）。两个回调落日志，下轮黑匣子直接区分
         val al = object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             // v0.251：捕获视频渲染计数器（renderer 启用/停用生命周期），供看门狗停帧检测
             override fun onVideoEnabled(
@@ -716,74 +590,6 @@ fun PlayerScreen(nav: NavHostController) {
                 counters: androidx.media3.exoplayer.DecoderCounters
             ) {
                 countersRef.compareAndSet(counters, null)
-            }
-
-            override fun onPlaybackSuppressionReasonChanged(
-                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                playbackSuppressionReason: Int
-            ) {
-                val why = when (playbackSuppressionReason) {
-                    1 -> "AUDIO_BECOMING_NOISY"; 2 -> "TRANSIENT_AUDIO_LOSS"
-                    else -> "$playbackSuppressionReason"
-                }
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER",
-                    if (playbackSuppressionReason == 0) "播放抑制解除 pos=${player.currentPosition}"
-                    else "播放抑制=$why pos=${player.currentPosition} state=${player.playbackState}"
-                )
-            }
-
-            override fun onRenderedFirstFrame(
-                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                output: Any,
-                mediaDurationMs: Long
-            ) {
-                // v0.264：dur 直播化解剖——dur 随墙钟增长（2901→2909e6 跟真实时间同步），
-                // 嫌疑在 media3 窗口计算。dump 全部窗口字段一步定位
-                var wdur = -1L; var wLive = "?"; var wStart = -1L; var wDefault = -1L
-                runCatching {
-                    val w = androidx.media3.common.Timeline.Window()
-                    player.currentTimeline.getWindow(player.currentMediaItemIndex, w)
-                    wdur = w.durationUs; wLive = w.isLive.toString()
-                    wStart = w.windowStartTimeMs; wDefault = w.defaultPositionUs
-                }
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "首帧渲染 pos=${player.currentPosition} 时长=${player.duration}ms " +
-                        "win[us=$wdur live=$wLive] (mediaDurationMs=$mediaDurationMs=首帧绝对PTS非时长,源站33天连续流)"
-                )
-            }
-
-            // v0.250：加载错误耗尽的最终落点——之前的 onLoadError 只记单次加载失败，
-            // 重试耗尽后的 PlaybackException（进 error 态、画面定住）从未进黑匣子
-            override fun onPlayerError(
-                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                error: androidx.media3.common.PlaybackException
-            ) {
-                val cause = error.cause
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER",
-                    "播放错误 ${error.errorCodeName} ${cause?.javaClass?.simpleName ?: ""}: ${cause?.message?.take(60) ?: error.message?.take(60)}"
-                )
-            }
-
-            override fun onLoadError(
-                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
-                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
-                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
-                error: java.io.IOException,
-                wasCanceled: Boolean
-            ) {
-                val t = when (mediaLoadData.dataType) {
-                    androidx.media3.common.C.DATA_TYPE_MANIFEST -> "清单"
-                    androidx.media3.common.C.DATA_TYPE_MEDIA -> "切片"
-                    androidx.media3.common.C.DATA_TYPE_DRM -> "KEY"
-                    else -> "type${mediaLoadData.dataType}"
-                }
-                val code = (error as? androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)?.responseCode
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER",
-                    "加载失败[$t] code=${code ?: "-"} ${error.javaClass.simpleName}: ${error.message?.take(60)}"
-                )
             }
         }
         player.addListener(l)
@@ -828,12 +634,8 @@ fun PlayerScreen(nav: NavHostController) {
             player.playerError?.let { err ->
                 // 直播流不走看门狗（无 seek/有限时长语义，卡住走直播自己的重连）
                 if (!isLive) reloadRound++
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "加载失败耗尽#$reloadRound ${err.errorCodeName} pos=$pos → 自愈重载"
-                )
                 if (reloadRound >= 8) {
                     gaveUp = true
-                    com.shangyin.app.data.melon.MelonFlightLog.log("PLAYER", "error态自愈放弃 → 建议刷新/切线路")
                     Toast.makeText(context, "片源无法继续播放，建议点刷新或切换线路", Toast.LENGTH_LONG).show()
                     return@let
                 }
@@ -845,10 +647,6 @@ fun PlayerScreen(nav: NavHostController) {
                     player.seekTo(pos)
                     player.prepare()
                     player.playWhenReady = true
-                }.onFailure { e ->
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "error态自愈异常 ${e.javaClass.simpleName}: ${e.message?.take(80)}"
-                    )
                 }
                 bufferingSince = System.currentTimeMillis()
                 stuckSince = 0L
@@ -866,11 +664,6 @@ fun PlayerScreen(nav: NavHostController) {
             countersRef.get()?.let { cnt ->
                 val rendered = cnt.renderedOutputBufferCount
                 if (rendered != lastRendered) {
-                    if (lastRendered >= 0 && stallSince > 0) {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "渲染恢复 frames=$rendered（自愈${if (reloadRound > 0) "有效" else "未介入"}）"
-                        )
-                    }
                     lastRendered = rendered
                     stallSince = 0L
                 } else if (rendered > 0 && player.isPlaying && !isLive) {
@@ -909,15 +702,11 @@ fun PlayerScreen(nav: NavHostController) {
             } else stuckSince = 0L
             lastPos = pos
             if (needReload || videoStalled) {
-                val src = if (videoStalled) "停帧" else "卡住"
                 reloadRound++
                 // 连续 8 轮自愈全部无效 = 片源级故障（后半段缺失/签名全过期等），
                 // 重试只是空转 → 放弃并明说（换集时 uri 变化会自动复位重新上岗）
                 if (reloadRound >= 8) {
                     gaveUp = true
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "卡住自愈放弃 pos=$pos 连续8轮无效 → 停止重试"
-                    )
                     Toast.makeText(context, "片源无法继续播放，建议点刷新或切换线路", Toast.LENGTH_LONG).show()
                     continue
                 }
@@ -928,9 +717,6 @@ fun PlayerScreen(nav: NavHostController) {
                         // 就直接 MediaItem 重建——完整重置解码器/清单/密钥/切片状态，
                         // stop+prepare 不一定重建编解码器实例，对停帧是弱药
                         videoStalled && item != null -> {
-                            com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "${src}自愈#$reloadRound frames冻结 pos=$pos → MediaItem重建(解码器级)"
-                            )
                             player.setMediaItem(item, pos)
                             player.prepare()
                             player.playWhenReady = true
@@ -939,9 +725,6 @@ fun PlayerScreen(nav: NavHostController) {
                         // 已加载的 MediaPeriod 重新拉清单/切片（⚠️ v0.225 教训：seekTo(当前位置)
                         // 是 no-op，media3 认为目标位置就是当前位置不重新加载；seekTo 只用于钉住进度）
                         reloadRound <= 1 || item == null -> {
-                            com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "${src}自愈#$reloadRound state=${player.playbackState} pos=$pos → stop+prepare"
-                            )
                             player.stop()
                             // v0.253：先 seekTo 再 prepare（IDLE 态 seekTo 设定 prepare 后初始
                             // 位置；反序会先从 0 缓冲——0.252 诊断实锤自愈后首帧渲染 pos=0）
@@ -959,23 +742,11 @@ fun PlayerScreen(nav: NavHostController) {
                             val dur = player.duration
                             val skipTarget = pos + 15_000L * (reloadRound - 2)
                             val target = if (dur > 0) skipTarget.coerceAtMost(dur - 1_000) else skipTarget
-                            val msg = when {
-                                target <= pos && reloadRound <= 2 -> "原位重建"
-                                target <= pos -> "原位重建(无处可跳,已近片尾)"
-                                else -> "重建+跳过坏段至${target / 1000}s"
-                            }
-                            com.shangyin.app.data.melon.MelonFlightLog.log(
-                                "PLAYER", "${src}自愈#$reloadRound state=${player.playbackState} pos=$pos → $msg"
-                            )
                             player.setMediaItem(item, target)
                             player.prepare()
                             player.playWhenReady = true
                         }
                     }
-                }.onFailure { e ->
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "卡住自愈#$reloadRound 异常 ${e.javaClass.simpleName}: ${e.message?.take(80)}"
-                    )
                 }
                 // 第 3 次仍卡：自愈姿势已用尽，明说让用户主动干预（刷新/切线路）
                 if (reloadRound == 3) {

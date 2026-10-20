@@ -78,7 +78,6 @@ object MelonWebImage {
                 if (existing != null) {
                     val act = existing.context as? android.app.Activity
                     if (act?.isDestroyed == true || act?.isFinishing == true) {
-                        MelonFlightLog.log("PIPE", "宿主Activity已销毁 → 重建WebView")
                         runCatching { existing.destroy() }
                         webView = null
                         pageReady = false
@@ -94,7 +93,6 @@ object MelonWebImage {
                 // v0.243：stub 页无任何外部依赖（zzz.js 已移出，解密在 Kotlin 侧）——
                 // baseUrl=图床 origin，页面内 fetch 目标图 = 同源请求（无 CORS 限制）。
                 val stub = "<!DOCTYPE html><html><head><meta charset='utf-8'></head><body></body></html>"
-                MelonFlightLog.log("PIPE", "stub加载 page=$page ctx=${wv.context.javaClass.simpleName}")
                 wv.loadDataWithBaseURL(page, stub, "text/html", "utf-8", null)
 
                 var waited = 0
@@ -105,10 +103,8 @@ object MelonWebImage {
                     starting.set(false)
                     if (ok) {
                         pageReady = true
-                        MelonFlightLog.log("PIPE", "就绪 waited=${waited}ms")
                     } else {
                         // v0.243：失败即销毁，下次请求从头重建（旧方案带病轮询永不自愈）
-                        MelonFlightLog.log("PIPE", "未就绪 waited=${waited}ms → 销毁待重建")
                         runCatching { wv.destroy() }
                         if (webView === wv) { webView = null; pageReady = false }
                     }
@@ -150,7 +146,6 @@ object MelonWebImage {
             ensure(context, url) { ok -> if (cont.isActive) cont.resume(ok) }
         }
         if (!ready) {
-            MelonFlightLog.log("WEBFETCH", "管线未就绪 url=$url")
             return null
         }
         return withContext(Dispatchers.Main) {
@@ -199,7 +194,6 @@ object MelonWebImage {
                                         wv.postDelayed({ poll() }, 250)
                                     }
                                     s.contains("\"ERR") -> {
-                                        MelonFlightLog.log("WEBFETCH", "JS异常 waited=${waited}ms ${s.take(90)}")
                                         settle(null)
                                     }
                                     s.length > 4 -> {
@@ -208,9 +202,6 @@ object MelonWebImage {
                                         val bytes = runCatching {
                                             android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
                                         }.getOrNull()
-                                        MelonFlightLog.log(
-                                            "WEBFETCH", "完成 waited=${waited}ms b64=${b64.length}B 字节=${bytes?.size ?: -1}B"
-                                        )
                                         settle(bytes)
                                     }
                                     else -> settle(null)

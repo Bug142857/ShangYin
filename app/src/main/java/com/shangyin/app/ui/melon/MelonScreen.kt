@@ -173,11 +173,6 @@ fun MelonHomeScreen(nav: NavHostController) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             if (target == null) items = emptyList()
             error = e.message?.takeIf { it.isNotBlank() } ?: "网络错误"
-            if (target != null) {
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "LIST", "翻页失败 $target ${e.javaClass.simpleName}: ${e.message?.take(60)}"
-                )
-            }
         }.onSuccess { page ->
             items = page.items.distinctBy { it.id }
             nextPath = page.nextPath
@@ -208,17 +203,11 @@ fun MelonHomeScreen(nav: NavHostController) {
                 fetchPage(target)
                 currentPage = page
                 MelonHomeCache.page = currentPage
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "LIST", "页码=$currentPage/${lastPage.takeIf { it > 0 } ?: "?"} ${items.size}条 next=${nextPath ?: "null"}"
-                )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e // 协程取消不是错误，原样重抛（finally 照常复位 loading）
             } catch (e: Exception) {
                 // fetch 回调（scrollToItem/缓存写入）抛异常会杀掉协程 → loading 永久 true
                 // → 之后所有翻页被 if(loading) return 吞掉（v0.251 教训）。finally 保证复位
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "LIST", "加载协程异常 ${e.javaClass.simpleName}: ${e.message?.take(60)}"
-                )
                 if (target == null) items = emptyList()
                 error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
             } finally {

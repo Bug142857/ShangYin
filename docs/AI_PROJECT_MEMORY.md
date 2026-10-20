@@ -889,6 +889,18 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.271（诊断子系统整体拆除，2026-10-20，视频线收口）**：
+  用户决策「告一段落，诊断相关的都移除」。删除：MelonDiag.kt、MelonFlightLog.kt
+  （含 CrashCapture）、SettingsScreen 诊断入口+弹窗、PlayerScreen 的 ENDLIST/嗅探
+  okhttp 拦截器整块与只为打日志存在的回调（win 解剖/onLoadError 等）、全链路
+  FlightLog 打点（LIST/PARSE/DOC/DOWNLOAD/FETCH/FACTORY/PIPE/WEBFETCH/BOOT）。
+  保留全部功能：解密管线、自愈看门狗、DoH/UA 拦截器、分页规范化、下载进度、
+  scrubbingMs 气泡。验证：全仓 grep 诊断符号=0，BUILD SUCCESSFUL。
+  **运维含义：黑匣子取证能力退役**——后续用户反馈只能靠口头描述+版本对照；需要
+  再取证时从 git 历史恢复 MelonFlightLog/MelonDiag（tag v0.270 是最后一个带全量
+  黑匣子的版本，恢复时记得同步诊断页入口与白名单标签）。
+  版本：0.271/1271。
+
 - **v0.270（拖动放开：撤销 0.269 一刀切弹回，2026-10-20）**：
   用户实测反馈「有的视频好使」——直播流水线切片源只是**部分**源，0.269 对全部源
   弹回缓冲范围一刀切误伤正常源。撤销限制：onScrubStop 回归纯 scrubbingMs=null，

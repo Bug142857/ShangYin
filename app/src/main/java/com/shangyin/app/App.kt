@@ -93,9 +93,6 @@ class App : Application(), ImageLoaderFactory {
                     com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(this@App).deleteRecursively()
                 }
                 SettingsStore.cacheClearedVersion = BuildConfig.VERSION_CODE.toLong()
-                com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "BOOT", "版本升级缓存清理完成 v${BuildConfig.VERSION_NAME}"
-                )
             }
         }
     }
