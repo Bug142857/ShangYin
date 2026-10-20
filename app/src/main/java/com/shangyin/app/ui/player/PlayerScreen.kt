@@ -218,7 +218,7 @@ fun PlayerScreen(nav: NavHostController) {
             // 足够精确，切片 1.6MB 被体积保险放行。所有分支（含静默路径）全部留痕
             val resp = chain.proceed(req)
             if ((resp.header("Content-Length")?.toLongOrNull() ?: 0L) > 512_000L) {
-                if (sniffLogCount < 6) {
+                if (sniffLogCount < 5) { // 0.265：限流防刷屏（每片一条曾淹没关键取证行）
                     com.shangyin.app.data.melon.MelonFlightLog.log(
                         "PLAYER", "嗅探跳过: 大响应 CL=${resp.header("Content-Length")} path=…${req.url.encodedPath.takeLast(40)}"
                     )
@@ -738,8 +738,8 @@ fun PlayerScreen(nav: NavHostController) {
                     wStart = w.windowStartTimeMs; wDefault = w.defaultPositionUs
                 }
                 com.shangyin.app.data.melon.MelonFlightLog.log(
-                    "PLAYER", "首帧渲染 pos=${player.currentPosition} dur=${mediaDurationMs}ms " +
-                        "playerDur=${player.duration} win[us=$wdur live=$wLive start=$wStart default=$wDefault]"
+                    "PLAYER", "首帧渲染 pos=${player.currentPosition} 时长=${player.duration}ms " +
+                        "win[us=$wdur live=$wLive] (mediaDurationMs=$mediaDurationMs=首帧绝对PTS非时长,源站33天连续流)"
                 )
             }
 

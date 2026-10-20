@@ -889,6 +889,25 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.265（32天时长幻影破案：onRenderedFirstFrame.mediaDurationMs 是首帧绝对PTS非时长——0.254~0.264 十轮追凶对象是我误读的日志字段，2026-10-20）**：
+  0.264 win 解剖一击定案：`首帧渲染 dur=2914233206ms playerDur=353033 win[us=353033000
+  live=false start=UNSET default=0]`——**播放器时长/窗口/直播判定全部正常**（353s VOD）。
+  那 2.9e9 且随墙钟增长的是什么？= `onRenderedFirstFrame(eventTime, output,
+  mediaDurationMs)` 的 mediaDurationMs 参数 = **首帧的媒体时间戳（PTS）**：源站是从 33 天
+  连续直播流切出来的 VOD，每片 TS 带着距源点 33.7 天的绝对 PTS（0.253 就发现的
+  「469261×6.2s≈32.8天」线索正是它，MSEQ=0/PDT=0 排除了标签嫌疑）。dur 随墙钟增长
+  纯属不同时间点采样不同视频的 PTS 量级+我脑补的「增长」。
+  **翻案全记录：0.254 用户点破「缺 ENDLIST」方向是错的（0.262 证伪：ENDLIST 本来就
+  在）；0.254~0.264 的镜像/ENDLIST补丁/WJ剥离全是在修一个不存在的病**。真正的历史
+  问题（0.247~0.253 seek 卡）各自真凶早有定论：坏切片/看门狗阈值/解码器停帧，均已修。
+  v0.265 收尾：首帧日志改为「时长=player.duration」（mediaDurationMs 注明=绝对PTS），
+  大响应嗅探日志限流（每片一条曾把关键行挤出环形缓冲）。
+  **终极教训：①日志字段语义必须查 API 文档核实，「字段名叫 duration」≠「就是播放
+  时长」——一个误读字段把十轮修复全部带偏；②异常数值要先问「这个 API 到底返回什么」
+  再立案（0.254 教训「日志里的荒谬数值=根因名片」是对的，但名片得先验真伪）；③
+  回调参数名 mediaDurationMs 实为 rendered-frame 的 media timestamp，media3 命名误导**。
+  版本：0.265/1265。
+
 - **v0.264（closed 崩溃修复 / dur 解剖取证，2026-10-20）**：
   0.263 装机双信息：①清单诊断落地——标签全集
   `[#EXT-X-WJ-T,#EXT-X-VERSION,#EXT-X-KEY,#EXT-X-MEDIA-SEQUENCE,#EXT-X-TARGETDURATION,
