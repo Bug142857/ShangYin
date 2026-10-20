@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.Tag
 import androidx.compose.material.icons.rounded.TheaterComedy
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -284,6 +285,20 @@ private fun InnerWorld(
                 modifier = Modifier.weight(1f),
                 onClick = { nav.safeNavigate("melonHome") }
             )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            InnerWorldEntry(
+                icon = Icons.Rounded.Tag,
+                title = "X站",
+                modifier = Modifier.weight(1f),
+                onClick = { nav.safeNavigate("xsiteHome") }
+            )
+            Spacer(Modifier.weight(3f))
         }
         WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))
     }

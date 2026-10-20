@@ -263,6 +263,40 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             return@Scaffold
         }
 
+        // X视频条目（X站/pektino）：doubanId = "pektino|{urlCd}"，跳 X站详情页播放
+        if (entity.category == "X视频") {
+            val context = LocalContext.current
+            LaunchedEffect(entity.id) {
+                if (forwarded) return@LaunchedEffect
+                forwarded = true
+                val urlCd = entity.doubanId.substringAfter(
+                    com.shangyin.app.data.xsite.XSiteClient.COLLECT_PREFIX, ""
+                )
+                if (urlCd.isBlank()) {
+                    Toast.makeText(context, "条目数据异常，无法打开", Toast.LENGTH_SHORT).show()
+                    nav.safePopBackStack()
+                    return@LaunchedEffect
+                }
+                val curId = nav.currentBackStackEntry?.destination?.id
+                runCatching {
+                    nav.navigate("xsiteDetail/${android.net.Uri.encode(urlCd)}") {
+                        curId?.let { popUpTo(it) { inclusive = true } }
+                        launchSingleTop = true
+                    }
+                }.onFailure {
+                    Toast.makeText(context, "打开失败，请重试", Toast.LENGTH_SHORT).show()
+                    nav.safePopBackStack()
+                }
+            }
+            Column(Modifier.padding(pad).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Spacer(Modifier.height(60.dp))
+                androidx.compose.material3.CircularProgressIndicator()
+                Spacer(Modifier.height(12.dp))
+                Text("正在打开视频…", style = MaterialTheme.typography.bodySmall)
+            }
+            return@Scaffold
+        }
+
         val cacheKey = "${entity.category}/${entity.doubanId}"
 
         var celebrities by remember(cacheKey) { mutableStateOf(DetailCache.celebrities[cacheKey].orEmpty()) }

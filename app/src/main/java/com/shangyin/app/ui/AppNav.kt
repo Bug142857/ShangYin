@@ -232,6 +232,17 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getString("id").orEmpty()
                 )
             }
+            // X站 = pektino.com 排行榜（里世界第九入口；官方 JSON API，原生渲染）
+            composable("xsiteHome") { com.shangyin.app.ui.xsite.XSiteHomeScreen(nav) }
+            composable(
+                route = "xsiteDetail/{urlCd}",
+                arguments = listOf(navArgument("urlCd") { type = NavType.StringType })
+            ) { entry ->
+                com.shangyin.app.ui.xsite.XSiteDetailScreen(
+                    nav,
+                    entry.arguments?.getString("urlCd").orEmpty()
+                )
+            }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })
