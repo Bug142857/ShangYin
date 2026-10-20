@@ -98,7 +98,11 @@ object MelonVodMirror {
                 ?.let { Regex("URI=\"([^\"]+)\"").find(it)?.groupValues?.get(1) }
 
             coroutineScope {
-                val sem = Semaphore(6)
+                // v0.256：并发 6→10（慢源高延迟链路下吞吐明显受益；实测 6 并发 174MB≈83s，
+                // 与用户手动下载任务并存时镜像被抢带宽拖到 2 分钟+，用户等不及就放弃）
+                val sem = Semaphore(10)
+                val done = java.util.concurrent.atomic.AtomicInteger(0)
+                val quarter = (segUrls.size / 4).coerceAtLeast(1)
                 if (keyUri != null) {
                     async {
                         sem.withPermit {
@@ -122,6 +126,10 @@ object MelonVodMirror {
                                         if (!r.isSuccessful) throw IOException("slice HTTP ${r.code}")
                                         f.writeBytes(r.body?.bytes() ?: throw IOException("slice 空响应体"))
                                     }
+                                    // v0.256：进度打点（每 25% 一条）——0.255 装机镜像 115s 无任何
+                                    // 中间日志，「还在下载」与「卡死」不可分辨，取证先于取证结论
+                                    val n = done.incrementAndGet()
+                                    if (n % quarter == 0) MelonFlightLog.log("MIRROR", "切片 $n/${segUrls.size}")
                                     return@withPermit
                                 } catch (e: Exception) { last = e }
                             }

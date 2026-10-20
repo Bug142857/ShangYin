@@ -512,6 +512,8 @@ fun PlayerScreen(nav: NavHostController) {
                 com.shangyin.app.data.melon.MelonFlightLog.log(
                     "MIRROR", "切换本地播放 pos=$pos"
                 )
+                // v0.256：切换是用户可感知的节点（此前镜像静默切换，用户不知进度条已修复）
+                android.widget.Toast.makeText(context, "本地镜像就绪，进度条已修复", Toast.LENGTH_SHORT).show()
                 val local = MediaItem.Builder()
                     .setUri(android.net.Uri.fromFile(java.io.File(mirror, "index.m3u8")))
                     .setMimeType(MimeTypes.APPLICATION_M3U8)

@@ -287,7 +287,14 @@ object MelonClient {
             val base = currentBase()
             try {
                 // path 通常为站内相对路径；翻页链路里若残留绝对地址（换线场景）也直接可用
-                val url = if (path.startsWith("http")) path else "$base$path"
+                // v0.256：站内路径统一补头斜杠——分类页 next/页码条兜底可能产出相对形态
+                // （category/xsxy/2/），直接拼 base 会粘上域名（branch.jifjmpodk.cccategory
+                // UnknownHostException，0.255 装机实锤）；第一页因 list("/$path") 补过斜杠幸免
+                val url = when {
+                    path.startsWith("http") -> path
+                    path.startsWith("/") -> "$base$path"
+                    else -> "$base/$path"
+                }
                 val html = httpGet(url)
                 // v0.241 黑匣子：HTML 长度 + 封面脚本出现次数——「cover=null 纯文字卡片」
                 // 之谜的一手证据（PC 无法复现，只能设备自证）
@@ -344,12 +351,18 @@ object MelonClient {
             ".pagination li.next a[href]",
             "a.next[href]"
         ).firstNotNullOfOrNull { sel ->
-            d.selectFirst(sel)?.attr("abs:href")?.takeIf { it.isNotBlank() }
+            d.selectFirst(sel)?.let { a ->
+                // v0.256：abs:href 失守时回退原始 href（相对形态由 doc() 入口统一补头斜杠）
+                a.attr("abs:href").takeIf { it.isNotBlank() } ?: a.attr("href").takeIf { it.isNotBlank() }
+            }
         }
-        val next = nextRaw
-            ?.takeIf { it.startsWith("http") }
-            ?.let { it.substringAfter(base, it).ifBlank { null } }
-            ?.let { normalizeNext(it) }
+        // v0.256：相对 href 原样放行（doc() 入口归一），不再被 startsWith("http") 一票否决——
+        // 0.255 装机：分类页 next 缺失把跳页逼进 catPath 相对兜底，请求 URL 粘域名全炸
+        val next = when {
+            nextRaw == null -> null
+            nextRaw.startsWith("http") -> nextRaw.substringAfter(base, nextRaw).ifBlank { null }
+            else -> nextRaw
+        }?.let { normalizeNext(it) }
         // v0.255：末页页码——用户要求页码条可跳页、能看总数。分页器里的所有数字页链接
         //（/page/N/ 与 /category/x/N/ 尾段数字）取最大即末页；解析不到为 null（UI 退回
         // 上一页/下一页形态）

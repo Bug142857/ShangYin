@@ -147,10 +147,10 @@ fun MelonHomeScreen(nav: NavHostController) {
             if (replaced != sample) return replaced
         }
         // 样例缺失/尾段未命中（处于末页 next=null 时跳页）：按当前版块形态构造，防错跳首页 404
-        // （v0.255 审查发现：此前一律兜底 /page/$p/，分类页在末页跳页会请求错误形态）
+        // （v0.256：catPath 是相对形态 category/xsxy/，必须带头斜杠，否则与 base 拼接粘域名）
         return when {
             keyword.isNotBlank() -> "/search/$keyword/$p/"
-            catPath.isNotBlank() -> "$catPath$p/"
+            catPath.isNotBlank() -> "/" + catPath.trimStart('/') + "$p/"
             else -> "/page/$p/"
         }
     }
@@ -493,9 +493,10 @@ fun MelonHomeScreen(nav: NavHostController) {
                                                 onClick = { loadNav(pathFor(currentPage - 1), currentPage - 1) },
                                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)
                                             ) { Text("上一页") }
+                                            // v0.256：窗口 cur±3（用户要求显示更多页码，方便连续选页）
                                             val window = buildList {
                                                 add(1); add(lastPage)
-                                                for (d in -1..1) {
+                                                for (d in -3..3) {
                                                     val p = currentPage + d
                                                     if (p in 1..lastPage) add(p)
                                                 }
