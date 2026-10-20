@@ -22,6 +22,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // v0.268 崩溃捕获：进程死亡现场写盘（filesDir/crash_last.txt），诊断页带出——
+        // 0.267 闪退无栈（内存环形日志随进程清零），黑匣子必须自带坠机记录舱
+        com.shangyin.app.data.melon.CrashCapture.install(applicationContext)
         // 点「播放通知」把 App 唤到前台（含进程/Activity 被回收后重建）时打个标记，
         // AppNav 首次组合时会读它并跳回上次的页面（见 NavRestore / AppNav）
         if (intent?.getBooleanExtra(NavRestore.EXTRA_FROM_NOTIFICATION, false) == true) {

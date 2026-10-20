@@ -273,6 +273,16 @@ object MelonDiag {
             // v0.250：PLAYER 独立缓冲后 dump() 已按 PLAYER 置顶，放宽到 48 条——
             // PLAYER 取证窗口 + 足量 FETCH 上下文，诊断文本不再互相挤掉
             val flight = MelonFlightLog.dump().take(48)
+            // v0.268 崩溃记录舱：进程死亡现场（crash_last.txt）置顶带出——「闪退了」三个字
+            // 从此有栈可查；文件随下次正常启动保留，直到下一次崩溃覆盖
+            runCatching {
+                val cf = java.io.File(context.filesDir, "crash_last.txt")
+                if (cf.exists()) {
+                    out.appendLine("")
+                    out.appendLine("――― 崩溃记录（上次进程死亡现场） ―――")
+                    out.appendLine(cf.readText().take(2500))
+                }
+            }
             out.appendLine("")
             out.appendLine("――― 飞行日志（最近${flight.size}条，新→旧） ―――")
             if (flight.isEmpty()) out.appendLine("（空：进列表/文章页后再跑诊断才有记录）")

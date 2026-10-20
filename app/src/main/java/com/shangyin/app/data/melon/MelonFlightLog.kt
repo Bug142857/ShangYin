@@ -18,6 +18,7 @@ package com.shangyin.app.data.melon
  */
 object MelonFlightLog {
 
+
     private const val CAP = 60
     private const val PLAYER_CAP = 32
     private val buf = ArrayDeque<String>()
@@ -44,5 +45,31 @@ object MelonFlightLog {
     /** 诊断输出（新→旧，最新的在最上面；PLAYER 独立缓冲置顶——播放取证优先） */
     fun dump(): List<String> = synchronized(buf) {
         playerBuf.toList().asReversed() + buf.toList().asReversed()
+    }
+}
+
+/**
+ * v0.268 崩溃捕获：黑匣子的「坠机记录舱」。
+ *
+ * 0.267 闪退无栈可查——内存环形日志随进程死亡清零，诊断页只剩重启后的首页记录，
+ * 崩溃瞬间发生了什么彻底失明。本处理器在进程死亡前把完整栈写盘（filesDir/crash_last.txt，
+ * 每次覆盖），诊断页原样带出：下一轮「闪退了」三个字背后必有现场。
+ */
+object CrashCapture {
+
+    fun install(context: android.content.Context) {
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            runCatching {
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                java.io.File(context.filesDir, "crash_last.txt").writeText(
+                    java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.US)
+                        .format(java.util.Date()) + " thread=" + t.name + "\n" + sw.toString()
+                )
+                runCatching { MelonFlightLog.log("CRASH", e.toString().take(180)) }
+            }
+            prev?.uncaughtException(t, e)
+        }
     }
 }

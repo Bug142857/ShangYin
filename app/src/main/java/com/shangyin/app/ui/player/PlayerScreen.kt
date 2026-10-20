@@ -534,16 +534,24 @@ fun PlayerScreen(nav: NavHostController) {
                 if (reason != androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) return
                 val target = newPosition.positionMs
                 seekReloadBusy = true
-                try {
-                    player.stop()
-                    player.seekTo(target)
-                    player.prepare()
-                    player.playWhenReady = true
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "seek重载: 目标=${target / 1000}s (Player级拦截,PTS饿死规避)"
-                    )
-                } finally {
-                    seekReloadBusy = false
+                // v0.268：post 到监听回调外执行——0.267 在回调内直接 stop/prepare 触发闪退
+                // （无栈，已装崩溃捕获下轮定案）；media3 推荐回调内只记录、回调外变更状态
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    try {
+                        player.stop()
+                        player.seekTo(target)
+                        player.prepare()
+                        player.playWhenReady = true
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "seek重载: 目标=${target / 1000}s (回调外执行,PTS饿死规避)"
+                        )
+                    } catch (e: Exception) {
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "seek重载失败: ${e.toString().take(140)}"
+                        )
+                    } finally {
+                        seekReloadBusy = false
+                    }
                 }
             }
 
