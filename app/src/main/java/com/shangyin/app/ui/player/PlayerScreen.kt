@@ -204,7 +204,14 @@ fun PlayerScreen(nav: NavHostController) {
             }
         if (!isLive) okhttpBuilder.addInterceptor { chain ->
             val req = chain.request()
-            if (!req.url.encodedPath.endsWith(".m3u8")) return@addInterceptor chain.proceed(req)
+            // ⚠️ 0.255 教训：站点 HLS 地址无 .m3u8 后缀（hls.tpbbwcc.cn/videos5/…/…）——
+            // 0.258/0.259 用后缀门漏补了无后缀清单（装机零条补丁日志+dur 仍 2.9e9 实锤）。
+            // 门改为：.m3u8 或最后一段无扩展名 → 整读嗅探（清单/密钥均为小响应；
+            // 切片/直链文件有扩展名直接放行不缓冲）
+            val lastSeg = req.url.encodedPath.substringAfterLast('/')
+            if (!lastSeg.endsWith(".m3u8") && lastSeg.contains('.')) {
+                return@addInterceptor chain.proceed(req)
+            }
             val resp = chain.proceed(req)
             // v0.258 根因修复（v0.259 落点）：站点 m3u8 缺 #EXT-X-ENDLIST（0.254 定案）
             // → 353s 的 VOD 被当 32 天直播流，进度条全长失真、seek 落点必然在内容外。
