@@ -213,48 +213,60 @@ fun PlayerScreen(nav: NavHostController) {
             }
             // 直播不补 ENDLIST（真直播列表本就无 ENDLIST，补了播完即停）
             if (isLive) return@addInterceptor chain.proceed(req)
-            // ⚠️ 0.255 教训：站点 HLS 地址无 .m3u8 后缀（hls.tpbbwcc.cn/videos5/…/…）——
-            // 0.258/0.259 用后缀门漏补了无后缀清单（装机零条补丁日志+dur 仍 2.9e9 实锤）。
-            // 门改为：.m3u8 或最后一段无扩展名 → 整读嗅探（清单/密钥均为小响应）；
-            // >512KB 的响应（切片/直链文件）不缓冲直接放行
-            val lastSeg = req.url.encodedPath.substringAfterLast('/')
-            val maybePlaylist = lastSeg.endsWith(".m3u8") || !lastSeg.contains('.')
-            if (!maybePlaylist) return@addInterceptor chain.proceed(req)
+            // v0.262：不再按 URL 形态设门（0.261 铁证：门开着、请求流经、却零留痕）——
+            // 非直播下所有 ≤512KB 响应一律嗅探；补丁条件（#EXTM3U+#EXTINF+无ENDLIST）本身
+            // 足够精确，切片 1.6MB 被体积保险放行。所有分支（含静默路径）全部留痕
             val resp = chain.proceed(req)
             if ((resp.header("Content-Length")?.toLongOrNull() ?: 0L) > 512_000L) {
+                if (sniffLogCount < 6) {
+                    com.shangyin.app.data.melon.MelonFlightLog.log(
+                        "PLAYER", "嗅探跳过: 大响应 CL=${resp.header("Content-Length")} path=…${req.url.encodedPath.takeLast(40)}"
+                    )
+                }
                 return@addInterceptor resp
             }
-            // v0.258 根因修复（v0.259 落点）：站点 m3u8 缺 #EXT-X-ENDLIST（0.254 定案）
-            // → 353s 的 VOD 被当 32 天直播流，进度条全长失真、seek 落点必然在内容外。
-            // 这里原位补一行 ENDLIST，media3 按 EXTINF 求和得真实时长，seek/进度条恢复正确
             try {
-                val body = resp.body?.string() ?: return@addInterceptor resp
-                val needsPatch = body.contains("#EXTM3U") && body.contains("#EXTINF") &&
-                    !body.contains("#EXT-X-ENDLIST")
-                val out = if (needsPatch) {
-                    com.shangyin.app.data.melon.MelonFlightLog.log(
-                        "PLAYER", "ENDLIST补丁: 直播化列表已转VOD (len=${body.length})"
-                    )
-                    body.trimEnd() + "\n#EXT-X-ENDLIST\n"
-                } else {
-                    if (!body.contains("#EXTM3U")) {
-                        com.shangyin.app.data.melon.MelonFlightLog.log(
-                            "PLAYER", "ENDLIST补丁跳过: 非列表内容 (len=${body.length})"
-                        )
-                    }
-                    body
+                val body = resp.body?.string()
+                if (body == null) {
+                    com.shangyin.app.data.melon.MelonFlightLog.log("PLAYER", "补丁跳过: body=null")
+                    return@addInterceptor resp
                 }
-                // string() 已消费原 body，必须重建；去掉 Content-Length/Encoding（补丁后
-                // 长度已变且可能被透明 gzip 解码过），media3 按 EOF 读清单
-                resp.newBuilder()
-                    .body(
-                        okhttp3.ResponseBody.create(
-                            null, out.toByteArray(Charsets.UTF_8)
+                val hasM3U = body.contains("#EXTM3U")
+                val hasInf = body.contains("#EXTINF")
+                val hasEnd = body.contains("#EXT-X-ENDLIST")
+                when {
+                    hasM3U && hasInf && !hasEnd -> {
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "ENDLIST补丁: 已转VOD (len=${body.length}) 尾=${body.takeLast(60).replace('\n', '|')}"
                         )
-                    )
-                    .removeHeader("Content-Length")
-                    .removeHeader("Content-Encoding")
-                    .build()
+                        resp.newBuilder()
+                            .body(okhttp3.ResponseBody.create(null, (body.trimEnd() + "\n#EXT-X-ENDLIST\n").toByteArray(Charsets.UTF_8)))
+                            .removeHeader("Content-Length")
+                            .removeHeader("Content-Encoding")
+                            .build()
+                    }
+                    hasM3U && hasInf && hasEnd -> {
+                        // 清单已含 ENDLIST 但 media3 仍直播化（dur 随真实时间涨）→ 矛盾实锤，dump 头尾
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "补丁跳过: 已含ENDLIST! 头=${body.take(80).replace('\n', '|')} 尾=${body.takeLast(60).replace('\n', '|')}"
+                        )
+                        resp.newBuilder().body(okhttp3.ResponseBody.create(null, body.toByteArray(Charsets.UTF_8))).build()
+                    }
+                    hasM3U -> {
+                        com.shangyin.app.data.melon.MelonFlightLog.log(
+                            "PLAYER", "补丁跳过: 主列表(无EXTINF) len=${body.length} 头=${body.take(80).replace('\n', '|')}"
+                        )
+                        resp.newBuilder().body(okhttp3.ResponseBody.create(null, body.toByteArray(Charsets.UTF_8))).build()
+                    }
+                    else -> {
+                        if (sniffLogCount < 6) {
+                            com.shangyin.app.data.melon.MelonFlightLog.log(
+                                "PLAYER", "补丁跳过: 非列表 len=${body.length} path=…${req.url.encodedPath.takeLast(40)}"
+                            )
+                        }
+                        resp.newBuilder().body(okhttp3.ResponseBody.create(null, body.toByteArray(Charsets.UTF_8))).build()
+                    }
+                }
             } catch (e: Exception) {
                 com.shangyin.app.data.melon.MelonFlightLog.log(
                     "PLAYER", "ENDLIST补丁异常: ${e.toString().take(200)}"
