@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -79,6 +80,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -343,6 +345,10 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
+    // 0.276：竖屏 edge-to-edge 下手势导航栏会盖住 media3 控制器底栏（时间/进度条），
+    // 给控制器整体垫 navigationBars 高度；横屏沉浸时系统栏隐藏 inset=0 自动归零
+    val controllerNavPadState = remember { mutableIntStateOf(0) }
+
     val playerView = remember {
         // 标准 media3 控制器布局（v2.11.4 自定义布局有闪退风险已回退）：
         // 公开 API 隐藏 上一集/下一集/快退5s/快进15s → 中间只剩播放/暂停，时间/进度条保留；
@@ -355,8 +361,27 @@ fun PlayerScreen(nav: NavHostController) {
             setShowNextButton(false)
             setShowRewindButton(false)
             setShowFastForwardButton(false)
+            // 导航栏 inset 变化（转屏/系统栏显隐）→ 更新控制器底部垫高。insets 会正常
+            // dispatch 进 AndroidView；返回原 insets 不消费，不影响 Compose 兄弟节点
+            ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+                val pad = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+                if (pad != controllerNavPadState.intValue) {
+                    controllerNavPadState.intValue = pad
+                    findViewById<android.view.View>(media3R.id.exo_bottom_bar)?.let { bar ->
+                        (bar.parent as? android.view.ViewGroup)?.setPadding(0, 0, 0, pad)
+                    }
+                }
+                insets
+            }
             setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { vis ->
                 controlsVisible = vis == android.view.View.VISIBLE
+                // 控制器延迟 inflate：首次显示时 insets 监听器可能已跑过（当时找不到底栏），
+                // 这里补一次导航栏垫高（幂等）
+                if (controllerNavPadState.intValue > 0) {
+                    findViewById<android.view.View>(media3R.id.exo_bottom_bar)?.let { bar ->
+                        (bar.parent as? android.view.ViewGroup)?.setPadding(0, 0, 0, controllerNavPadState.intValue)
+                    }
+                }
                 // 每次控制器显隐都强制隐藏（幂等）：变暗遮罩 exo_controls_background + 设置齿轮 exo_settings。
                 // 不能只在 AndroidView update 里绑一次——controller 是延迟 inflate 的，
                 // 早期 findViewById 返回 null 会被 ?. 静默跳过（v2.11.6 遮罩没消失的原因）
@@ -941,7 +966,8 @@ fun PlayerScreen(nav: NavHostController) {
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
-                            Row {
+                            // 下载/角标/全屏之间留 8dp 呼吸间距（0.276 反馈：挤在一起）
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 // 下载当前视频（v0.225）：先确认再下载（用户反馈不要静默开下）
                                 if (!isLive) {
                                     IconButton(
@@ -1011,6 +1037,8 @@ fun PlayerScreen(nav: NavHostController) {
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
+                                // 竖屏：垫高导航栏，气泡不被手势条压住；横屏沉浸 inset=0 等效原样
+                                .then(if (isLandscape) Modifier else Modifier.navigationBarsPadding())
                                 .padding(bottom = 44.dp)
                                 .background(Color.Black.copy(alpha = 0.75f), RoundedCornerShape(6.dp))
                                 .padding(horizontal = 8.dp, vertical = 3.dp)
@@ -1024,10 +1052,16 @@ fun PlayerScreen(nav: NavHostController) {
                         exit = fadeOut(),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 2.dp, bottom = 2.dp)
+                            // 竖屏：垫高导航栏 + 留出呼吸边距（0.276 反馈：贴边拥挤）；
+                            // 横屏沉浸无导航栏，保持贴角
+                            .then(if (isLandscape) Modifier else Modifier.navigationBarsPadding())
+                            .padding(
+                                end = if (isLandscape) 2.dp else 12.dp,
+                                bottom = if (isLandscape) 2.dp else 10.dp
+                            )
                     ) {
                         Row(
-                            horizontalArrangement = Arrangement.spacedBy(2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // 选集：横屏常显；竖屏铺满时下方信息面板被挤没，多集内容在此保留换集入口（0.275）
@@ -1086,7 +1120,10 @@ fun PlayerScreen(nav: NavHostController) {
                     DropdownMenu(
                         expanded = speedMenuOpen,
                         onDismissRequest = { speedMenuOpen = false },
-                        modifier = Modifier.align(Alignment.BottomEnd)
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            // 竖屏：锚点抬到导航栏之上，菜单末项不被手势条压住
+                            .then(if (isLandscape) Modifier else Modifier.navigationBarsPadding())
                     ) {
                         listOf(0.75f, 1f, 1.25f, 1.5f, 2f, 3f).forEach { sp ->
                             DropdownMenuItem(
@@ -1109,7 +1146,9 @@ fun PlayerScreen(nav: NavHostController) {
                     DropdownMenu(
                         expanded = qualityMenuOpen,
                         onDismissRequest = { qualityMenuOpen = false },
-                        modifier = Modifier.align(Alignment.BottomEnd)
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .then(if (isLandscape) Modifier else Modifier.navigationBarsPadding())
                     ) {
                         liveQualities.forEachIndexed { i, q ->
                             DropdownMenuItem(
@@ -1144,6 +1183,8 @@ fun PlayerScreen(nav: NavHostController) {
                                     .fillMaxHeight()
                                     .width(300.dp)
                                     .background(Color.Black.copy(alpha = 0.72f))
+                                    // 竖屏垫高导航栏（横屏沉浸 inset=0 无影响），列表末行不被手势条压住
+                                    .navigationBarsPadding()
                                     .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 8.dp)
                             ) {
                                 Text(
