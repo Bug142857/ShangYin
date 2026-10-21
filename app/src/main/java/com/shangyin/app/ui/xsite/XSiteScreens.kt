@@ -102,7 +102,7 @@ private fun playPost(nav: NavHostController, post: XPost) {
     PlayerSession.itemId = post.mediaId
     PlayerSession.title = "X视频 @${post.account}"
     PlayerSession.subTitle = ""
-    PlayerSession.sourceName = "X站"
+    PlayerSession.sourceName = XSiteClient.SOURCE_NAME
     PlayerSession.groups = listOf(
         VodPlayGroup("X站", listOf(VodEpisode("正片", post.videoUrl)))
     )

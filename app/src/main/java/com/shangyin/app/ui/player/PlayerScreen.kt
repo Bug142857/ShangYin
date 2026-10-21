@@ -230,6 +230,9 @@ fun PlayerScreen(nav: NavHostController) {
     var panelOpen by remember { mutableStateOf(false) }      // 选集面板（控制条右下角按钮触发）
     var speedMenuOpen by remember { mutableStateOf(false) }  // 倍速菜单
     var speed by remember { mutableFloatStateOf(1f) }        // 当前倍速
+    // 用户手动切过全屏方向后，自动转向（随 videoAspect 变化重跑）必须退位：
+    // 0.275 review 实锤不退位会把用户刚选的方向又抢回去（换源/首帧 aspect 0→0.56 时 effect 重跑）
+    var userToggledOrientation by remember { mutableStateOf(false) }
 
     // 直播画质/线路（电视源同名频道的多条地址就是多档；只有一档时不显示菜单）
     var liveQualities by remember { mutableStateOf(PlayerSession.liveQualities) }
@@ -272,6 +275,7 @@ fun PlayerScreen(nav: NavHostController) {
     /** 全屏切换：点击时读设备实时方向（避免 remember 捕获过期值） */
     fun toggleFullscreen() {
         val act = activity ?: return
+        userToggledOrientation = true // 手动选择优先，自动转向（LaunchedEffect）从此退位
         val landscape = act.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
         act.requestedOrientation = if (landscape)
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -386,18 +390,27 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 进入播放页默认横屏全屏（画面最大化）。**直播也自动横屏**（用户明确要求），
-    // 唯一的例外是**竖屏直播流**：那种要竖着看、并按视频比例撑满纵向屏幕。
-    // 是不是竖屏流只能等第一帧画面尺寸出来才知道（宽高比 < 1 = 竖屏流），所以这里依赖 videoAspect 二次判断。
+    // 进入播放页默认横屏全屏（画面最大化）。**直播也自动横屏**（用户明确要求）。
+    // 例外是**竖屏视频**（宽高比 < 1，直播与点播 0.275 起）：那种要竖着看、按视频比例撑满纵向屏幕。
+    // 是不是竖屏只能等第一帧画面尺寸出来才知道，所以这里依赖 videoAspect 二次判断；
+    // X站源以竖屏为主，进场 aspect 未知时先不抢横屏，避免「横屏闪一下再掰回竖屏」。
     LaunchedEffect(Unit, videoAspect) {
-        val isPortraitStream = videoAspect > 0f && videoAspect < 1f
-        val keepPortrait = isLive && isPortraitStream
-        if (!keepPortrait && config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
+        if (userToggledOrientation) return@LaunchedEffect // 用户手动选过方向，自动转向退出
+        val isPortraitVideo = videoAspect > 0f && videoAspect < 1f
+        if (videoAspect == 0f) {
+            // 尺寸未知：X站源（以竖屏为主）保持竖屏等第一帧，其余模块维持默认横屏
+            if (PlayerSession.sourceName != com.shangyin.app.data.xsite.XSiteClient.SOURCE_NAME &&
+                config.orientation != Configuration.ORIENTATION_LANDSCAPE
+            ) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else if (isPortraitVideo) {
+            if (config.orientation != Configuration.ORIENTATION_PORTRAIT)
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        } else if (config.orientation != Configuration.ORIENTATION_LANDSCAPE) {
             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         }
     }
 
-    // 视频尺寸监听：竖屏直播流要按真实比例铺满高度，横屏/点播照旧
+    // 视频尺寸监听：竖屏视频（直播/点播）要按真实比例铺满高度，横屏照旧
     DisposableEffect(player) {
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -856,9 +869,9 @@ fun PlayerScreen(nav: NavHostController) {
             }
         } else {
             Column(Modifier.fillMaxSize()) {
-                // 视频区：横屏铺满全屏；竖屏 16:9 置顶；
-                // **竖屏直播流（h>w）**按视频真实比例撑满纵向屏幕并居中（用户要的"纵向全屏"）
-                val isPortraitStream = isLive && videoAspect > 0f && videoAspect < 1f
+                // 视频区：横屏铺满全屏；横屏视频竖屏 16:9 置顶；
+                // **竖屏视频（h>w，直播与点播 0.275 起）**按真实比例撑满纵向屏幕并居中（抖音式竖屏铺满）
+                val isPortraitStream = videoAspect > 0f && videoAspect < 1f
                 Box(
                     Modifier
                         .then(
@@ -1017,7 +1030,12 @@ fun PlayerScreen(nav: NavHostController) {
                             horizontalArrangement = Arrangement.spacedBy(2.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (isLandscape && groups.isNotEmpty() && !isLive) {
+                            // 选集：横屏常显；竖屏铺满时下方信息面板被挤没，多集内容在此保留换集入口（0.275）
+                            if (groups.isNotEmpty() && !isLive &&
+                                (isLandscape ||
+                                 (isPortraitStream && (groups.size > 1 ||
+                                  (groups.getOrNull(groupIndex)?.episodes?.size ?: 0) > 1)))
+                            ) {
                                 TextButton(onClick = { panelOpen = !panelOpen }) {
                                     Text("选集", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
@@ -1110,9 +1128,8 @@ fun PlayerScreen(nav: NavHostController) {
                         }
                     }
 
-                    // 横屏右侧面板：标题 + 线路 + 选集网格（控制条右下角"选集"按钮触发；
-                    // 面板底部抬高，不遮挡控制条；控制器隐藏时面板一起收起）
-                    if (isLandscape && groups.isNotEmpty() && !isLive) {
+                    // 选集面板（横屏右侧 + 竖屏铺满时右侧滑出——下方信息面板被视频挤没后唯一换集入口）
+                    if ((isLandscape || (isPortraitStream && !isLandscape)) && groups.isNotEmpty() && !isLive) {
                         androidx.compose.animation.AnimatedVisibility(
                             visible = panelOpen && controlsVisible,
                             enter = fadeIn() + slideInHorizontally { it },

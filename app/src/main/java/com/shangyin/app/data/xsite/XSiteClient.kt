@@ -30,6 +30,9 @@ object XSiteClient {
     const val BASE = "https://pektino.com"
     private const val API = "$BASE/api"
 
+    /** PlayerSession.sourceName 标识（播放器按此识别「以竖屏为主的源」，进场不抢横屏） */
+    const val SOURCE_NAME = "X站"
+
     /** 收藏 doubanId 前缀（XSiteScreens 存、ItemDetailScreen 恢复时按此前缀识别） */
     const val COLLECT_PREFIX = "pektino|"
 
