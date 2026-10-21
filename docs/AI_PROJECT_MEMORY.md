@@ -889,6 +889,10 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.277（竖屏布局回调 + X站去每日，2026-10-21）**：
+  用户看了 0.276 真机截图后回调两项 + 加一项：①「右下角倍速/选集不用垫高放在右下角」——0.276 的竖屏垫高（navigationBarsPadding+12/10dp）实测观感是按钮浮在进度条右端上方挡进度条，删掉条件分支恢复统一 padding(end=2,bottom=2) 贴角；**但 media3 控制器垫高/拖动气泡/菜单/选集面板的垫高全部保留**（用户只点名按钮；三键导航设备菜单项不垫高会被导航键挡住点不到）。②「顶栏往上挪到顶部」——顶栏 Row 去掉 vertical=8dp 只留 statusBarsPadding（按钮贴状态栏下沿），「下载和全屏再留点空隙」spacedBy 8→12dp。③「X站把每日去掉默认显示每周」——RANGES 删 "每日"→timely 只剩 周/月/总，新增 DEFAULT_RANGE="weekly"，XSiteCache 默认值与 UI 兜底都走它；**旧进程缓存存着 timely 会被 RANGES 校验自动归位 weekly**（takeIf 过滤），无需迁移。
+  教训：**inset 垫高这类「理论正确」的适配，用户真机截图才是最终裁判**——0.276 按标准做法垫高，用户实际观感却是按钮挡进度条；布局微调类需求要快速响应回调，别为上一轮的方案辩护。版本：0.277/1277。
+
 - **v0.276（竖屏铺满按钮微调：inset 垫高防手势条遮挡，2026-10-21）**：
   用户反馈「竖屏的按钮位置不对/拥挤，右上角下载和全屏也挤」。根因：App 全局 edge-to-edge（MainActivity enableEdgeToEdge）+ **media3 1.7.1 控制器完全不处理 WindowInsets**（解包 AAR 字节码实锤：PlayerView/PlayerControlView/LayoutManager 三类零 WindowInsets 引用），竖屏系统栏显示时控制器底栏（时间/进度）和右下角自建按钮全被手势导航栏压住；右下角行 padding(end=2,bottom=2) 贴死圆角屏边。
   修复（横屏沉浸 inset=0 全部自动归零，横屏行为不变）：①**media3 控制器整体垫高**——ViewCompat.setOnApplyWindowInsetsListener 挂 PlayerView 取 navigationBars().bottom，对 exo_bottom_bar 的 parent（即控制器根，merge 布局直接子节点的父=PlayerControlView）setPadding(0,0,0,nav)；控制器延迟 inflate 的时序用可见性监听器补一次幂等垫高（insets 先到找不到底栏→状态已记录，首次显示时补齐）；pad 值存 controllerNavPadState（mutableIntStateOf）仅作 View 回调间通信，无重组读者。②右下角行竖屏 navigationBarsPadding+end12/bottom10、横屏保持 2/2，spacedBy 2→6dp。③顶栏右侧 下载/角标/全屏 spacedBy(8dp)（IconButton 36dp 视觉圆实际零间隙）。④拖动气泡/倍速/画质菜单/选集面板竖屏全部 navigationBarsPadding 垫高。
