@@ -946,7 +946,8 @@ fun PlayerScreen(nav: NavHostController) {
                             Modifier
                                 .fillMaxWidth()
                                 .statusBarsPadding()
-                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                                // 0.277 反馈：顶栏贴到顶部（只留状态栏高度，不再加内边距）
+                                .padding(horizontal = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             IconButton(
@@ -966,8 +967,8 @@ fun PlayerScreen(nav: NavHostController) {
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
-                            // 下载/角标/全屏之间留 8dp 呼吸间距（0.276 反馈：挤在一起）
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            // 下载/角标/全屏之间留 12dp 呼吸间距（0.277 反馈：再留点空隙）
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                 // 下载当前视频（v0.225）：先确认再下载（用户反馈不要静默开下）
                                 if (!isLive) {
                                     IconButton(
@@ -1052,13 +1053,8 @@ fun PlayerScreen(nav: NavHostController) {
                         exit = fadeOut(),
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            // 竖屏：垫高导航栏 + 留出呼吸边距（0.276 反馈：贴边拥挤）；
-                            // 横屏沉浸无导航栏，保持贴角
-                            .then(if (isLandscape) Modifier else Modifier.navigationBarsPadding())
-                            .padding(
-                                end = if (isLandscape) 2.dp else 12.dp,
-                                bottom = if (isLandscape) 2.dp else 10.dp
-                            )
+                            // 0.277 反馈：不垫高，贴右下角（横竖屏一致）
+                            .padding(end = 2.dp, bottom = 2.dp)
                     ) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),

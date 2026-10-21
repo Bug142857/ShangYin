@@ -93,7 +93,7 @@ import kotlinx.coroutines.launch
 
 /**
  * X站（里世界第九入口）：pektino.com 排行榜，原生渲染无 WebView。
- * 列表 = 榜单 tabs（日/周/月/总）+ 标签筛选 + 双列网格 + 页码条；
+ * 列表 = 榜单 tabs（周/月/总，0.277 起去掉每日）+ 标签筛选 + 双列网格 + 页码条；
  * 卡片点击直接进播放器（直链 mp4，无需先过详情），卡片上另有下载角标；不设收藏（0.273 用户定）。
  */
 /** 播放：列表项自带直链，直接进播放器（PlayerSession） */
@@ -130,7 +130,7 @@ private fun downloadPost(context: android.content.Context, post: XPost) {
 
 /** X站会话缓存（进程内）：榜单/标签/整页数据/滚动位——播放后返回原地继续（0.274 反馈4） */
 private object XSiteCache {
-    var range: String = "timely"
+    var range: String = XSiteClient.DEFAULT_RANGE
     var category: String = ""   // "" = 全部
     var page: Int = 1
     var lastPage: Int = 0
@@ -147,7 +147,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
 
     // 0.273 的缓存可能存着非法 range("daily")，进来先归位到站点真实值，否则没有 chip 会亮
     var range by remember {
-        mutableStateOf(XSiteCache.range.takeIf { r -> XSiteClient.RANGES.any { it.second == r } } ?: "timely")
+        mutableStateOf(XSiteCache.range.takeIf { r -> XSiteClient.RANGES.any { it.second == r } } ?: XSiteClient.DEFAULT_RANGE)
     }
     var category by remember { mutableStateOf(XSiteCache.category) }
     // 有缓存现场则先恢复（播放后返回不丢位置，0.274 反馈4），恢复完成后走正常加载
@@ -242,7 +242,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 榜单 tabs：日/周/月/总（4 个固定 chip，无需滚动）
+            // 榜单 tabs：周/月/总（3 个固定 chip，无需滚动；0.277 起去掉每日）
             // 点已选中的榜单 = 刷新该榜单（0.273：任何点击都要有响应）
             Row(
                 Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
