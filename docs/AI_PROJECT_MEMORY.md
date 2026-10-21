@@ -889,6 +889,10 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.278（状态栏常隐=顶栏真贴顶，2026-10-21）**：
+  用户反馈 0.277「顶栏还没贴上、下载和全屏没完全分开」。**根因认知修正：顶栏贴顶的前提是状态栏隐藏**——竖屏时状态栏一直显示，statusBarsPadding 永远留出高度（0.277 只去掉 vertical 8dp 是治标）。改法：播放页**状态栏无条件隐藏**（hide(Type.statusBars())），导航栏横屏隐藏/竖屏保留（三键导航可操作、media3 控制器垫高按 nav inset 照常工作）；statusBarsPadding 保留不删——**状态栏隐藏后 inset 派发 0，padding 自动归零即贴顶**（横屏本来就是这机制，等于把横屏沉浸扩展到竖屏的状态栏部分）。BEHAVIOR_TRANSIENT 提到分支外统一设。退出 DisposableEffect show(systemBars()) 不变，恢复完整。
+  另：下载/角标/全屏 spacedBy 12→16dp（12dp 视觉仍嫌挤）。审查确认：hide(statusBars) 触发的 insets 重派发对 media3 垫高无害（监听只读 navigationBars 且有 pad!=state 守卫）；manifest 有 configChanges 转屏不重建、守卫跨转屏有效。**方法论：贴顶/贴边类诉求先问「挡在路上的是哪层系统栏」，隐藏那一层比挪 padding 根治**。版本：0.278/1278。
+
 - **v0.277（竖屏布局回调 + X站去每日，2026-10-21）**：
   用户看了 0.276 真机截图后回调两项 + 加一项：①「右下角倍速/选集不用垫高放在右下角」——0.276 的竖屏垫高（navigationBarsPadding+12/10dp）实测观感是按钮浮在进度条右端上方挡进度条，删掉条件分支恢复统一 padding(end=2,bottom=2) 贴角；**但 media3 控制器垫高/拖动气泡/菜单/选集面板的垫高全部保留**（用户只点名按钮；三键导航设备菜单项不垫高会被导航键挡住点不到）。②「顶栏往上挪到顶部」——顶栏 Row 去掉 vertical=8dp 只留 statusBarsPadding（按钮贴状态栏下沿），「下载和全屏再留点空隙」spacedBy 8→12dp。③「X站把每日去掉默认显示每周」——RANGES 删 "每日"→timely 只剩 周/月/总，新增 DEFAULT_RANGE="weekly"，XSiteCache 默认值与 UI 兜底都走它；**旧进程缓存存着 timely 会被 RANGES 校验自动归位 weekly**（takeIf 过滤），无需迁移。
   教训：**inset 垫高这类「理论正确」的适配，用户真机截图才是最终裁判**——0.276 按标准做法垫高，用户实际观感却是按钮挡进度条；布局微调类需求要快速响应回调，别为上一轮的方案辩护。版本：0.277/1277。
