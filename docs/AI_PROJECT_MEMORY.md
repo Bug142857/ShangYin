@@ -889,6 +889,11 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.276（竖屏铺满按钮微调：inset 垫高防手势条遮挡，2026-10-21）**：
+  用户反馈「竖屏的按钮位置不对/拥挤，右上角下载和全屏也挤」。根因：App 全局 edge-to-edge（MainActivity enableEdgeToEdge）+ **media3 1.7.1 控制器完全不处理 WindowInsets**（解包 AAR 字节码实锤：PlayerView/PlayerControlView/LayoutManager 三类零 WindowInsets 引用），竖屏系统栏显示时控制器底栏（时间/进度）和右下角自建按钮全被手势导航栏压住；右下角行 padding(end=2,bottom=2) 贴死圆角屏边。
+  修复（横屏沉浸 inset=0 全部自动归零，横屏行为不变）：①**media3 控制器整体垫高**——ViewCompat.setOnApplyWindowInsetsListener 挂 PlayerView 取 navigationBars().bottom，对 exo_bottom_bar 的 parent（即控制器根，merge 布局直接子节点的父=PlayerControlView）setPadding(0,0,0,nav)；控制器延迟 inflate 的时序用可见性监听器补一次幂等垫高（insets 先到找不到底栏→状态已记录，首次显示时补齐）；pad 值存 controllerNavPadState（mutableIntStateOf）仅作 View 回调间通信，无重组读者。②右下角行竖屏 navigationBarsPadding+end12/bottom10、横屏保持 2/2，spacedBy 2→6dp。③顶栏右侧 下载/角标/全屏 spacedBy(8dp)（IconButton 36dp 视觉圆实际零间隙）。④拖动气泡/倍速/画质菜单/选集面板竖屏全部 navigationBarsPadding 垫高。
+  已知取舍：竖屏 16:9 视频手动切竖屏时（低频路径）底部会多一条 nav 垫高黑缝——View 侧不感知 isPortraitStream，接受；中央播放按钮随 padding 上移 nav/2（视觉无碍）。审查确认 media3 官方源码 PlayerControlView inflate(root=this)+DefaultTimeBar 程序化创建继承 placeholder 的 bottom gravity，整根 padding 对所有 bottom 子元素生效。版本：0.276/1276。
+
 - **v0.275（播放器竖屏铺满——抖音式观感的最小实现，2026-10-21）**：
   用户问「是否支持类似抖音的全屏竖屏播放模式，这些视频大多竖屏」。AskUserQuestion 确认取「仅竖屏铺满」（不做上下滑信息流）。
   现状诊断：X站竖屏视频被塞进 16:9 横框（PlayerScreen L871 else 分支 fillMaxWidth+aspectRatio(16/9)），且**进场默认强制横屏**（L389 区）——竖屏视频被掰横、画面缩成中间竖条，两个叠加才是体验差的全部。
