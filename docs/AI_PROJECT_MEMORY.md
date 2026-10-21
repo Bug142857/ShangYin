@@ -889,6 +889,13 @@
   响应头每次不同 = 随机垃圾不是密文；WebView 必须 Activity context 创建；失败路径要能
   自愈重建而非原地轮询**。版本：0.243/1243。
 
+- **v0.275（播放器竖屏铺满——抖音式观感的最小实现，2026-10-21）**：
+  用户问「是否支持类似抖音的全屏竖屏播放模式，这些视频大多竖屏」。AskUserQuestion 确认取「仅竖屏铺满」（不做上下滑信息流）。
+  现状诊断：X站竖屏视频被塞进 16:9 横框（PlayerScreen L871 else 分支 fillMaxWidth+aspectRatio(16/9)），且**进场默认强制横屏**（L389 区）——竖屏视频被掰横、画面缩成中间竖条，两个叠加才是体验差的全部。
+  修复=两处小改：①进场方向判定三分支化（aspect==0：非X站源维持默认横屏、**X站源不抢横屏等第一帧避免横屏闪一下再掰回**——sourceName 提常量 XSiteClient.SOURCE_NAME 两端共享；aspect<1 强制 PORTRAIT；aspect>=1 强制横屏——顺带修正了旧版竖屏直播进场先横后不动的隐性 bug）；②布局 isPortraitStream 去掉 isLive 限定，竖屏点播同样 fillMaxHeight+aspectRatio 居中铺满。
+  review 揪出两个真问题并修复：**手动 toggleFullscreen 后自动转向必须退位**（userToggledOrientation 标记，LaunchedEffect(Unit,videoAspect) 换源/首帧 aspect 0→0.56 重跑会抢回用户刚选的方向——0.253 seekTo「同 API 不同状态行为相反」教训的方向版）；**竖屏铺满把下方「标题+线路+选集网格」压成 0 高**（多集竖屏点播换集不可达）——选集按钮/面板条件放开到 isPortraitStream 且多集时显示（X站单集不显示），面板复用横屏右侧滑出 300dp 版。
+  已知取舍：竖屏铺满时下方信息面板不可见（X站无损失；直播画质/刷新在控制条里仍有）；非X站模块的竖屏点播进场会横屏闪一下再掰竖（可接受，竖屏视频在那些模块是少数）。版本：0.275/1275。
+
 - **v0.274（X站四反馈修复：timely 实锤/位置恢复，2026-10-20）**：
   四反馈：①封面下载角标移除（播放器里有下载即可，封面整块可点）②分类展开箭头方向对调（收起=ArrowDropDown/展开=ArrowDropUp）③「每日=总榜」④「播放返回不回原位」。
   **③根因抓 chunk 实锤（XSiteScreens 反查站点 JS）**：站点 fetchMediaList（chunk 9446 模块）默认 range="timely"，tab 集合=timely/weekly/monthly/all+心形 favorite（favorite 是并列 tab 不是纯排序参数）；
