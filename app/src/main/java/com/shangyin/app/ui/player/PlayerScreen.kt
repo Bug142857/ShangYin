@@ -851,15 +851,18 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 横屏沉浸：隐藏系统栏；退出时恢复
+    // 播放页沉浸（0.278）：状态栏始终隐藏——顶栏按钮借此贴顶可点（statusBarsPadding 自动归零）；
+    // 导航栏横屏隐藏、竖屏保留（三键导航用户竖屏仍可操作，media3 控制器垫高按 nav inset 照常工作）。
+    // 退出时恢复（见下方 DisposableEffect）
     LaunchedEffect(isLandscape) {
         val window = activity?.window ?: return@LaunchedEffect
         val c = WindowCompat.getInsetsController(window, view)
+        c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        c.hide(WindowInsetsCompat.Type.statusBars())
         if (isLandscape) {
-            c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            c.hide(WindowInsetsCompat.Type.systemBars())
+            c.hide(WindowInsetsCompat.Type.navigationBars())
         } else {
-            c.show(WindowInsetsCompat.Type.systemBars())
+            c.show(WindowInsetsCompat.Type.navigationBars())
         }
     }
     DisposableEffect(Unit) {
@@ -945,8 +948,8 @@ fun PlayerScreen(nav: NavHostController) {
                         Row(
                             Modifier
                                 .fillMaxWidth()
+                                // 0.278：状态栏已常隐，statusBarsPadding 自动归零=真正贴顶
                                 .statusBarsPadding()
-                                // 0.277 反馈：顶栏贴到顶部（只留状态栏高度，不再加内边距）
                                 .padding(horizontal = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -967,8 +970,8 @@ fun PlayerScreen(nav: NavHostController) {
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
-                            // 下载/角标/全屏之间留 12dp 呼吸间距（0.277 反馈：再留点空隙）
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            // 下载/角标/全屏之间留 16dp 呼吸间距（0.277 反馈挤，0.278 再加大）
+                            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 // 下载当前视频（v0.225）：先确认再下载（用户反馈不要静默开下）
                                 if (!isLive) {
                                     IconButton(
