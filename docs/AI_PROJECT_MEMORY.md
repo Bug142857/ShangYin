@@ -109,3 +109,4 @@
   ③ 收藏页 `open()` 支持 7 种 module 重放；h1 重放需 `SettingsStore.getVodSources()` 找回片源（片源被删时 Toast 明说）。
   ④ 发版记录：commit `bcee767` / tag `v0.292` / **Release `420241167`** / 资产 `LaoZhengFenXiang-0.292.apk`（20,284,847 字节，SHA256 `1DEBBB464FDFC16D6A5600C85B645288B2F63FBECB54109AE5EE1EBEEE91DA94`）；桌面 `老郑分享-0.292.apk`。
   ⑤ 编译踩坑：H2SearchScreen 里 `Icons.Rounded.Favorite` 同时被「点赞数」展示用——把 import 换成 FavoriteBorder 会漏掉它（编译错 Unresolved reference），同文件需要两个 import 并存。
+- **⚠️ GitHub Release 中文 body 乱码教训（2026-10-22，v0.291/v0.292 双双踩坑后修复）**：PowerShell `Invoke-RestMethod -Body <含中文的字符串>` 会按 ANSI/GBK 发送，GitHub 收到全变 `????`。正解：**JSON body 先用 UTF-8 写入临时文件（Write 工具），再用 `curl.exe --data-binary "@文件"` + `Content-Type: application/json; charset=utf-8` 发送**；PATCH/POST 后必须 GET 回读验证（曾有一次 curl 静默未生效，重试才 200）。创建和修补 Release 一律走这条路。
