@@ -115,3 +115,4 @@
   ② 音乐加入爱心快藏：MusicHomeScreen 搜索行尾原「收藏到音乐清单」的心改为 InnerFav 同款（下载按钮保留）；**原收藏到清单入口仍在完整播放页（MusicPlayerScreen 有 CollectDialog），功能没丢**。InnerFav 新增 `payload` 字段（music 存 MusicSong 全量 JSON 含 raw 解析字段，`songPayload()` 编码 / `restoreSong()` 解码），收藏页点开 `MusicPlayback.play` 直接播。
   ③ 本子收藏入口从各分类/搜索列表页顶栏（ComicListScreen）移到一级主页顶栏（用户明确要求「应在主页下 不应该在每个分类里」）；卡片上的爱心保留。
   ④ 发版记录：commit `701a3e4` / tag `v0.293` / **Release `420256023`** / 资产 `LaoZhengFenXiang-0.293.apk`（20,284,851 字节，SHA256 `A725BEDC3E506EC07ADBCC6885CBB3E49DD9FF9E6188ED35DBFE409BFA0E1550`）；桌面 `老郑分享-0.293.apk`。
+- **v0.294（收藏页两处体验修复，2026-10-22）**：① 收藏列表条目行尾的红心去掉（用户：已经在列表里就不用加红心）；② 音乐收藏页 Scaffold 挂 `bottomBar = { MusicMiniPlayer(nav) }`（迷你条自隐藏：没在播 song==null 直接 return，零高度）——点歌后播放条立即在本页底部出现，不用返回音乐主页才能看到。commit `2e925de` / tag `v0.294` / **Release `420266170`** / 资产 SHA256 `B51AC60A55F92338F1BAC3362FB5A7CAF0F8A9F2392AD9E9B3C3D697E27D5AE6`；桌面 `老郑分享-0.294.apk`。
