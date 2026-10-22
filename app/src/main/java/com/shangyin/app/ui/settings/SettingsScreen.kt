@@ -198,7 +198,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     Column(Modifier.weight(1f)) {
                         Text("账号管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "云端同步 · 豆瓣登录 · 哔咔登录",
+                            "豆瓣登录 · 哔咔登录 · 无忧游戏库 · Z-Library",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -258,7 +258,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     Column(Modifier.weight(1f)) {
                         Text("数据管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "导出/导入备份文件（收藏、清单、片源配置、里世界收藏）",
+                            "云端同步（WebDAV）· 导出/导入备份文件",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

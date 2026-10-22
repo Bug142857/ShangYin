@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -45,6 +46,7 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.buildExportJson
 import com.shangyin.app.data.parseExportJson
+import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -52,8 +54,9 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 数据管理页：导出（选目录保存 JSON）/ 导入（选文件恢复）。
- * 备份包含：收藏条目、清单及层级、清单归属排序、片源配置（含目录归属与测试结果）、里世界爱心收藏。
+ * 数据管理页：云端同步（WebDAV）/ 导出（选目录保存 JSON）/ 导入（选文件恢复）。
+ * 备份包含：收藏条目、清单及层级、清单归属排序、片源配置、里世界爱心收藏、
+ * 配置快照（登录态、主题/昵称等设置项、电视源、下载任务记录）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -119,10 +122,48 @@ fun DataManageScreen(nav: NavHostController) {
                 .padding(16.dp)
         ) {
             Text(
-                "备份包含：收藏条目（含评分/笔记）、清单及子清单层级、清单归属排序、片源配置（含目录归属与测试结果）、里世界爱心收藏（吃瓜/X站/P站/番号/本子/漫画/电视）。",
+                "备份包含：收藏条目（含评分/笔记）、清单及子清单层级、清单归属排序、片源配置（含目录归属与测试结果）、里世界爱心收藏（吃瓜/X站/P站/番号/本子/漫画/电视）、配置快照（各站登录态、主题/昵称等设置、电视源、下载任务记录）。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(Modifier.size(12.dp))
+
+            // 云端同步（WebDAV，从账号管理挪来）
+            Card {
+                Row(
+                    modifier = Modifier.fillMaxWidth().clickable {
+                        nav.safeNavigate("cloudsync")
+                    }.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Rounded.Cloud, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("云端同步", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            if (SettingsStore.isWebdavConfigured) {
+                                val t = SettingsStore.lastCloudSync
+                                if (t > 0L) "已连接 WebDAV · 上次同步 ${
+                                    SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(t))
+                                }"
+                                else "已连接 WebDAV · 从未同步"
+                            } else "用 WebDAV 网盘备份/恢复，换手机不丢数据",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Rounded.ArrowBack,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp).rotate(180f),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
+            }
+
             Spacer(Modifier.size(12.dp))
 
             // 导出数据

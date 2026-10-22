@@ -10,7 +10,8 @@ import com.shangyin.app.ui.settings.SettingsStore
 import org.json.JSONObject
 
 /**
- * 关键配置的自动备份/恢复（豆瓣 Cookie、坚果云 WebDAV、片源配置、主题）。
+ * 关键配置的自动备份/恢复（登录态、坚果云 WebDAV、片源/电视源配置、主题、
+ * 昵称/头像、下载存储位置、阅读器偏好、模块开关、下载任务记录）。
  *
  * 背景：用户侧更新 App 时若被卸载重装（应用商店/文件管理器行为），应用私有目录会被清空，
  * 导致豆瓣登录态和坚果云配置丢失、每次更新都要重新登录。
@@ -41,7 +42,16 @@ object ConfigBackup {
         "live_sources_json",
         // 吃瓜当前可用镜像（v0.224）：换设备导入备份后直接用活线，不用再吃一次 301/重新探活
         "melon_base",
-        "theme"
+        "theme",
+        // v0.299：主备份"所有信息一起走"扩展（设置项 + 下载任务记录）。
+        // disabled_inner_modules 是 StringSet 键，导出/导入时由 SettingsStore 特判转逗号串
+        "nickname",
+        "avatar_uri",
+        "download_internal",
+        "chapter_sort_desc",
+        "reader_vertical",
+        "video_downloads_json",
+        "disabled_inner_modules"
     )
 
     /** 备份当前配置到公共 Download 目录（API 29+ 用 MediaStore，旧版本跳过） */

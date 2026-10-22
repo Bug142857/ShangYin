@@ -149,28 +149,50 @@ object SettingsStore {
 
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 
-    /** 导出关键配置快照（key 与 SP key 一致） */
+    /** 导出关键配置快照（key 与 SP key 一致；StringSet 键转逗号串） */
     fun exportConfig(): Map<String, String> {
         val out = mutableMapOf<String, String>()
         for (key in com.shangyin.app.data.ConfigBackup.KEYS) {
-            out[key] = sp.getString(key, "").orEmpty()
+            out[key] = if (key == KEY_DISABLED_INNER_MODULES) {
+                sp.getStringSet(key, emptySet())?.joinToString(",").orEmpty()
+            } else {
+                sp.getString(key, "").orEmpty()
+            }
         }
         return out
     }
 
-    /** 恢复配置：仅补上当前 SP 缺失的 key，不覆盖已有值；返回恢复条数 */
-    fun importConfigIfMissing(data: Map<String, String>): Int {
+    /**
+     * 把快照写回 SP。overwrite=false 只补本机缺失的 key（ConfigBackup 启动恢复用），
+     * overwrite=true 非空值直接覆盖（主备份恢复用，恢复前有 auto_backup 兜底）。
+     * 返回写入条数。
+     */
+    private fun applyConfig(data: Map<String, String>, overwrite: Boolean): Int {
         var count = 0
         val editor = sp.edit()
         for ((key, value) in data) {
-            if (value.isNotBlank() && !sp.contains(key)) {
-                editor.putString(key, value)
-                count++
+            if (value.isBlank()) continue
+            if (!overwrite && sp.contains(key)) continue
+            when (key) {
+                KEY_DISABLED_INNER_MODULES -> {
+                    val set = value.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+                    editor.putStringSet(key, set)
+                    // 同步 StateFlow，否则主页模块开关不刷新
+                    disabledInnerModules.value = set
+                }
+                else -> editor.putString(key, value)
             }
+            count++
         }
         if (count > 0) editor.apply()
         return count
     }
+
+    /** 恢复配置：仅补上当前 SP 缺失的 key，不覆盖已有值；返回恢复条数 */
+    fun importConfigIfMissing(data: Map<String, String>): Int = applyConfig(data, overwrite = false)
+
+    /** 主备份恢复：备份里的非空配置直接覆盖本机值（含 StringSet 键还原 + StateFlow 同步） */
+    fun importSnapshot(data: Map<String, String>): Int = applyConfig(data, overwrite = true)
 
     // ---------- WebDAV 云同步 ----------
 

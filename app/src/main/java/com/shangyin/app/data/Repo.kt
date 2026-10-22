@@ -425,13 +425,14 @@ object Repo {
 
     // ---------- 导入导出 ----------
 
-    /** 导出全部数据（含片源配置、里世界爱心收藏） */
+    /** 导出全部数据（含片源配置、里世界爱心收藏、配置快照：登录态/设置项/电视源/下载记录） */
     suspend fun exportAll(): ExportData = ExportData(
         items = itemDao.getAllSync(),
         lists = listDao.getAllListsSync(),
         listItems = listDao.getAllListItemsSync(),
         vodSources = SettingsStore.getVodSources(),
-        innerFavs = InnerFavorites.favs.value
+        innerFavs = InnerFavorites.favs.value,
+        config = com.shangyin.app.ui.settings.SettingsStore.exportConfig()
     )
 
     /**
@@ -444,7 +445,7 @@ object Repo {
         itemDao.renameCategory("直播", "电视")
     }
 
-    /** 导入全部数据（清空后全量替换；备份带片源时同步替换片源配置） */
+    /** 导入全部数据（清空后全量替换；备份带片源/配置快照时同步替换） */
     suspend fun importAll(data: ExportData) {
         db.withTransaction {
             itemDao.deleteAll()
@@ -461,6 +462,13 @@ object Repo {
         if (data.innerFavs.isNotEmpty()) {
             InnerFavorites.replaceAll(data.innerFavs)
         }
+        // 配置快照（登录态/设置项/电视源/下载记录）：旧备份无此字段时保留现有配置；
+        // vod_sources_json 由上面的结构化 vodSources 字段负责，跳过避免双写
+        if (data.config.isNotEmpty()) {
+            com.shangyin.app.ui.settings.SettingsStore.importSnapshot(
+                data.config.filterKeys { it != "vod_sources_json" }
+            )
+        }
     }
 }
 
@@ -470,5 +478,7 @@ data class ExportData(
     val lists: List<com.shangyin.app.data.db.ItemListEntity>,
     val listItems: List<com.shangyin.app.data.db.ListItemEntity>,
     val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList(),
-    val innerFavs: List<InnerFav> = emptyList()
+    val innerFavs: List<InnerFav> = emptyList(),
+    /** 配置快照（登录态/设置项/电视源/下载记录等，key 与 SP key 一致）；旧备份无此字段 */
+    val config: Map<String, String> = emptyMap()
 )

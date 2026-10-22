@@ -102,6 +102,11 @@ fun buildExportJson(data: ExportData): String {
     }
     root.put("innerFavs", favArr)
 
+    // 配置快照（登录态/主题/昵称/电视源/模块开关/下载记录等），旧客户端导入时自动忽略此字段
+    if (data.config.isNotEmpty()) {
+        root.put("config", JSONObject(data.config))
+    }
+
     return root.toString(2)
 }
 
@@ -205,5 +210,12 @@ fun parseExportJson(json: String): ExportData {
         }
     } ?: emptyList()
 
-    return ExportData(items, lists, rels, vodSources, innerFavs)
+    // 配置快照：旧备份文件无此字段时为空 Map，导入时保留现有配置
+    val config = root.optJSONObject("config")?.let { o ->
+        val m = mutableMapOf<String, String>()
+        for (key in o.keys()) m[key] = o.optString(key, "")
+        m
+    } ?: emptyMap()
+
+    return ExportData(items, lists, rels, vodSources, innerFavs, config)
 }

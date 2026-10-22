@@ -22,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Book
-import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material3.AlertDialog
@@ -53,13 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.bika.BikaClient
 import com.shangyin.app.ui.common.PasswordField
-import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * 登录态校验（带超时）：通道卡住（如 zlib 走隐藏 WebView、站点无响应）时按「无法确认」处理，
@@ -69,8 +64,9 @@ private suspend fun checkSession(block: suspend () -> Boolean?): Boolean? =
     runCatching { withTimeoutOrNull(25_000L) { block() } }.getOrNull()
 
 /**
- * 账号管理：云端同步（坚果云 WebDAV）、豆瓣登录、哔咔登录、
+ * 账号管理：豆瓣登录、哔咔登录、
  * 无忧游戏库登录、Z-Library 登录（线路域名在登录页内切换，登录成功后自动写回设置）。
+ * 云端同步入口已挪到 设置 → 数据管理。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -182,18 +178,6 @@ fun AccountScreen(nav: NavHostController) {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 云端同步
-            SettingCard(
-                icon = { Icon(Icons.Rounded.Cloud, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                title = "云端同步",
-                subtitle = if (SettingsStore.isWebdavConfigured) {
-                    val t = SettingsStore.lastCloudSync
-                    if (t > 0L) "已连接 WebDAV · 上次同步 ${SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(t))}"
-                    else "已连接 WebDAV · 从未同步"
-                } else "用 WebDAV 网盘备份/恢复，换手机不丢数据",
-                onClick = { nav.safeNavigate("cloudsync") }
-            )
-
             // 豆瓣登录
             SettingCard(
                 icon = {
