@@ -103,3 +103,9 @@
 - **v0.291 发版记录（2026-10-22）**：commit `683d916` / tag `v0.291` / **Release `420224731`** / 资产 `LaoZhengFenXiang-0.291.apk`（20,284,851 字节，SHA256 `68AC67415183018775E58FA3DC8A85EF799571CB06F316CD995FCA6A3C1B166D`）；桌面 `老郑分享-0.291.apk`。
 - **⚠️ 本机环境变更（2026-10-22，旧配置已失效）**：①**构建 JDK**：`JAVA_HOME=D:\Java\jdk-21.0.12.1+1` 已不存在，现用 **`C:\Users\62496\.local\share\rea-tools\jdk-21.0.12.1+1`**（REA 工具链里的 Temurin 21.0.12.1，同一版本）。⚠️ gradlew 失败时 PowerShell 后台任务**仍报 exit code 0**（且 `java -version` 的 stderr 会被 PS 当 NativeCommandError），**必须查产物 LastWriteTime/大小才算数**。②**git 身份**：这台电脑没有全局 git 配置，commit 会报 "Author identity unknown"；已给本仓库配 `--local` 级 `user.name=老郑 / user.email=laozheng@users.noreply.github.com`（沿用历史作者），换目录克隆后需重配。
 - **⚠️ 发版流水线空洞（2026-10-22 发现并补录）**：本地 git 曾停在 v0.278、远端 tag/Release 也只到 v0.278——0.279~0.290 各会话的改动（P站模块、豆瓣修复等）**只存在于工作区、从未 commit/push**，全部随 v0.291（commit `683d916`）一次性补录入库。教训：每轮发版必须核实 `git log` 已包含本轮改动且 push 成功，不能只看会话记录下结论。
+- **v0.292（收藏接入备份 + 爱心快藏扩展到番号/本子/漫画/电视，2026-10-22）**：
+  ① 收藏随备份走：`ExportData` 加 `innerFavs` 字段（默认空列表兼容旧备份），`ExportJson` 导出 `innerFavs` 数组、导入时 optJSONArray 缺失即跳过（保留现有收藏）；手动导出 / 坚果云云同步 / 恢复前 auto_backup 三条路径都走 `Repo.exportAll()`，自动全覆盖。
+  ② 爱心快藏扩展（用户明确要求「番号 本子 漫画 电视 都改成这种形式的」）：番号（H1 搜索 + 片源浏览页两处卡片，删除原「收藏到清单」CollectDialog 流程，id=`srcId|vodId`，重放走 `openVodAndPlay` 现拉详情）、本子（哔咔搜索卡片，id=漫画id，重放进 `bikaComic/{id}`）、漫画（Komiic 宫格卡片，id=漫画id，重放进 `comicDetail/{id}`）、电视（频道行，原收藏按钮改爱心，id=频道地址 videoUrl，重放走 `openLiveAndPlay` 直接开播）；各模块首页 TopAppBar 加 FavoriteBorder 收藏入口 → `innerFavs/{module}`。
+  ③ 收藏页 `open()` 支持 7 种 module 重放；h1 重放需 `SettingsStore.getVodSources()` 找回片源（片源被删时 Toast 明说）。
+  ④ 发版记录：commit `bcee767` / tag `v0.292` / **Release `420241167`** / 资产 `LaoZhengFenXiang-0.292.apk`（20,284,847 字节，SHA256 `1DEBBB464FDFC16D6A5600C85B645288B2F63FBECB54109AE5EE1EBEEE91DA94`）；桌面 `老郑分享-0.292.apk`。
+  ⑤ 编译踩坑：H2SearchScreen 里 `Icons.Rounded.Favorite` 同时被「点赞数」展示用——把 import 换成 FavoriteBorder 会漏掉它（编译错 Unresolved reference），同文件需要两个 import 并存。
