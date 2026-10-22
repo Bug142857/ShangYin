@@ -79,6 +79,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.ComicCacheStore
 import com.shangyin.app.data.Repo
 import com.shangyin.app.data.download.ComicDownloadManager
@@ -91,6 +92,7 @@ import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.komiic.KomiicChapter
 import com.shangyin.app.data.komiic.KomiicComic
 import com.shangyin.app.ui.common.CollectDialog
+import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.common.LoadingPill
 import com.shangyin.app.ui.common.PhotoGridDialog
 import com.shangyin.app.ui.common.PhotoViewerDialog
@@ -258,6 +260,9 @@ fun ComicHomeScreen(nav: NavHostController) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/comic") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
+                    }
                     IconButton(onClick = { nav.safeNavigate("downloads") }) {
                         Icon(Icons.Rounded.Download, contentDescription = "我的下载")
                     }
@@ -440,6 +445,24 @@ fun ComicHomeScreen(nav: NavHostController) {
                                             Text(label, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                                         }
                                     }
+                                    // 爱心快藏（右上角）
+                                    FavHeartButton(
+                                        favModule = "comic",
+                                        favId = c.id,
+                                        build = {
+                                            InnerFav(
+                                                module = "comic",
+                                                id = c.id,
+                                                title = c.title,
+                                                subtitle = c.authors.joinToString("、") { it.name },
+                                                cover = c.imageUrl,
+                                                savedAt = System.currentTimeMillis()
+                                            )
+                                        },
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(3.dp)
+                                    )
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(

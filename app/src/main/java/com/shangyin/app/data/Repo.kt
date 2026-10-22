@@ -425,12 +425,13 @@ object Repo {
 
     // ---------- 导入导出 ----------
 
-    /** 导出全部数据（含片源配置） */
+    /** 导出全部数据（含片源配置、里世界爱心收藏） */
     suspend fun exportAll(): ExportData = ExportData(
         items = itemDao.getAllSync(),
         lists = listDao.getAllListsSync(),
         listItems = listDao.getAllListItemsSync(),
-        vodSources = SettingsStore.getVodSources()
+        vodSources = SettingsStore.getVodSources(),
+        innerFavs = InnerFavorites.favs.value
     )
 
     /**
@@ -456,6 +457,10 @@ object Repo {
         if (data.vodSources.isNotEmpty()) {
             SettingsStore.setVodSources(data.vodSources)
         }
+        // 里世界爱心收藏同样在 SP；旧备份无此字段时保留现有收藏
+        if (data.innerFavs.isNotEmpty()) {
+            InnerFavorites.replaceAll(data.innerFavs)
+        }
     }
 }
 
@@ -464,5 +469,6 @@ data class ExportData(
     val items: List<com.shangyin.app.data.db.CollectionItemEntity>,
     val lists: List<com.shangyin.app.data.db.ItemListEntity>,
     val listItems: List<com.shangyin.app.data.db.ListItemEntity>,
-    val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList()
+    val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList(),
+    val innerFavs: List<InnerFav> = emptyList()
 )

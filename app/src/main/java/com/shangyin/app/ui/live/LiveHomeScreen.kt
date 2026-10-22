@@ -62,13 +62,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.Repo
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.live.LiveChannelResult
 import com.shangyin.app.data.live.LivePlatforms
 import com.shangyin.app.data.live.LiveQuality
 import com.shangyin.app.data.live.LiveRoom
 import com.shangyin.app.data.live.M3uClient
-import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
@@ -100,11 +101,6 @@ fun LiveHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val savedIds = remember(allItems) {
-        allItems.filter { it.category == LivePlatforms.CATEGORY }.mapNotNull { it.doubanId }.toSet()
-    }
-
     // 源配置可能在「电视源配置」里改过：每次进入本页重读一次
     val sources = remember { SettingsStore.getLiveSources() }
 
@@ -114,7 +110,6 @@ fun LiveHomeScreen(nav: NavHostController) {
     var selGroup by remember { mutableStateOf(LiveCache.customGroup) }
     var groupExpanded by rememberSaveable { mutableStateOf(false) }
     var openingUrl by remember { mutableStateOf<String?>(null) }
-    var collectTarget by remember { mutableStateOf<LiveRoom?>(null) }
     var query by remember { mutableStateOf(LiveCache.searchInput) }
     var keyword by remember { mutableStateOf(LiveCache.searchKeyword) }
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = LiveCache.customScroll)
@@ -161,6 +156,10 @@ fun LiveHomeScreen(nav: NavHostController) {
             TopAppBar(
                 title = { Text("电视", fontWeight = FontWeight.Bold) },
                 actions = {
+                    // 爱心收藏页
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/tv") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
+                    }
                     // 电视源配置（添加 / 导入 / 测试 / 导出）
                     IconButton(onClick = { nav.safeNavigate("liveSources") }) {
                         Icon(Icons.Rounded.PlaylistPlay, contentDescription = "电视源配置")
@@ -350,7 +349,6 @@ fun LiveHomeScreen(nav: NavHostController) {
                                 streamer = sourceName,
                                 categoryName = ch.group
                             )
-                            val collected = room.collectId in savedIds
                             Row(
                                 Modifier
                                     .fillMaxWidth()
@@ -405,14 +403,28 @@ fun LiveHomeScreen(nav: NavHostController) {
                                         strokeWidth = 2.dp
                                     )
                                 }
-                                IconButton(onClick = { collectTarget = room }) {
-                                    Icon(
-                                        if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                        contentDescription = if (collected) "已收藏" else "收藏",
-                                        tint = if (collected) Color(0xFFE53935)
-                                        else MaterialTheme.colorScheme.outline
-                                    )
-                                }
+                                // 爱心快藏（与吃瓜/X站/P站同款；id=频道地址，重放直接开播）
+                                FavHeartButton(
+                                    favModule = "tv",
+                                    favId = ch.url,
+                                    build = {
+                                        InnerFav(
+                                            module = "tv",
+                                            id = ch.url,
+                                            title = ch.name,
+                                            subtitle = buildString {
+                                                if (ch.group.isNotBlank()) append(ch.group)
+                                                if (sourceName.isNotBlank()) {
+                                                    if (isNotBlank()) append(" · ")
+                                                    append(sourceName)
+                                                }
+                                            },
+                                            cover = null,
+                                            savedAt = System.currentTimeMillis(),
+                                            videoUrl = ch.url
+                                        )
+                                    }
+                                )
                             }
                         }
                         if (failed.isNotEmpty()) {
@@ -431,28 +443,6 @@ fun LiveHomeScreen(nav: NavHostController) {
         }
     }
 
-    collectTarget?.let { room ->
-        CollectDialog(
-            onDismiss = { collectTarget = null },
-            collect = { listId ->
-                val itemId = Repo.saveCustomItem(
-                    category = LivePlatforms.CATEGORY,
-                    doubanId = room.collectId,
-                    title = room.title,
-                    coverUrl = room.cover,
-                    subTitle = buildString {
-                        append("电视")
-                        if (room.categoryName.isNotBlank()) append(" · ").append(room.categoryName)
-                        if (room.streamer.isNotBlank()) append(" · ").append(room.streamer)
-                    }
-                )
-                if (itemId > 0) {
-                    Repo.addItemToList(listId, itemId)
-                    true
-                } else false
-            }
-        )
-    }
 }
 
 /** 同名频道是否有多条地址（有多条就提示"多线路"，与播放页的线路菜单对应） */

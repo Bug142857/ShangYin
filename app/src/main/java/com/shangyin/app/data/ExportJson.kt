@@ -83,6 +83,24 @@ fun buildExportJson(data: ExportData): String {
     }
     root.put("vodSources", vodArr)
 
+    // 里世界爱心收藏（吃瓜/X站/P站），旧客户端导入时自动忽略此字段
+    val favArr = JSONArray()
+    data.innerFavs.forEach { f ->
+        favArr.put(JSONObject().apply {
+            put("module", f.module)
+            put("id", f.id)
+            put("title", f.title)
+            put("subtitle", f.subtitle)
+            f.cover?.let { put("cover", it) }
+            put("savedAt", f.savedAt)
+            f.videoUrl?.let { put("videoUrl", it) }
+            put("mediaId", f.mediaId)
+            put("durationSec", f.durationSec)
+            f.tweetUrl?.let { put("tweetUrl", it) }
+        })
+    }
+    root.put("innerFavs", favArr)
+
     return root.toString(2)
 }
 
@@ -164,5 +182,26 @@ fun parseExportJson(json: String): ExportData {
         }
     } ?: emptyList()
 
-    return ExportData(items, lists, rels, vodSources)
+    val innerFavs = root.optJSONArray("innerFavs")?.let { arr ->
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.getJSONObject(i)
+            val module = o.optString("module")
+            val id = o.optString("id")
+            if (module.isBlank() || id.isBlank()) return@mapNotNull null
+            InnerFav(
+                module = module,
+                id = id,
+                title = o.optString("title"),
+                subtitle = o.optString("subtitle"),
+                cover = o.optString("cover").ifBlank { null },
+                savedAt = o.optLong("savedAt", 0L),
+                videoUrl = o.optString("videoUrl").ifBlank { null },
+                mediaId = o.optLong("mediaId", 0L),
+                durationSec = o.optInt("durationSec", 0),
+                tweetUrl = o.optString("tweetUrl").ifBlank { null }
+            )
+        }
+    } ?: emptyList()
+
+    return ExportData(items, lists, rels, vodSources, innerFavs)
 }

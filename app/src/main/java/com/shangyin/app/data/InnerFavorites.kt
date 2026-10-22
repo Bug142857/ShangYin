@@ -68,6 +68,11 @@ object InnerFavorites {
         persist(_favs.value.filterNot { it.module == module && it.id == id })
     }
 
+    /** 全量替换（数据导入/云同步恢复用）：备份里无此字段时调用方不会走到这里 */
+    fun replaceAll(list: List<InnerFav>) {
+        persist(list)
+    }
+
     private fun persist(list: List<InnerFav>) {
         _favs.value = list
         sp.edit().putString(KEY_JSON, encode(list)).apply()

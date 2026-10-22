@@ -62,6 +62,7 @@ import com.shangyin.app.ui.safePopBackStack
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 /**
  * 里世界「点爱心」收藏页（吃瓜 / X站 / P站共用，按 module 区分）：
@@ -81,12 +82,52 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
         "melon" -> "吃瓜收藏"
         "xsite" -> "X站收藏"
         "psite" -> "P站收藏"
+        "h1" -> "番号收藏"
+        "h2" -> "本子收藏"
+        "comic" -> "漫画收藏"
+        "tv" -> "电视收藏"
         else -> "收藏"
     }
 
     fun open(f: InnerFav) {
         when (module) {
             "melon" -> nav.safeNavigate("melonDetail/${Uri.encode(f.id)}")
+            "h1" -> {
+                // id = "srcId|vodId"：按片源重建条目后走公共播放流程（详情需现拉）
+                val srcId = f.id.substringBefore("|")
+                val vodId = f.id.substringAfter("|").toLongOrNull() ?: 0L
+                val src = com.shangyin.app.ui.settings.SettingsStore.getVodSources()
+                    .find { it.id == srcId }
+                if (src == null) {
+                    Toast.makeText(context, "片源已被删除，无法播放", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                scope.launch {
+                    com.shangyin.app.ui.search.openVodAndPlay(
+                        nav, context, src,
+                        com.shangyin.app.data.vod.VodItem(
+                            vod_id = vodId, vod_name = f.title, vod_pic = f.cover.orEmpty()
+                        )
+                    )
+                }
+            }
+            "h2" -> nav.safeNavigate("bikaComic/${Uri.encode(f.id)}")
+            "comic" -> nav.safeNavigate("comicDetail/${Uri.encode(f.id)}")
+            "tv" -> {
+                // id = 频道地址：M3U 直播流直接解析开播
+                val url = f.videoUrl ?: f.id
+                scope.launch {
+                    com.shangyin.app.ui.live.openLiveAndPlay(
+                        nav, context,
+                        com.shangyin.app.data.live.LiveRoom(
+                            platform = com.shangyin.app.data.live.LivePlatforms.CUSTOM,
+                            roomId = url,
+                            title = f.title,
+                            streamer = f.subtitle.substringAfter(" · ")
+                        )
+                    )
+                }
+            }
             "xsite" -> {
                 val url = f.videoUrl
                 if (url.isNullOrBlank()) {

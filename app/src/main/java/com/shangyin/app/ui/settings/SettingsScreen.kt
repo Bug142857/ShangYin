@@ -258,7 +258,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     Column(Modifier.weight(1f)) {
                         Text("数据管理", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "导出/导入备份文件（收藏、清单、片源配置）",
+                            "导出/导入备份文件（收藏、清单、片源配置、里世界收藏）",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

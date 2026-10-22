@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Sort
 import androidx.compose.material.icons.rounded.Visibility
@@ -62,6 +63,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.bika.BikaChapter
 import com.shangyin.app.data.bika.BikaClient
 import com.shangyin.app.data.bika.BikaComic
@@ -69,6 +71,7 @@ import com.shangyin.app.data.bika.BikaCategory
 import com.shangyin.app.data.bika.BikaComicsPage
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
@@ -360,6 +363,9 @@ private fun ComicListPage(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/h2") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
+                    }
                     IconButton(onClick = { sortMenu = true }) {
                         Icon(Icons.Rounded.Sort, contentDescription = "排序")
                     }
@@ -480,6 +486,24 @@ private fun ComicRow(comic: BikaComic, onClick: () -> Unit) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(modifier = Modifier.width(92.dp).aspectRatio(90f / 130f).clip(RoundedCornerShape(10.dp))) {
                 CoverImage(url = comic.thumbUrl, modifier = Modifier.fillMaxSize())
+                // 爱心快藏（左上角；完结角标占右上）
+                FavHeartButton(
+                    favModule = "h2",
+                    favId = comic.id,
+                    build = {
+                        InnerFav(
+                            module = "h2",
+                            id = comic.id,
+                            title = comic.title,
+                            subtitle = comic.author,
+                            cover = comic.thumbUrl,
+                            savedAt = System.currentTimeMillis()
+                        )
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(3.dp)
+                )
                 // 完结角标（右上角绿底）
                 if (comic.finished) {
                     Text(

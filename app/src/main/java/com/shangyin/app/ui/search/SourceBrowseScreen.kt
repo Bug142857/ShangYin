@@ -32,7 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowDropUp
-import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -58,10 +58,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.vod.VodCategory
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.innerfav.FavHeartButton
+import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.async
@@ -117,13 +120,7 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     var catExpanded by remember { mutableStateOf(if (restored) BrowseCache.catExpanded else false) }
     var catCounts by remember { mutableStateOf(if (restored) BrowseCache.catCounts else emptyMap<Int, Int>()) }
 
-    // 收藏番号到里世界清单（category="番号"，doubanId="srcId|vodId"，与 H1 浏览页同一口径）
-    var collectTarget by remember { mutableStateOf<VodItem?>(null) }
-    val allItems by com.shangyin.app.data.Repo.observeItems(null)
-        .collectAsStateWithLifecycle(initialValue = emptyList())
-    val savedIds = remember(allItems) {
-        allItems.filter { it.category == "番号" }.mapNotNull { it.doubanId }.toSet()
-    }
+    // 爱心快藏（与吃瓜/X站/P站同款）：数据在 InnerFavorites
 
     // 状态变化实时写回缓存（进播放页返回后完整恢复：分类选择、已加载列表、展开状态）
     LaunchedEffect(srcId, categories, selectedType, items, total, page, catExpanded, catCounts) {
@@ -237,6 +234,11 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/h1") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
                     }
                 }
             )
@@ -359,7 +361,8 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                         GridCard(
                             item = item,
                             opening = openingId == item.vod_id,
-                            collected = "${src.id}|${item.vod_id}" in savedIds,
+                            favId = "${src.id}|${item.vod_id}",
+                            favSubtitle = src.name,
                             onClick = {
                                 if (openingId == null) {
                                     openingId = item.vod_id
@@ -368,8 +371,7 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                                         if (!ok) openingId = null
                                     }
                                 }
-                            },
-                            onCollect = { collectTarget = item }
+                            }
                         )
                     }
                     // 底部加载更多（占满整行）
@@ -394,37 +396,16 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
             }
         }
     }
-
-    // 收藏番号对话框：存为 category="番号" 条目（doubanId="srcId|vodId"）挂入里世界清单
-    // ——「查看全部」页也要能收藏，否则用户从 H1 进来就找不到收藏入口
-    collectTarget?.let { item ->
-        com.shangyin.app.ui.common.CollectDialog(
-            onDismiss = { collectTarget = null },
-            collect = { listId ->
-                val itemId = com.shangyin.app.data.Repo.saveCustomItem(
-                    category = "番号",
-                    doubanId = "${src.id}|${item.vod_id}",
-                    title = item.vod_name,
-                    coverUrl = item.vod_pic,
-                    subTitle = src.name
-                )
-                if (itemId > 0) {
-                    com.shangyin.app.data.Repo.addItemToList(listId, itemId)
-                    true
-                } else false
-            }
-        )
-    }
 }
 
-/** 网格海报卡：海报 3:4 + 片名 + 备注，点击播放，右上角收藏番号 */
+/** 网格海报卡：海报 3:4 + 片名 + 备注，点击播放，右上角爱心快藏（InnerFavorites） */
 @Composable
 private fun GridCard(
     item: VodItem,
     opening: Boolean,
-    collected: Boolean,
-    onClick: () -> Unit,
-    onCollect: () -> Unit
+    favId: String,
+    favSubtitle: String,
+    onClick: () -> Unit
 ) {
     Column(
         Modifier
@@ -439,28 +420,24 @@ private fun GridCard(
                     .aspectRatio(3f / 4f),
                 corner = 8.dp
             )
-            // 收藏角标（右上角小爱心，带半透明底，不挡海报点击）
-            Box(
-                Modifier
+            // 爱心快藏（右上角，不挡海报点击）
+            FavHeartButton(
+                favModule = "h1",
+                favId = favId,
+                build = {
+                    InnerFav(
+                        module = "h1",
+                        id = favId,
+                        title = item.vod_name,
+                        subtitle = favSubtitle,
+                        cover = item.vod_pic,
+                        savedAt = System.currentTimeMillis()
+                    )
+                },
+                modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(3.dp)
-                    .size(24.dp)
-                    .background(
-                        androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f),
-                        RoundedCornerShape(50)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Rounded.Favorite,
-                    contentDescription = "收藏番号",
-                    tint = if (collected) androidx.compose.ui.graphics.Color(0xFFEF5350)
-                    else androidx.compose.ui.graphics.Color.White,
-                    modifier = Modifier
-                        .size(15.dp)
-                        .clickable { onCollect() }
-                )
-            }
+            )
             if (opening) {
                 Box(
                     Modifier
