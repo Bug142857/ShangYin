@@ -149,14 +149,20 @@ object SettingsStore {
 
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 
-    /** 导出关键配置快照（key 与 SP key 一致；StringSet 键转逗号串） */
+    /** Boolean 型 SP 键：getString/putString 会 ClassCastException，导出/导入必须特判（v0.300 教训） */
+    private val BOOLEAN_BACKUP_KEYS = setOf(
+        KEY_DOWNLOAD_INTERNAL, KEY_CHAPTER_SORT_DESC, KEY_READER_VERTICAL
+    )
+
+    /** 导出关键配置快照（key 与 SP key 一致；StringSet 键转逗号串，Boolean 键转 true/false） */
     fun exportConfig(): Map<String, String> {
         val out = mutableMapOf<String, String>()
         for (key in com.shangyin.app.data.ConfigBackup.KEYS) {
-            out[key] = if (key == KEY_DISABLED_INNER_MODULES) {
-                sp.getStringSet(key, emptySet())?.joinToString(",").orEmpty()
-            } else {
-                sp.getString(key, "").orEmpty()
+            out[key] = when (key) {
+                KEY_DISABLED_INNER_MODULES ->
+                    sp.getStringSet(key, emptySet())?.joinToString(",").orEmpty()
+                // 用 sp.all 取原始值再 toString：getString 碰到 Boolean 型键会 ClassCastException
+                else -> sp.all[key]?.toString().orEmpty()
             }
         }
         return out
@@ -173,13 +179,14 @@ object SettingsStore {
         for ((key, value) in data) {
             if (value.isBlank()) continue
             if (!overwrite && sp.contains(key)) continue
-            when (key) {
-                KEY_DISABLED_INNER_MODULES -> {
+            when {
+                key == KEY_DISABLED_INNER_MODULES -> {
                     val set = value.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
                     editor.putStringSet(key, set)
                     // 同步 StateFlow，否则主页模块开关不刷新
                     disabledInnerModules.value = set
                 }
+                key in BOOLEAN_BACKUP_KEYS -> editor.putBoolean(key, value == "true")
                 else -> editor.putString(key, value)
             }
             count++

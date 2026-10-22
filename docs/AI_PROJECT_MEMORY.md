@@ -53,7 +53,7 @@
 - 豆瓣 qnmob*.doubanio.com 旧图床域已下线，所有该域的图片请求需自动重写到 img2.doubanio.com
 
 ## Engineering Conventions
-- **版本号规则（2026-09-22 用户指定，取代「读提交次数」，也取代最早的 `2.23.NN`）**：**每个发版轮次 `versionName` = 上一版 +1**（不补零），**从 `0.190` 起**（`0.190` → `0.191` → `0.192`…）。⚠️ **不再读 `git rev-list --count HEAD`**：老规则会因为"每轮固定产生 2 个提交（功能提交 + 记忆同步提交）"而每次 +2（用户 2026-09-22 指出 `0.185 → 0.187` 正是 +2，要求以后 +1）。APK 文件名 = `老郑分享-0.<N>.apk`，GitHub 资产名 = `LaoZhengFenXiang-0.<N>.apk`（必须 ASCII），tag = `v0.<N>`。⚠️ **versionCode 固定取 `1000 + N`**（`0.190` → `1190`；必须保持单调递增，否则系统拒绝覆盖安装）。**版本沿革**：最后一个"提交次数"版本是 `v0.183`（versionCode 1183，Release 392804722，仍在仓库里）；`v0.185`/`v0.187` 的改动与 tag/Release 已按用户要求**全部撤销**（2026-09-22，`git revert` 5 个提交），**版本号从 `0.190` 重新起算**；仓库 `app/build.gradle.kts` 当前为 `0.299 / 1299`（v0.299 发版后；上一版是 `0.298 / 1298`）。
+- **版本号规则（2026-09-22 用户指定，取代「读提交次数」，也取代最早的 `2.23.NN`）**：**每个发版轮次 `versionName` = 上一版 +1**（不补零），**从 `0.190` 起**（`0.190` → `0.191` → `0.192`…）。⚠️ **不再读 `git rev-list --count HEAD`**：老规则会因为"每轮固定产生 2 个提交（功能提交 + 记忆同步提交）"而每次 +2（用户 2026-09-22 指出 `0.185 → 0.187` 正是 +2，要求以后 +1）。APK 文件名 = `老郑分享-0.<N>.apk`，GitHub 资产名 = `LaoZhengFenXiang-0.<N>.apk`（必须 ASCII），tag = `v0.<N>`。⚠️ **versionCode 固定取 `1000 + N`**（`0.190` → `1190`；必须保持单调递增，否则系统拒绝覆盖安装）。**版本沿革**：最后一个"提交次数"版本是 `v0.183`（versionCode 1183，Release 392804722，仍在仓库里）；`v0.185`/`v0.187` 的改动与 tag/Release 已按用户要求**全部撤销**（2026-09-22，`git revert` 5 个提交），**版本号从 `0.190` 重新起算**；仓库 `app/build.gradle.kts` 当前为 `0.300 / 1300`（v0.300 发版后；上一版是 `0.299 / 1299`）。
 - **项目记忆同步（v2.21.2 起，用户要求"换电脑/换账号也不丢上下文"；2026-10-16 用户再次强调并升级为**每轮必做**）**：
   ⚠️⚠️ **记忆文件有「两份」，每轮改动收尾时两份都必须更新，并且都要 push——不许只更一份、更不许只留在本地**：
   ① 仓库 `docs/AI_PROJECT_MEMORY.md`（随 commit 进 git，供换电脑/换 AI 账号后恢复上下文）；
@@ -126,3 +126,7 @@
   ③ ExportJson：buildExportJson 根对象加 `config` JSONObject（旧客户端导入自动忽略）；parseExportJson `optJSONObject` 解析回 Map。
   ④ **云同步入口挪位**（用户要求「把云端同步放到数据管理里」）：账号管理（AccountScreen）删云端同步卡片（并清理 Cloud/SimpleDateFormat/Date/Locale/safeNavigate 无用 import），数据管理（DataManageScreen）第一张卡片即云端同步（带 WebDAV 连接状态副标题，→ `cloudsync` 路由）；SettingsScreen 两入口副标题同步改。
   ⑤ 发版记录：tag `v0.299` / 资产 `LaoZhengFenXiang-0.299.apk`（20,268,467 字节，SHA256 `EF55B54CA11DDB06AF0AF5F314CDEAD0BB525D05B90C7039448BDB6246F7F609`）；桌面 `老郑分享-0.299.apk`。
+- **v0.300（修 v0.299 导出全挂：配置快照 getString 撞 Boolean 键，2026-10-22）**：
+  ① 用户报「点导出数据失败」→ 根因是 v0.299 的 `exportConfig()` 用 `sp.getString()` 遍历 `ConfigBackup.KEYS`，而本轮新增的 `download_internal` / `chapter_sort_desc` / `reader_vertical` 三键在 SP 里是 **Boolean** 类型（putBoolean 写入）→ `getString` 强转抛 `ClassCastException: java.lang.Boolean cannot be cast to java.lang.String` → exportAll 整个失败，手动导出/云同步/恢复前自动备份三条链路全挂。教训固化：**SharedPreferences 是按 key 记类型的，读用错类型就 CCE；给"通用键遍历"加新键时必须核对每个键的写入类型，Boolean/Long 键不能走 getString**。
+  ② 修复：`exportConfig()` 非集合键改用 `sp.all[key]?.toString().orEmpty()`（取原始值统一转字符串，天然类型安全）；新增 `BOOLEAN_BACKUP_KEYS`（download_internal/chapter_sort_desc/reader_vertical），`applyConfig` 导入时对这三键 `putBoolean(key, value == "true")` 还原（putString 写进 Boolean 键会在下次 getBoolean 时同样 CCE）；StringSet 键特判不变。横向排查：SettingsStore 其余 getString/getBoolean/getLong 与各键类型全部匹配，无同类问题。
+  ③ 发版记录：commit / tag `v0.300` / 资产 `LaoZhengFenXiang-0.300.apk`（20,268,467 字节，SHA256 `3C8A629082382D7FD6879F12D281F51502BED4E4F572F476501B72BD3892C31A`）；桌面 `老郑分享-0.300.apk`。
