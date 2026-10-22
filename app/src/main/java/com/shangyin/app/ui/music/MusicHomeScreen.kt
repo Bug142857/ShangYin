@@ -29,7 +29,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Pause
@@ -71,16 +70,31 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.music.MusicDownloader
 import com.shangyin.app.data.music.MusicPlatform
 import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.data.music.MusicSong
-import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+
+/** MusicSong → payload JSON（收藏快藏重放时全量还原，含 raw 解析字段） */
+internal fun songPayload(song: MusicSong): String = JSONObject().apply {
+    put("platform", song.platform.key)
+    put("id", song.id)
+    put("name", song.name)
+    put("artists", song.artists)
+    put("album", song.album)
+    put("cover", song.cover)
+    put("durationMs", song.durationMs)
+    put("from", song.from)
+    put("raw", JSONObject(song.raw))
+}.toString()
 
 /**
  * 音乐模块主页：顶部标题栏 + 搜索页 + 底部迷你播放条。
@@ -114,6 +128,11 @@ fun MusicHomeScreen(nav: NavHostController) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/music") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
                     }
                 }
             )
@@ -300,10 +319,8 @@ private fun SearchTab(st: SearchTabState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val play = rememberMusicPlay()
-    val savedKeys = rememberCollectedKeys()
     val keyboard = LocalSoftwareKeyboardController.current
     val listState = rememberLazyListState()
-    var collectSong by remember { mutableStateOf<MusicSong?>(null) }
     // 下载状态：downloadingKey 为正在下载的歌（非空即视为下载中，天然防重复点击）
     var downloadingKey by remember { mutableStateOf<String?>(null) }
     var downloadPercent by remember { mutableIntStateOf(0) }
@@ -441,21 +458,22 @@ private fun SearchTab(st: SearchTabState) {
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                IconButton(onClick = {
-                                    if (song.key in savedKeys) {
-                                        Toast.makeText(context, "已在清单中", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        collectSong = song
+                                // 爱心快藏（与其它里世界模块同款；收藏页样式同音乐清单）
+                                FavTopBarIcon(
+                                    favModule = "music",
+                                    favId = song.key,
+                                    build = {
+                                        InnerFav(
+                                            module = "music",
+                                            id = song.key,
+                                            title = song.name,
+                                            subtitle = song.artists,
+                                            cover = song.cover,
+                                            savedAt = System.currentTimeMillis(),
+                                            payload = songPayload(song)
+                                        )
                                     }
-                                }) {
-                                    val saved = song.key in savedKeys
-                                    Icon(
-                                        if (saved) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                                        contentDescription = "收藏",
-                                        tint = if (saved) Color(0xFFEF5350)
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
+                                )
                             }
                         )
                     }
@@ -468,15 +486,6 @@ private fun SearchTab(st: SearchTabState) {
 
         // 下载进度（页面底部，下载中才显示）
         if (downloadingKey != null) MusicDownloadBar(downloadPercent)
-
-        // 点收藏图标 → 收藏到里世界清单
-        collectSong?.let { song ->
-            CollectDialog(
-                onDismiss = { collectSong = null },
-                collect = { listId -> MusicRepo.collect(song, listId) },
-                music = true
-            )
-        }
 
         // 下载确认：所有下载操作点击后都要先问一次是否下载
         pendingDownload?.let { song ->
@@ -543,14 +552,6 @@ internal fun rememberMusicPlay(): (List<MusicSong>, Int) -> Unit {
         if (!granted) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
         MusicPlayback.play(context, songs, index)
     }
-}
-
-/** 已收藏歌曲的 key 集合（列表里的收藏图标状态用） */
-@Composable
-internal fun rememberCollectedKeys(): Set<String> {
-    val flow = remember { MusicRepo.observeAllSongs() }
-    val songs by flow.collectAsStateWithLifecycle(initialValue = emptyList())
-    return remember(songs) { songs.map { it.key }.toSet() }
 }
 
 /**

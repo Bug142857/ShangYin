@@ -97,6 +97,7 @@ fun buildExportJson(data: ExportData): String {
             put("mediaId", f.mediaId)
             put("durationSec", f.durationSec)
             f.tweetUrl?.let { put("tweetUrl", it) }
+            f.payload?.let { put("payload", it) }
         })
     }
     root.put("innerFavs", favArr)
@@ -198,7 +199,8 @@ fun parseExportJson(json: String): ExportData {
                 videoUrl = o.optString("videoUrl").ifBlank { null },
                 mediaId = o.optLong("mediaId", 0L),
                 durationSec = o.optInt("durationSec", 0),
-                tweetUrl = o.optString("tweetUrl").ifBlank { null }
+                tweetUrl = o.optString("tweetUrl").ifBlank { null },
+                payload = o.optString("payload").ifBlank { null }
             )
         }
     } ?: emptyList()

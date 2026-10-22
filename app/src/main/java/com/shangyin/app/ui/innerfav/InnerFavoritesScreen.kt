@@ -2,32 +2,29 @@ package com.shangyin.app.ui.innerfav
 
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,37 +43,39 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import coil.compose.AsyncImage
 import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.InnerFavorites
 import com.shangyin.app.data.xsite.XSiteClient
+import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.music.MusicPlayback
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.launch
+import org.json.JSONObject
+
+/** 收藏排序模式：更新 = 按收藏时间倒序（默认）；歌手/作者 = 按副标题中文拼音序（同音乐清单） */
+private enum class FavSortMode { ADDED, ARTIST }
 
 /**
- * 里世界「点爱心」收藏页（吃瓜 / X站 / P站共用，按 module 区分）：
- * 点条目继续消费（吃瓜进详情 / X、P 站直接播放），长按弹确认删除。
+ * 里世界「点爱心」收藏页（吃瓜/X站/P站/番号/本子/漫画/电视/音乐共用，按 module 区分）。
+ * 样式沿用音乐清单：标题 + 计数、「排序」行（更新/歌手 chips）、52dp 方形封面行 + 歌名式两行文本。
+ * 点条目继续消费（详情/直接播放），长按弹确认删除。
  */
-@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun InnerFavoritesScreen(nav: NavHostController, module: String) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val allFavs by InnerFavorites.favs.collectAsStateWithLifecycle()
-    val items = allFavs.filter { it.module == module }
     var pendingDelete by remember { mutableStateOf<InnerFav?>(null) }
     var resolving by remember { mutableStateOf(false) } // P站重放时的直链解析遮罩
+    var sortMode by remember { mutableStateOf(FavSortMode.ADDED) }
 
     val title = when (module) {
         "melon" -> "吃瓜收藏"
@@ -86,7 +85,27 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
         "h2" -> "本子收藏"
         "comic" -> "漫画收藏"
         "tv" -> "电视收藏"
+        "music" -> "音乐收藏"
         else -> "收藏"
+    }
+    // 第二个排序 chip 的文案：音乐叫「歌手」，其余模块副标题是作者/UP主/片名，叫「作者」
+    val artistLabel = if (module == "music") "歌手" else "作者"
+
+    // 排序：更新 = 收藏时间倒序；歌手/作者 = 副标题排序（英文在前按字母、中文在后按拼音，同音乐清单算法）
+    val items = remember(allFavs, sortMode) {
+        val mine = allFavs.filter { it.module == module }
+        when (sortMode) {
+            FavSortMode.ADDED -> mine.sortedByDescending { it.savedAt }
+            FavSortMode.ARTIST -> {
+                val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
+                mine.sortedWith(
+                    compareBy(
+                        { (it.subtitle.firstOrNull()?.code ?: Int.MAX_VALUE) >= 128 },
+                        { collator.getCollationKey(it.subtitle.trim().lowercase()) }
+                    )
+                )
+            }
+        }
     }
 
     fun open(f: InnerFav) {
@@ -128,6 +147,16 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                     )
                 }
             }
+            "music" -> {
+                // payload = MusicSong JSON：还原后直接进播放队列（直链播放时现解析）
+                val song = f.payload?.let { restoreSong(it) }
+                if (song == null) {
+                    Toast.makeText(context, "该收藏缺少歌曲信息，无法播放", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                MusicPlayback.init(context)
+                MusicPlayback.play(context, listOf(song), 0)
+            }
             "xsite" -> {
                 val url = f.videoUrl
                 if (url.isNullOrBlank()) {
@@ -158,7 +187,17 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("$title（${items.size}）") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(title)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "${items.size}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -175,78 +214,74 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                 EmptyView("还没有收藏\n在模块列表卡片的爱心处点一下即可收藏")
             }
         } else {
-            LazyColumn(
-                modifier = Modifier.padding(pad).fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
+            LazyColumn(Modifier.padding(pad).fillMaxSize()) {
+                // 排序行：与音乐清单同款（「排序」标签 + 右侧 chips，常驻内容区顶部）
+                item(key = "sort_row") {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "排序",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.weight(1f))
+                        FilterChip(
+                            selected = sortMode == FavSortMode.ADDED,
+                            onClick = { sortMode = FavSortMode.ADDED },
+                            label = { Text("更新") }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        FilterChip(
+                            selected = sortMode == FavSortMode.ARTIST,
+                            onClick = { sortMode = FavSortMode.ARTIST },
+                            label = { Text(artistLabel) }
+                        )
+                    }
+                }
                 items(items, key = { it.module + it.id }) { f ->
+                    // 音乐清单行样式：52dp 方形圆角封面 + 标题 + 副标题，整行可点、长按删除
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
                             .combinedClickable(
                                 onClick = { open(f) },
                                 onLongClick = { pendingDelete = f }
                             )
-                            .padding(8.dp)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                        Box(
-                            Modifier
-                                .width(96.dp)
-                                .aspectRatio(16f / 9f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        CoverImage(
+                            url = f.cover,
+                            placeholderText = f.title,
+                            modifier = Modifier.size(52.dp)
+                        )
+                        Column(
+                            Modifier.weight(1f).padding(start = 10.dp),
+                            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)
                         ) {
-                            if (f.cover != null) {
-                                AsyncImage(
-                                    model = f.cover,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Rounded.PlayArrow,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.outline,
-                                    modifier = Modifier.align(Alignment.Center).size(24.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
                             Text(
                                 f.title,
-                                style = MaterialTheme.typography.titleSmall,
-                                maxLines = 2,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            if (f.subtitle.isNotBlank()) {
-                                Text(
-                                    f.subtitle,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
                             Text(
-                                SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-                                    .format(Date(f.savedAt)),
+                                f.subtitle.ifBlank { title.removeSuffix("收藏") },
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline,
-                                modifier = Modifier.padding(top = 2.dp)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Icon(
                             Icons.Rounded.Favorite,
                             contentDescription = null,
-                            tint = Color(0xFFFF5A76),
-                            modifier = Modifier.size(16.dp)
+                            tint = FavHeartColor,
+                            modifier = Modifier
+                                .size(16.dp)
+                                .padding(start = 6.dp)
                         )
                     }
                 }
@@ -262,7 +297,7 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                 contentAlignment = Alignment.Center
             ) {
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.surface
                 ) {
                     Text(
@@ -294,6 +329,29 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
         )
     }
 }
+
+/** payload JSON → MusicSong（音乐收藏重放用；解析失败返回 null 由调用方提示） */
+private fun restoreSong(payload: String): com.shangyin.app.data.music.MusicSong? = runCatching {
+    val o = JSONObject(payload)
+    val platform = com.shangyin.app.data.music.MusicPlatform.of(o.optString("platform"))
+        ?: return null
+    val raw = o.optJSONObject("raw")?.let { ro ->
+        val m = mutableMapOf<String, String>()
+        ro.keys().forEach { k -> m[k] = ro.optString(k) }
+        m
+    } ?: emptyMap()
+    com.shangyin.app.data.music.MusicSong(
+        platform = platform,
+        id = o.optString("id"),
+        name = o.optString("name"),
+        artists = o.optString("artists"),
+        album = o.optString("album"),
+        cover = o.optString("cover"),
+        durationMs = o.optLong("durationMs", 0L),
+        from = o.optString("from"),
+        raw = raw
+    )
+}.getOrNull()
 
 /** 爱心按钮共用的激活色 */
 val FavHeartColor = Color(0xFFFF5A76)

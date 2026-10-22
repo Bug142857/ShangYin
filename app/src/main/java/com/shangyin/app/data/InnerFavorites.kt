@@ -30,11 +30,12 @@ data class InnerFav(
     val subtitle: String,    // 作者 / @推主 / 频道·观看数
     val cover: String?,
     val savedAt: Long,
-    // ---- 以下仅 xsite / psite 重放需要（melon 恒为默认值） ----
-    val videoUrl: String? = null,   // xsite 直链 mp4
+    // ---- 以下仅部分模块重放需要（melon 恒为默认值） ----
+    val videoUrl: String? = null,   // xsite 直链 mp4 / tv 频道地址
     val mediaId: Long = 0L,         // xsite 数字 id（播放进度 key）
     val durationSec: Int = 0,
     val tweetUrl: String? = null,   // xsite 原推链接
+    val payload: String? = null,    // music：MusicSong 全量 JSON（重放时还原）
 )
 
 object InnerFavorites {
@@ -92,6 +93,7 @@ object InnerFavorites {
             if (f.mediaId != 0L) put("mediaId", f.mediaId)
             if (f.durationSec != 0) put("durationSec", f.durationSec)
             f.tweetUrl?.let { put("tweetUrl", it) }
+            f.payload?.let { put("payload", it) }
         }
     }).toString()
 
@@ -114,6 +116,7 @@ object InnerFavorites {
                         mediaId = o["mediaId"]?.jsonPrimitive?.longOrNull ?: 0L,
                         durationSec = o["durationSec"]?.jsonPrimitive?.intOrNull ?: 0,
                         tweetUrl = str("tweetUrl"),
+                        payload = str("payload"),
                     )
                 }.getOrNull()
             }

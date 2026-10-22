@@ -211,6 +211,12 @@ private fun CategoryGridPage(
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
+                },
+                actions = {
+                    // 收藏入口只放主页（不进各分类列表页）
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/h2") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
+                    }
                 }
             )
         }
@@ -363,9 +369,6 @@ private fun ComicListPage(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { nav.safeNavigate("innerFavs/h2") }) {
-                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
-                    }
                     IconButton(onClick = { sortMenu = true }) {
                         Icon(Icons.Rounded.Sort, contentDescription = "排序")
                     }
