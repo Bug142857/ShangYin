@@ -27,7 +27,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -176,17 +176,6 @@ fun BookHomeScreen(nav: NavHostController) {
                 actions = {
                     IconButton(onClick = { nav.safeNavigate("innerFavs/book") }) {
                         Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
-                    }
-                    IconButton(onClick = {
-                        loggedIn = ZlibClient.isLoggedIn
-                        nav.safeNavigate("account")
-                    }) {
-                        Icon(
-                            Icons.Rounded.Person,
-                            contentDescription = "账号管理",
-                            tint = if (loggedIn) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline
-                        )
                     }
                 }
             )

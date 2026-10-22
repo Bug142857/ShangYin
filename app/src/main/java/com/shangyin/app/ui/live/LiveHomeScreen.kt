@@ -28,7 +28,6 @@ import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.PlaylistPlay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -159,10 +158,6 @@ fun LiveHomeScreen(nav: NavHostController) {
                     // 爱心收藏页
                     IconButton(onClick = { nav.safeNavigate("innerFavs/tv") }) {
                         Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
-                    }
-                    // 电视源配置（添加 / 导入 / 测试 / 导出）
-                    IconButton(onClick = { nav.safeNavigate("liveSources") }) {
-                        Icon(Icons.Rounded.PlaylistPlay, contentDescription = "电视源配置")
                     }
                 }
             )

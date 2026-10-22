@@ -263,9 +263,6 @@ fun ComicHomeScreen(nav: NavHostController) {
                     IconButton(onClick = { nav.safeNavigate("innerFavs/comic") }) {
                         Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
                     }
-                    IconButton(onClick = { nav.safeNavigate("downloadsList/comic") }) {
-                        Icon(Icons.Rounded.Download, contentDescription = "我的下载")
-                    }
                 }
             )
         }
@@ -708,9 +705,6 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { nav.safeNavigate("downloadsList/comic") }) {
-                        Icon(Icons.Rounded.Download, contentDescription = "我的下载")
-                    }
                     // 爱心快藏（详情加载完成后才可收藏）
                     val dc = detail
                     if (dc != null) {
