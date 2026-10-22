@@ -30,6 +30,23 @@ object SettingsStore {
 
     fun init(context: Context) {
         sp = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
+        disabledInnerModules.value =
+            sp.getStringSet(KEY_DISABLED_INNER_MODULES, emptySet())?.toSet() ?: emptySet()
+    }
+
+    // ---------- 里世界模块开关（设置 → 模块管理） ----------
+
+    private const val KEY_DISABLED_INNER_MODULES = "disabled_inner_modules"
+
+    /** 被关闭的里世界模块 key 集合（StateFlow：设置页改完主页立即生效） */
+    val disabledInnerModules = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+    /** 开关某个里世界模块入口（true=显示） */
+    fun setInnerModuleEnabled(key: String, enabled: Boolean) {
+        val cur = disabledInnerModules.value.toMutableSet()
+        if (enabled) cur.remove(key) else cur.add(key)
+        sp.edit().putStringSet(KEY_DISABLED_INNER_MODULES, cur).apply()
+        disabledInnerModules.value = cur
     }
 
     /** 注册 SharedPreferences 变更监听（用于主题切换等） */

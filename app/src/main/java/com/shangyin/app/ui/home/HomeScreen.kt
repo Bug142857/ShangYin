@@ -26,18 +26,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Visibility
-import androidx.compose.material.icons.rounded.AutoStories
-import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.MenuBook
-import androidx.compose.material.icons.rounded.MusicNote
-import androidx.compose.material.icons.rounded.OndemandVideo
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SportsEsports
-import androidx.compose.material.icons.rounded.Tag
-import androidx.compose.material.icons.rounded.TheaterComedy
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -78,13 +69,15 @@ import com.shangyin.app.data.Repo
 import com.shangyin.app.data.db.ListWithMeta
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.common.INNER_MODULE_ENTRIES
 import com.shangyin.app.ui.common.dragReorderModifier
 import com.shangyin.app.ui.safeNavigate
+import com.shangyin.app.ui.settings.SettingsStore
 
 /**
  * 主页：底部双标签「表世界 / 里世界」。
  * - 表世界：分类 chips + 搜索栏（跳搜索页）+ 豆瓣收藏清单
- * - 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 / 电视 入口 + 里世界收藏清单
+ * - 里世界：模块入口宫格（设置 → 模块管理 可开关）+ 里世界收藏清单
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -222,83 +215,33 @@ private fun InnerWorld(
     lists: List<ListWithMeta>?,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
+    // 模块开关（设置 → 模块管理）：StateFlow 驱动，关掉的入口不在主页出现
+    val disabledModules by SettingsStore.disabledInnerModules.collectAsStateWithLifecycle()
+    val innerEntries = remember(disabledModules) {
+        INNER_MODULE_ENTRIES.filter { it.key !in disabledModules }
+    }
     Column(modifier) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            InnerWorldEntry(
-                icon = Icons.Rounded.OndemandVideo,
-                title = "番号",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("h1search") }
-            )
-            InnerWorldEntry(
-                icon = Icons.Rounded.MenuBook,
-                title = "本子",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("h2search") }
-            )
-            InnerWorldEntry(
-                icon = Icons.Rounded.AutoStories,
-                title = "漫画",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("comicHome") }
-            )
-            InnerWorldEntry(
-                icon = Icons.Rounded.SportsEsports,
-                title = "游戏",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("gameHome") }
-            )
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            InnerWorldEntry(
-                icon = Icons.Rounded.Book,
-                title = "图书",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("bookHome") }
-            )
-            InnerWorldEntry(
-                icon = Icons.Rounded.LiveTv,
-                title = "电视",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("tvHome") }
-            )
-            InnerWorldEntry(
-                icon = Icons.Rounded.MusicNote,
-                title = "音乐",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("musicHome") }
-            )
-            InnerWorldEntry(
-                icon = Icons.Rounded.TheaterComedy,
-                title = "吃瓜",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("melonHome") }
-            )
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 0.dp, bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            InnerWorldEntry(
-                icon = Icons.Rounded.Tag,
-                title = "X站",
-                modifier = Modifier.weight(1f),
-                onClick = { nav.safeNavigate("xsiteHome") }
-            )
-            Spacer(Modifier.weight(3f))
+        innerEntries.chunked(4).forEachIndexed { rowIdx, rowEntries ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = 16.dp, end = 16.dp,
+                        top = if (rowIdx == 0) 8.dp else 0.dp,
+                        bottom = if (rowIdx == 0) 4.dp else 8.dp
+                    ),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                rowEntries.forEach { e ->
+                    InnerWorldEntry(
+                        icon = e.icon,
+                        title = e.title,
+                        modifier = Modifier.weight(1f),
+                        onClick = { nav.safeNavigate(e.route) }
+                    )
+                }
+                repeat(4 - rowEntries.size) { Spacer(Modifier.weight(1f)) }
+            }
         }
         WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))
     }

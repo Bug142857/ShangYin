@@ -34,9 +34,15 @@ object Repo {
     fun observeItem(id: Long): Flow<CollectionItemEntity?> = itemDao.observeById(id)
 
     /** 快速收藏：只落库搜索结果自带信息，不阻塞等详情网络请求（详情页打开后自动补全） */
+    /**
+     * 点搜索词条时的快速落库（仅为详情页拿到 itemId，不等详情网络请求）。
+     * v0.283：不再自动挂分类清单——旧逻辑 ensureItemInCategoryList 会在存在同名
+     * 分类根清单（如「游戏」）时把条目直接挂进去，表现成「点词条即收藏」，违背
+     * 「点加号才收藏」的语义。落库条目若始终未被收藏，启动时 pruneOrphans 清理
+     * （零孤儿机制），浏览 ≠ 收藏。
+     */
     suspend fun saveFromDoubanFast(r: DoubanResult): Long {
         itemDao.findByDouban(r.category.label, r.doubanId)?.let { existing ->
-            ensureItemInCategoryList(existing.id, r.category.label)
             return existing.id
         }
         val id = itemDao.insert(
@@ -59,7 +65,6 @@ object Repo {
         )
         val finalId = if (id != -1L) id
         else itemDao.findByDouban(r.category.label, r.doubanId)?.id ?: -1L
-        if (finalId != -1L) ensureItemInCategoryList(finalId, r.category.label)
         return finalId
     }
 
@@ -101,6 +106,8 @@ object Repo {
                         itemDao.update(existing.copy(
                             title = detail.title ?: existing.title,
                             doubanRating = detail.rating ?: existing.doubanRating,
+                            // v0.289：详情封面无条件覆盖（豆瓣详情 API 的 pic 总是当前有效图），
+                            // 死链 coverUrl（qnmob/so 域）点开详情后自动修复
                             coverUrl = detail.coverUrl ?: existing.coverUrl,
                             summary = detail.summary ?: existing.summary,
                             info = if (r.category == Category.BOOK)

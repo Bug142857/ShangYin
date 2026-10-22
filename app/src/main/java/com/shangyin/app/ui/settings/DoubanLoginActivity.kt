@@ -11,6 +11,7 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +57,10 @@ class DoubanLoginActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // v0.286：进入登录流程即清掉持久化的死 cookie（session 已被豆瓣踢）——
+        // 否则账号页误显示已登录、App 请求一直带着无效 cookie
+        com.shangyin.app.ui.settings.SettingsStore.clearDoubanLogin()
+        DoubanClient.recreateClient()
         setContent {
             ShangYinTheme {
                 DoubanLoginContent(
@@ -92,6 +97,35 @@ private fun collectDoubanCookies(cm: CookieManager): String {
         }
     }
     return all.entries.joinToString("; ") { "${it.key}=${it.value}" }
+}
+
+/**
+ * v0.286：进入登录页前精确清除豆瓣域的残留 cookie。
+ * WebView CookieManager 持久化了上次登录的 dbcl/dbcl2/ck——即使该 session 已被豆瓣
+ * 服务端踢掉（指纹污染），一打开登录页自动提取就会拿到这份「死 cookie」→ 误弹
+ * 「登录成功」→ 账号页随即显示已过期（用户实测）。清除后提取到的必然是新登录。
+ * 用 setCookie(Max-Age=0) 逐个过期：不能 removeAllCookies（会连带清掉 zlib/吃瓜等
+ * 其他站的 WebView 登录态）。HttpOnly cookie 同样能被 setCookie 覆盖删除。
+ */
+private fun clearDoubanCookies(cm: CookieManager) {
+    val domains = listOf(
+        "https://accounts.douban.com/",
+        "https://www.douban.com/",
+        "https://movie.douban.com/",
+        "https://book.douban.com/",
+        "https://m.douban.com/"
+    )
+    for (d in domains) {
+        val raw = cm.getCookie(d) ?: continue
+        raw.split(";").forEach { part ->
+            val name = part.trim().substringBefore("=").trim()
+            if (name.isNotEmpty()) {
+                cm.setCookie(d, "$name=; Path=/; Max-Age=0")
+                cm.setCookie(d, "$name=; Path=/; Domain=.douban.com; Max-Age=0")
+            }
+        }
+    }
+    cm.flush()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -206,6 +240,7 @@ private fun WebViewLoginScreen(
 ) {
     val ctx = LocalContext.current
     var loading by remember { mutableStateOf(true) }
+    var currentUrl by remember { mutableStateOf("") }
     val cookieManager = CookieManager.getInstance()
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
@@ -264,15 +299,37 @@ private fun WebViewLoginScreen(
         }
     ) { pad ->
         Box(modifier = Modifier.fillMaxSize().padding(pad)) {
-            AndroidView(
+            Column {
+                // v0.285：当前页 URL 显示条（诊断用）——豆瓣登录中转页经常渲染成白屏，
+                // 用户截图后能直接看到卡在哪个页面
+                Text(
+                    text = currentUrl.ifBlank { "（加载中）" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+                AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
                         webViewRef = this
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.cacheMode = WebSettings.LOAD_DEFAULT
+                        // v0.282：UA 改用真实 WebView 内核 UA（App.webViewUa）。
+                        // 豆瓣登录验证码已换成腾讯天御滑块（实测 j/mobile/login/basic 返回
+                        // captcha_required + turing.captcha.qcloud.com），天御会做 UA 与
+                        // Client Hints 一致性检测——硬编码的假 Chrome/120 与真实内核
+                        // （sec-ch-ua 报真实版本）矛盾即判机器人，滑块永远过不去 →
+                        // 「登录不上」。与 zlib 的教训同源：WebView 内不能伪造 UA。
                         settings.userAgentString =
-                            "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                            com.shangyin.app.App.webViewUa.ifBlank {
+                                "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+                            }
 
                         cookieManager.setAcceptCookie(true)
                         cookieManager.setAcceptThirdPartyCookies(this, true)
@@ -280,17 +337,23 @@ private fun WebViewLoginScreen(
                         webViewClient = object : WebViewClient() {
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                                 loading = true
+                                currentUrl = url.orEmpty()
                             }
 
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 loading = false
+                                currentUrl = url.orEmpty()
                                 android.util.Log.d("DoubanLogin", "WebView onPageFinished: $url")
 
                                 val u = url ?: return
+                                // v0.283：条件放宽——登录成功后豆瓣可能停留在空白中转页
+                                // （accounts.douban.com/passport/* 或 JS 跳转壳，用户实测白屏），
+                                // 旧条件把 accounts.douban.com/passport 全排除导致白屏页不自动提取。
+                                // 收紧为：douban.com 域 + 非验证码页即尝试提取；
+                                // 未登录时 cookie 里没有 dbcl/ck，saveCookieString 自身返回 false，无害
                                 if (u.contains("douban.com") &&
-                                    !u.contains("passport/login") &&
-                                    !u.contains("accounts.douban.com/passport") &&
-                                    !u.contains("captcha")
+                                    !u.contains("captcha") &&
+                                    u != "about:blank"
                                 ) {
                                     val merged = collectDoubanCookies(cookieManager)
                                     android.util.Log.d("DoubanLogin", "auto check merged: $merged")
@@ -300,13 +363,12 @@ private fun WebViewLoginScreen(
                                         val ok = DoubanClient.saveCookieString(merged)
                                         if (ok) {
                                             cookieManager.flush()
-                                            // 服务端说了算：Cookie 里含 dbcl/ck ≠ 会话有效
-                                            // （过期 Cookie 会让界面显示已登录、搜索却变匿名 → 老片整批搜不到），
-                                            // 校验通过才自动关页；明确失效/无法判断都留在登录页（用户可点「已登录」）
-                                            Thread {
-                                                val valid = runCatching { DoubanClient.sessionOkBlocking() }.getOrNull()
-                                                if (valid == true) view?.post { onLoginSuccess() }
-                                            }.start()
+                                            // v0.285：提取成功即关页，不再等服务端校验——
+                                            // 刚从 WebView 提取的新鲜 cookie 不可能过期；而
+                                            // sessionOkBlocking 的 /mine/ 校验在豆瓣对 App 请求
+                                            // 返回 403 风控时得 null → 永不关页 → 卡白屏（实测）。
+                                            // 登录态有效性后续由账号页/搜索的 sessionOk 兜底
+                                            view?.post { onLoginSuccess() }
                                         }
                                     }
                                 }
@@ -318,11 +380,15 @@ private fun WebViewLoginScreen(
                             ): Boolean = super.shouldOverrideUrlLoading(view, request)
                         }
 
+                        // v0.286：清除豆瓣域残留 cookie 必须在 loadUrl 前同步做——
+                        // 残留的死 cookie 会被 onPageFinished 自动提取误判成登录成功
+                        clearDoubanCookies(cookieManager)
                         loadUrl("https://accounts.douban.com/passport/login")
                     }
                 },
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.weight(1f)
             )
+            }
 
             if (loading) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))

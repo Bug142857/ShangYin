@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -84,6 +85,9 @@ import com.shangyin.app.data.download.VideoDownloadManager
 import com.shangyin.app.data.xsite.XSiteClient
 import com.shangyin.app.data.xsite.XSiteClient.XCategory
 import com.shangyin.app.data.xsite.XSiteClient.XPost
+import com.shangyin.app.data.InnerFav
+import com.shangyin.app.ui.innerfav.FavHeartButton
+import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -94,10 +98,10 @@ import kotlinx.coroutines.launch
 /**
  * X站（里世界第九入口）：pektino.com 排行榜，原生渲染无 WebView。
  * 列表 = 榜单 tabs（周/月/总，0.277 起去掉每日）+ 标签筛选 + 双列网格 + 页码条；
- * 卡片点击直接进播放器（直链 mp4，无需先过详情），卡片上另有下载角标；不设收藏（0.273 用户定）。
+ * 卡片点击直接进播放器（直链 mp4，无需先过详情）；0.291 起卡片支持爱心收藏。
  */
-/** 播放：列表项自带直链，直接进播放器（PlayerSession） */
-private fun playPost(nav: NavHostController, post: XPost) {
+/** 播放：列表项自带直链，直接进播放器（PlayerSession）。公开：收藏页重放复用 */
+fun playPost(nav: NavHostController, post: XPost) {
     PlayerSession.clear()
     PlayerSession.itemId = post.mediaId
     PlayerSession.title = "X视频 @${post.account}"
@@ -232,6 +236,11 @@ fun XSiteHomeScreen(nav: NavHostController) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/xsite") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
                     }
                 }
             )
@@ -615,7 +624,7 @@ private fun XPageBar(currentPage: Int, lastPage: Int, loading: Boolean, onGo: (I
 }
 
 /** 排行卡片：封面（3:4 裁切，兼容横竖屏缩略图）+ 名次角标 + 时长角标 + 推主/点赞。
- *  点击 = 直接播放（0.273 用户定：这类模块点开就播，不设收藏）。
+ *  点击 = 直接播放（0.273 用户定：这类模块点开就播）；右上角爱心 = 本地收藏（0.291）。
  *  不放下载角标（0.274 反馈1：封面要整块可点，下载用播放器里的） */
 @Composable
 private fun XPostCard(post: XPost, rank: Int, onClick: () -> Unit) {
@@ -642,6 +651,28 @@ private fun XPostCard(post: XPost, rank: Int, onClick: () -> Unit) {
                     modifier = Modifier.align(Alignment.Center).size(40.dp)
                 )
             }
+            // 爱心收藏（右上角）
+            FavHeartButton(
+                favModule = "xsite",
+                favId = post.urlCd,
+                build = {
+                    InnerFav(
+                        module = "xsite",
+                        id = post.urlCd,
+                        title = "@${post.account}",
+                        subtitle = "@${post.account}",
+                        cover = post.thumbnail,
+                        savedAt = System.currentTimeMillis(),
+                        videoUrl = post.videoUrl,
+                        mediaId = post.mediaId,
+                        durationSec = post.durationSec,
+                        tweetUrl = post.tweetUrl
+                    )
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
+            )
             // 名次角标（左上）
             Surface(
                 shape = RoundedCornerShape(6.dp),
@@ -747,6 +778,27 @@ fun XSiteDetailScreen(nav: NavHostController, urlCd: String) {
                     }
                 },
                 actions = {
+                    // 爱心收藏
+                    detail?.let { d ->
+                        FavTopBarIcon(
+                            favModule = "xsite",
+                            favId = d.post.urlCd,
+                            build = {
+                                InnerFav(
+                                    module = "xsite",
+                                    id = d.post.urlCd,
+                                    title = "@${d.post.account}",
+                                    subtitle = "@${d.post.account}",
+                                    cover = d.post.thumbnail,
+                                    savedAt = System.currentTimeMillis(),
+                                    videoUrl = d.post.videoUrl,
+                                    mediaId = d.post.mediaId,
+                                    durationSec = d.post.durationSec,
+                                    tweetUrl = d.post.tweetUrl
+                                )
+                            }
+                        )
+                    }
                     // 下载
                     if (detail != null) {
                         IconButton(onClick = { downloadPost(context, detail!!.post) }) {

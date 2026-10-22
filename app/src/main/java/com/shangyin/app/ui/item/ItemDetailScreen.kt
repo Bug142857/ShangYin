@@ -105,6 +105,9 @@ private object DetailCache {
     }
 }
 
+/** 详情抓取冷却（v0.290）：doubanId → 上次抓取时间戳，10 分钟内不重复抓（进程级内存） */
+private val detailFetchAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
@@ -353,20 +356,17 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             }
         }
 
-        // 关键字段缺失或信息过旧时（老数据只有年份没有月日），后台抓详情补全落库
+        // v0.290：每次进入详情都后台抓一次豆瓣最新数据（10 分钟内存冷却防反复进出重复抓），
+        // 成功后全字段无条件落库——封面用详情 API 的 pic 覆盖。
+        // 旧逻辑（needRefresh 条件刷新）有两个坑：①数据齐全的条目永远不刷新，死封面无法自愈；
+        // ②「已删 photo」死链无法静态识别（域活着但 404），只有真抓一次详情才知道当前有效图。
         LaunchedEffect(entity.id) {
             val cat = com.shangyin.app.data.Category.values().firstOrNull { it.label == entity.category }
             if (cat != null) {
-                val monthDayRe = Regex("""\d{4}[-/年.]\d{1,2}""")
-                // 影视/游戏看 info 行，图书看头部 subTitle（图书不显示基本信息块）
-                val dateLine = if (cat == com.shangyin.app.data.Category.BOOK) entity.subTitle else entity.info
-                val needRefresh = entity.summary.isBlank() || entity.info.isBlank() ||
-                    (entity.directors.isBlank() && entity.casts.isBlank()) ||
-                    // 旧数据里可能存着带标签/带「类型: 制片国家/地区:」标签的原始文本（显示为乱码+拼接混乱），
-                    // 这种也要重新抓一次换成清理后的内容
-                    looksGarbled(entity.info) || looksGarbled(entity.summary) ||
-                    (dateLine.isNotBlank() && !monthDayRe.containsMatchIn(dateLine))
-                if (needRefresh) {
+                val now = System.currentTimeMillis()
+                val last = detailFetchAt[entity.doubanId] ?: 0L
+                if (now - last > 10 * 60 * 1000L) {
+                    detailFetchAt[entity.doubanId] = now
                     runCatching {
                         val detail = com.shangyin.app.data.douban.DoubanClient.fetchDetail(cat, entity.doubanId)
                         if (!detail.isEmpty) {
@@ -374,7 +374,9 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                             Repo.updateItem(entity.copy(
                                 title = detail.title ?: entity.title,
                                 doubanRating = detail.rating ?: entity.doubanRating,
-                                coverUrl = entity.coverUrl ?: detail.coverUrl,
+                                // 详情封面无条件覆盖——豆瓣详情 API 的 pic 总是当前有效图，
+                                // 死链（qnmob/so 域或已删 photo）由此自愈
+                                coverUrl = detail.coverUrl ?: entity.coverUrl,
                                 summary = if (entity.summary.isBlank() || looksGarbled(entity.summary))
                                     detail.summary.orEmpty().ifBlank { entity.summary }
                                 else entity.summary,

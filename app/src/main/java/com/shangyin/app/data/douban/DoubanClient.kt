@@ -135,7 +135,10 @@ object DoubanClient {
             val req = chain.request()
             val isRexxar = req.url.host == "m.douban.com" && req.url.encodedPath.contains("/rexxar/")
             val builder = req.newBuilder()
-                .header("User-Agent", if (isRexxar) MOBILE_UA else DESKTOP_UA)
+                // v0.284：UA 与登录 WebView 完全一致（App.webViewUa，真实内核 Android UA）。
+                // 豆瓣风控会比对 session 登录时的指纹与后续请求指纹：WebView 登录（Android UA）
+                // 后 App 若用桌面 UA 请求 → 指纹不匹配 → session 被踢 → 「刚登录完就显示已过期」。
+                .header("User-Agent", if (isRexxar) MOBILE_UA else desktopUa())
                 .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
                 .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
                 // 不设 Accept-Encoding：OkHttp 自动加 gzip 并解压；手动设会导致不解压
@@ -149,8 +152,14 @@ object DoubanClient {
             // 一旦泄漏会让别的请求（尤其是需要登录态的影视搜索）掉 Cookie。
             val anon = req.header(ANON_HEADER) != null
             val cookie = if (anon) "" else runCatching { SettingsStore.doubanCookie }.getOrDefault("")
+            // v0.284：登录 cookie 已含 WebView 种的 bid（saveCookieString 不再过滤），
+            // 直接用——bid 与登录会话一致，避免指纹 mismatch；仅匿名时才用固定 bid
             if (cookie.isNotBlank()) {
-                builder.header("Cookie", "$cookie; bid=$fixedBid")
+                builder.header(
+                    "Cookie",
+                    if (Regex("""\bbid=""").containsMatchIn(cookie)) cookie
+                    else "$cookie; bid=$fixedBid"
+                )
             } else {
                 builder.header("Cookie", "bid=$fixedBid")
             }
@@ -159,6 +168,14 @@ object DoubanClient {
             chain.proceed(builder.build())
         }
         .build()
+
+    /**
+     * 非 Rexxar 请求的 UA：与登录 WebView 完全一致（App.webViewUa，真实内核 Android UA）。
+     * 详见 buildClient 注释：豆瓣风控对 session 做指纹（UA/bid）绑定校验。
+     * webviewUa 取不到时退回桌面 UA（匿名场景桌面 UA 反而不易被拦）。
+     */
+    private fun desktopUa(): String =
+        com.shangyin.app.App.webViewUa.takeIf { it.isNotBlank() } ?: DESKTOP_UA
 
     /** 清理连接池：检测到反爬时调用，断开所有被污染的连接，下次请求重建 */
     private fun evictConnections() {
@@ -692,7 +709,14 @@ object DoubanClient {
 
         val title = o["title"]?.jsonPrimitive?.contentOrNull
         val rating = o["rating"]?.jsonObject?.get("value")?.jsonPrimitive?.floatOrNull
+        // v0.290：详情 API 封面在 pic{large,normal} 对象里（实测 tv/35118256 顶层**没有**
+        // cover_url 字符串字段——搜索接口才有），旧代码只读 cover_url 恒为 null，
+        // 导致详情刷新永远修不了死封面（覆盖被 ?: entity.coverUrl 兜底跳过）。
+        // 注意顶层 cover 是作者卡片对象，不可用。
         val cover = o["cover_url"]?.jsonPrimitive?.contentOrNull
+            ?: o["pic"]?.jsonObject?.get("large")?.jsonPrimitive?.contentOrNull
+            ?: o["pic"]?.jsonObject?.get("normal")?.jsonPrimitive?.contentOrNull
+            ?: o["images"]?.jsonObject?.get("large")?.jsonPrimitive?.contentOrNull
         // 简介里常带 <br>/<p> 标签，清洗后再交给界面（否则显示为「乱码带标签」）
         val intro = cleanText(o["intro"]?.jsonPrimitive?.contentOrNull)
         val baseInfo = cleanText(o["card_subtitle"]?.jsonPrimitive?.contentOrNull)?.takeIf { it.isNotBlank() }
@@ -1589,8 +1613,28 @@ object DoubanClient {
      * 同步版登录态校验：供 WebView 回调等**非协程**场景使用（逻辑与 [sessionOk] 相同，并写入同一份缓存）。
      */
     fun sessionOkBlocking(): Boolean? = runCatching {
-        val html = httpGetMobile("https://movie.douban.com/", "https://movie.douban.com/")
-        html.contains("passport/logout") || html.contains("退出")
+        // v0.284：改用 /mine/ 重定向判据。
+        // 旧判据（页面找「退出」/nav-login）在 UA 统一为 Android 后彻底失效——实测 Android UA
+        // 下豆瓣返回移动版页面（React 运行时渲染），匿名页静态 HTML 里 nav-login/登录/注册/退出
+        // 全都是 0 次，无法区分登录态。
+        // /mine/ 行为（2026-10-21 实测，Android UA）：
+        //   匿名 → 301 归一化后 403；cookie 有效 → 200 停在 /mine/；cookie 失效 → 同匿名（403）
+        //   （跳 accounts.douban.com 登录页 → 明确 false）
+        val req = okhttp3.Request.Builder()
+            .url("https://movie.douban.com/mine/")
+            .header("Referer", "https://movie.douban.com/")
+            .build()
+        mobileClient.newCall(req).execute().use { resp ->
+            val finalUrl = resp.request.url.toString()
+            when {
+                resp.isSuccessful &&
+                    !finalUrl.contains("accounts.douban.com") &&
+                    !finalUrl.contains("passport") &&
+                    !finalUrl.contains("sec.douban.com") -> true
+                finalUrl.contains("passport") || finalUrl.contains("accounts.douban.com") -> false
+                else -> null // 403：风控/匿名/失效混在一起判不出来 → 未知（不误报过期）
+            }
+        }
     }.getOrNull().also {
         doubanLoginOk = it
         doubanLoginCheckedAt = System.currentTimeMillis()
@@ -1719,9 +1763,10 @@ object DoubanClient {
         }
         val ck = cookies.firstOrNull { it.first.equals("ck", ignoreCase = true) }?.second.orEmpty()
         val hasDbcl = cookies.any { it.first.equals("dbcl", ignoreCase = true) || it.first.equals("dbcl2", ignoreCase = true) }
-        val filtered = cookies.filter { (k, _) ->
-            !k.equals("bid", ignoreCase = true) && !k.equals("ps", ignoreCase = true)
-        }
+        // v0.284：保留 bid——豆瓣风控对 session 绑定 bid 指纹，登录会话用 WebView 里种的
+        // bid，之前过滤掉后 App 请求强拼 fixedBid → bid 与登录会话不一致 → session 被踢。
+        // 只滤 ps（无关 cookie）
+        val filtered = cookies.filter { (k, _) -> !k.equals("ps", ignoreCase = true) }
         val finalStr = filtered.joinToString("; ") { "${it.first}=${it.second}" }
         // 如果没有 dbcl 说明可能未完全登录
         SettingsStore.doubanCookie = finalStr

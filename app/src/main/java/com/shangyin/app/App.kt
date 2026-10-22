@@ -40,6 +40,7 @@ class App : Application(), ImageLoaderFactory {
         })
         Repo.init(this)
         SettingsStore.init(this)
+        com.shangyin.app.data.InnerFavorites.init(this)
         // 记录 WebView 的真实默认 UA：登录页与接口请求必须用同一个 UA（Cookie 与 UA 绑定），
         // 且不能伪造——伪造的桌面 UA 会与 WebView 自动发出的 Client Hints（sec-ch-ua-platform: Android）
         // 互相矛盾，反爬系统会判定为机器人，表现为「浏览器能打开、App 里一直转圈/过不了验证」。
@@ -175,7 +176,12 @@ class App : Application(), ImageLoaderFactory {
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             // 图床域名 DoH 兜底（v0.224）：仅 pic.{词}.cn 生效，DNS 污染/解析失败时走阿里 DoH
-            .dns(com.shangyin.app.data.melon.PicDns)
+            // 图片 DNS（v0.282 从 PicDns 升级为 GeneralDohDns）：无忧游戏库封面分散在
+            // queniuqe/eccdnx/steamstatic/imgsygu 等第三方 CDN，手机网络下部分 CDN 被污染/
+            // 不可达（PC 直连全部 200 正常，站点/解析/请求头均无问题）→ 封面大面积挂。
+            // GeneralDohDns 系统解析 + DoH 双路合并、okhttp 试连自动跳坏节点——播放器
+            // v0.230 解决「有的视频能播有的不能」的同款方案，缓存 10 分钟开销可控。
+            .dns(com.shangyin.app.data.melon.GeneralDohDns)
             .addInterceptor { chain ->
                 val req = chain.request()
                 // 图片请求改写逻辑已抽出为纯函数 rewriteImageRequest（见文件末尾），便于单元测试
@@ -356,8 +362,19 @@ class App : Application(), ImageLoaderFactory {
  */
 internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonClient.lastBase): Request {
     val host = req.url.host
-    return if (host.endsWith("doubanio.com") || host.endsWith("douban.com")) {
+    // v0.287/0.288：豆瓣已死图床域重写。2026-10-21 实测两类死域：
+    //   qnmob{2,3}.doubanio.com — DNS 全网 ENOTFOUND（整体下线）
+    //   so{1,2,3}.doubanio.com  — DNS 存活但连接全失败（IP 失效，「边缘行者 S1」封面所在域）
+    // 同路径在 img2/img3.doubanio.com 上 200——豆瓣图片路径是 host 无关的（全 CDN 集群
+    // 共享命名空间），重写 host 直接复活死链封面。
+    val normalized = if (host.matches(Regex("""(qnmob\d*|so\d*)\.doubanio\.com"""))) {
         req.newBuilder()
+            .url(req.url.newBuilder().host("img2.doubanio.com").build())
+            .build()
+    } else req
+    val nHost = normalized.url.host
+    return if (nHost.endsWith("doubanio.com") || nHost.endsWith("douban.com")) {
+        normalized.newBuilder()
             .header("Referer", "https://m.douban.com/")
             .header(
                 "User-Agent",
@@ -366,28 +383,35 @@ internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonC
                     "Version/16.0 Mobile/15E148 Safari/604.1"
             )
             .build()
-    } else if ((host == "komiic.com" || host == "komiic.cc") && req.url.encodedPath.startsWith("/api/image/")) {
+    } else if ((nHost == "komiic.com" || nHost == "komiic.cc") && normalized.url.encodedPath.startsWith("/api/image/")) {
         // Komiic 章节图防盗链（主/镜像域）：fragment "#c/{comicId}/{chapterId}" → 完整路径 Referer
         // （fragment 不会发送到服务器，仅本地编码归属信息）；UA 与 KomiicClient 同款 Chrome/119
-        req.url.fragment?.takeIf { it.startsWith("c/") }?.let { f ->
+        normalized.url.fragment?.takeIf { it.startsWith("c/") }?.let { f ->
             val p = f.removePrefix("c/").split('/')
             if (p.size == 2) {
-                req.newBuilder()
-                    .header("Referer", "https://${req.url.host}/comic/${p[0]}/chapter/${p[1]}")
+                normalized.newBuilder()
+                    .header("Referer", "https://${normalized.url.host}/comic/${p[0]}/chapter/${p[1]}")
                     .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
                     .build()
-            } else req
-        } ?: req
-    } else if (req.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
+            } else normalized
+        } ?: normalized
+    } else if (normalized.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
         // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）。
         // 图床域名会轮换（pic.ndhixj.cn → pic.jtzatly.cn，均为 pic.{词}.cn 模式），按模式匹配而非硬编码；
         // 2026-10-15 实测当前图床暂无防盗链，此分支为防御性保留。
         // Referer 用 lastBase（最近一次成功镜像）而非 melonBase（持久化镜像，可能已失效）。
-        req.newBuilder()
+        normalized.newBuilder()
             .header("Referer", melonRefererBase.trimEnd('/') + "/")
             .header("User-Agent", com.shangyin.app.data.melon.MelonClient.UA)
             .build()
-    } else req
+    } else if (nHost.endsWith("phncdn.com")) {
+        // P站（v0.280）封面：phncdn 部分边缘节点对无 Referer 的批量并发请求会拒绝/丢响应，
+        // 带齐 UA + Referer 规范化（与页面抓取同一 UA，保持客户端一致）
+        normalized.newBuilder()
+            .header("Referer", com.shangyin.app.data.psite.PsiteClient.BASE + "/")
+            .header("User-Agent", com.shangyin.app.data.psite.PsiteClient.UA)
+            .build()
+    } else normalized
 }
 
 /**

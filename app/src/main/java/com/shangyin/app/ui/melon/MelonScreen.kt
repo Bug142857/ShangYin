@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.AlertDialog
@@ -84,9 +85,12 @@ import com.shangyin.app.data.melon.MelonCache
 import com.shangyin.app.data.melon.MelonCategory
 import com.shangyin.app.data.melon.MelonClient
 import com.shangyin.app.data.melon.MelonPost
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.vod.VodEpisode
 import com.shangyin.app.data.vod.VodPlayGroup
 import com.shangyin.app.ui.common.PhotoViewerDialog
+import com.shangyin.app.ui.innerfav.FavHeartButton
+import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -240,6 +244,11 @@ fun MelonHomeScreen(nav: NavHostController) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/melon") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
                     }
                 }
             )
@@ -629,7 +638,7 @@ private fun PageArrow(enabled: Boolean, forward: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** 列表卡片：封面背景 + 渐变压暗 + 标题/元信息浮层（还原站点卡片观感） */
+/** 列表卡片：封面背景 + 渐变压暗 + 标题/元信息浮层（还原站点卡片观感）+ 右上角爱心收藏 */
 @Composable
 private fun MelonPostCard(post: MelonPost, onClick: () -> Unit) {
     Box(
@@ -657,6 +666,25 @@ private fun MelonPostCard(post: MelonPost, onClick: () -> Unit) {
                     )
             )
         }
+        // 爱心收藏（右上角）
+        FavHeartButton(
+            favModule = "melon",
+            favId = post.id,
+            build = {
+                InnerFav(
+                    module = "melon",
+                    id = post.id,
+                    title = post.title,
+                    subtitle = listOf(post.author, post.date)
+                        .filter { it.isNotBlank() }.joinToString(" · "),
+                    cover = post.cover,
+                    savedAt = System.currentTimeMillis()
+                )
+            },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+        )
         Column(
             Modifier
                 .align(Alignment.BottomStart)
@@ -768,6 +796,24 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
                     }
                 },
                 actions = {
+                    // 爱心收藏
+                    detail?.let { d ->
+                        FavTopBarIcon(
+                            favModule = "melon",
+                            favId = d.id,
+                            build = {
+                                InnerFav(
+                                    module = "melon",
+                                    id = d.id,
+                                    title = d.title,
+                                    subtitle = listOf(d.author, d.date)
+                                        .filter { it.isNotBlank() }.joinToString(" · "),
+                                    cover = d.cover,
+                                    savedAt = System.currentTimeMillis()
+                                )
+                            }
+                        )
+                    }
                     IconButton(onClick = { openInBrowser("${MelonClient.lastBase}/archives/$id/") }) {
                         Icon(
                             Icons.AutoMirrored.Rounded.OpenInNew,

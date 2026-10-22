@@ -148,6 +148,17 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             }
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
             composable("account") { com.shangyin.app.ui.settings.AccountScreen(nav) }
+            composable("moduleManage") { com.shangyin.app.ui.settings.ModuleManageScreen(nav) }
+            // 里世界「点爱心」收藏页（吃瓜/X站/P站共用，module 区分）
+            composable(
+                route = "innerFavs/{module}",
+                arguments = listOf(navArgument("module") { type = NavType.StringType })
+            ) { entry ->
+                com.shangyin.app.ui.innerfav.InnerFavoritesScreen(
+                    nav,
+                    entry.arguments?.getString("module").orEmpty()
+                )
+            }
             composable("cloudsync") { CloudSyncScreen(nav) }
             composable("dataManage") { DataManageScreen(nav) }
             composable("vodSources") { VodSourceScreen(nav) }
@@ -243,6 +254,8 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                     entry.arguments?.getString("urlCd").orEmpty()
                 )
             }
+            // P站 = pornhub.com（里世界第十入口；网页原生解析，搜索/排序/分类/页码，点卡片解析直链播放）
+            composable("psiteHome") { com.shangyin.app.ui.psite.PsiteHomeScreen(nav) }
             composable(
                 route = "list/{id}",
                 arguments = listOf(navArgument("id") { type = NavType.LongType })
