@@ -77,7 +77,8 @@ import com.shangyin.app.data.download.DownloadedChapter
 import com.shangyin.app.data.download.DownloadedComic
 import com.shangyin.app.data.ReadProgressStore
 import com.shangyin.app.ui.settings.SettingsStore
-import com.shangyin.app.ui.common.CollectDialog
+import com.shangyin.app.data.InnerFav
+import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.LoadingPill
 import com.shangyin.app.ui.common.PhotoGridDialog
@@ -137,11 +138,6 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     // 单章图片总览（章节行网格按钮）
     var gridIdx by remember { mutableIntStateOf(-1) }
     var gridUrls by remember { mutableStateOf<List<String>?>(null) }
-
-    // 收藏到里世界清单（category="本子"）
-    var showCollect by remember { mutableStateOf(false) }
-    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val collected = remember(allItems, id) { allItems.any { it.category == "本子" && it.doubanId == id } }
 
     // 离线下载状态（本子：source="bika"，章节 key = order）
     val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
@@ -329,12 +325,22 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     IconButton(onClick = { nav.safeNavigate("downloads") }) {
                         Icon(Icons.Rounded.Download, contentDescription = "我的下载")
                     }
-                    IconButton(onClick = { showCollect = true }) {
-                        Icon(
-                            if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = "收藏",
-                            tint = if (collected) androidx.compose.ui.graphics.Color(0xFFEF5350)
-                            else MaterialTheme.colorScheme.onSurface
+                    // 爱心快藏（详情加载完成后才可收藏）
+                    val bc = comic
+                    if (bc != null) {
+                        FavTopBarIcon(
+                            favModule = "h2",
+                            favId = id,
+                            build = {
+                                InnerFav(
+                                    module = "h2",
+                                    id = id,
+                                    title = bc.title,
+                                    subtitle = bc.author,
+                                    cover = bc.thumbUrl,
+                                    savedAt = System.currentTimeMillis()
+                                )
+                            }
                         )
                     }
                 }
@@ -668,24 +674,6 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
             onDismiss = {
                 if (loadingAll) allJob?.cancel()
                 allImages = null
-            }
-        )
-    }
-
-    // 收藏对话框：存为 category="本子" 条目并挂入所选里世界清单
-    if (showCollect) {
-        val c = comic
-        CollectDialog(
-            onDismiss = { showCollect = false },
-            collect = { listId ->
-                if (c == null) false
-                else {
-                    val itemId = Repo.saveCustomItem(
-                        category = "本子", doubanId = id, title = c.title,
-                        coverUrl = c.thumbUrl, subTitle = c.author
-                    )
-                    if (itemId > 0) { Repo.addItemToList(listId, itemId); true } else false
-                }
             }
         )
     }

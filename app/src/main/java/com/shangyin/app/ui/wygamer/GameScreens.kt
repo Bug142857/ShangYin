@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -77,12 +78,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.wygamer.GameCategory
 import com.shangyin.app.data.wygamer.GameDetail
 import com.shangyin.app.data.wygamer.GameDownload
 import com.shangyin.app.data.wygamer.GameItem
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.ui.common.PhotoViewerDialog
+import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.CancellationException
@@ -189,6 +192,11 @@ fun GameHomeScreen(nav: NavHostController) {
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/game") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
                     }
                 }
             )
@@ -351,7 +359,25 @@ private fun GameGridCard(item: GameItem, onClick: () -> Unit) {
                 model = item.cover,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxWidth()
+            )
+            // 爱心快藏（右上角）
+            FavHeartButton(
+                favModule = "game",
+                favId = item.id,
+                build = {
+                    InnerFav(
+                        module = "game",
+                        id = item.id,
+                        title = item.title,
+                        subtitle = item.categories.joinToString(" · "),
+                        cover = item.cover,
+                        savedAt = System.currentTimeMillis()
+                    )
+                },
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(6.dp)
             )
             item.badge?.takeIf { it.isNotBlank() }?.let { b ->
                 Surface(

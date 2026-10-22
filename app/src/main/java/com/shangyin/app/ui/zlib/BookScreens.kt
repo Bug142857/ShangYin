@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,9 +61,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.zlib.Book
 import com.shangyin.app.data.zlib.BookDownload
 import com.shangyin.app.data.zlib.ZlibClient
+import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
@@ -171,6 +174,9 @@ fun BookHomeScreen(nav: NavHostController) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { nav.safeNavigate("innerFavs/book") }) {
+                        Icon(Icons.Rounded.FavoriteBorder, contentDescription = "我的收藏")
+                    }
                     IconButton(onClick = {
                         loggedIn = ZlibClient.isLoggedIn
                         nav.safeNavigate("account")
@@ -264,14 +270,34 @@ fun BookHomeScreen(nav: NavHostController) {
                         val b = items[i]
                         val h = b.hash.ifBlank { "-" }
                         Column(Modifier.clickable { nav.safeNavigate("bookDetail/${b.id}/$h") }) {
-                            AsyncImage(
-                                model = b.cover,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxWidth().aspectRatio(1f / 1.4f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                            )
+                            Box {
+                                AsyncImage(
+                                    model = b.cover,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxWidth().aspectRatio(1f / 1.4f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                                )
+                                // 爱心快藏（右上角；id = "bookId|hash"，收藏页据此回详情）
+                                FavHeartButton(
+                                    favModule = "book",
+                                    favId = "${b.id}|$h",
+                                    build = {
+                                        InnerFav(
+                                            module = "book",
+                                            id = "${b.id}|$h",
+                                            title = b.title,
+                                            subtitle = b.author.orEmpty(),
+                                            cover = b.cover,
+                                            savedAt = System.currentTimeMillis()
+                                        )
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopEnd)
+                                        .padding(3.dp)
+                                )
+                            }
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 b.title,

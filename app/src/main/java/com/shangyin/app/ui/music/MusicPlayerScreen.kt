@@ -64,7 +64,8 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.music.MusicDownloader
 import com.shangyin.app.data.music.MusicLyric
 import com.shangyin.app.data.music.MusicRepo
-import com.shangyin.app.ui.common.CollectDialog
+import com.shangyin.app.data.InnerFav
+import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
@@ -81,8 +82,6 @@ fun MusicPlayerScreen(nav: NavHostController) {
     val state by MusicPlayback.state.collectAsStateWithLifecycle()
     val song = state.song
 
-    var showCollect by remember { mutableStateOf(false) }
-    var collected by remember { mutableStateOf(false) }
     var lyric by remember { mutableStateOf(MusicLyric()) }
     var lyricLoading by remember { mutableStateOf(false) }
     // 拖动进度条时先跟手，松手才 seek
@@ -157,10 +156,9 @@ fun MusicPlayerScreen(nav: NavHostController) {
         )
     }
 
-    // 换歌：重置进度拖动、拉歌词、查收藏状态
+    // 换歌：重置进度拖动、拉歌词
     LaunchedEffect(song?.key) {
         dragging = false
-        collected = song?.let { runCatching { MusicRepo.isCollected(it) }.getOrDefault(false) } == true
         lyric = MusicLyric()
         if (song == null) return@LaunchedEffect
         lyricLoading = true
@@ -373,37 +371,27 @@ fun MusicPlayerScreen(nav: NavHostController) {
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = {
-                    if (collected) {
-                        Toast.makeText(context, "已在清单中", Toast.LENGTH_SHORT).show()
-                    } else {
-                        showCollect = true
-                    }
-                }) {
-                    Icon(
-                        if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                        contentDescription = "收藏",
-                        tint = if (collected) Color(0xFFEF5350)
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                // 爱心快藏（与其它里世界模块同款；搜索行尾同入口）
+                song?.let { s ->
+                    FavTopBarIcon(
+                        favModule = "music",
+                        favId = s.key,
+                        build = {
+                            InnerFav(
+                                module = "music",
+                                id = s.key,
+                                title = s.name,
+                                subtitle = s.artists,
+                                cover = s.cover,
+                                savedAt = System.currentTimeMillis(),
+                                payload = songPayload(s)
+                            )
+                        }
                     )
                 }
             }
             Spacer(Modifier.height(8.dp))
         }
-    }
-
-    // 收藏到里世界清单
-    if (showCollect) {
-        CollectDialog(
-            onDismiss = {
-                showCollect = false
-                scope.launch {
-                    collected = runCatching { MusicRepo.isCollected(song) }.getOrDefault(false)
-                }
-            },
-            collect = { listId -> MusicRepo.collect(song, listId) },
-            music = true
-        )
     }
 }
 

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.AlertDialog
@@ -87,6 +89,8 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
         "comic" -> "漫画收藏"
         "tv" -> "电视收藏"
         "music" -> "音乐收藏"
+        "book" -> "图书收藏"
+        "game" -> "游戏收藏"
         else -> "收藏"
     }
     // 第二个排序 chip 的文案：音乐叫「歌手」，其余模块副标题是作者/UP主/片名，叫「作者」
@@ -133,6 +137,13 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
             }
             "h2" -> nav.safeNavigate("bikaComic/${Uri.encode(f.id)}")
             "comic" -> nav.safeNavigate("comicDetail/${Uri.encode(f.id)}")
+            "book" -> {
+                // id = "bookId|hash"（与列表卡片收藏口径一致；hash "-" 占位 = 空哈希）
+                val bid = f.id.substringBefore("|")
+                val hash = f.id.substringAfter("|", missingDelimiterValue = "-")
+                nav.safeNavigate("bookDetail/${Uri.encode(bid)}/${Uri.encode(hash)}")
+            }
+            "game" -> nav.safeNavigate("gameDetail/${Uri.encode(f.id)}")
             "tv" -> {
                 // id = 频道地址：M3U 直播流直接解析开播
                 val url = f.videoUrl ?: f.id
@@ -203,11 +214,20 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
+                },
+                actions = {
+                    // 下载管理入口：游戏 / 电视无下载功能，不显示
+                    if (module != "game" && module != "tv") {
+                        IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                            Icon(Icons.Rounded.Download, contentDescription = "下载管理")
+                        }
+                    }
                 }
             )
         },
-        // 迷你播放条：在收藏页点歌后立即在本页底部出现（没在播时自隐藏为零高度）
-        bottomBar = { MusicMiniPlayer(nav) }
+        // 迷你播放条：点歌后立即在本页底部出现（没在播时自隐藏为零高度）；
+        // navigationBarsPadding 抬到手势导航栏之上，与其他页的播放条位置一致
+        bottomBar = { MusicMiniPlayer(nav, Modifier.navigationBarsPadding()) }
     ) { pad ->
         if (items.isEmpty()) {
             Box(

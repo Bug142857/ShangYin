@@ -91,8 +91,8 @@ import com.shangyin.app.data.komiic.KomiicCategory
 import com.shangyin.app.data.komiic.KomiicClient
 import com.shangyin.app.data.komiic.KomiicChapter
 import com.shangyin.app.data.komiic.KomiicComic
-import com.shangyin.app.ui.common.CollectDialog
 import com.shangyin.app.ui.innerfav.FavHeartButton
+import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.common.LoadingPill
 import com.shangyin.app.ui.common.PhotoGridDialog
 import com.shangyin.app.ui.common.PhotoViewerDialog
@@ -533,7 +533,6 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     var retried by remember { mutableStateOf(false) }
     var viewerUrls by remember { mutableStateOf<List<String>?>(null) }
     var viewerIdx by remember { mutableIntStateOf(-1) }
-    var showCollect by remember { mutableStateOf(false) }
     var sortDesc by rememberSaveable { mutableStateOf(SettingsStore.chapterSortDesc) }
     // 查看全部（合并全部章节）
     var allImages by remember { mutableStateOf<List<String>?>(null) }
@@ -551,12 +550,6 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
     ReadProgressStore.ensure(context)
     val progressMap by ReadProgressStore.all.collectAsStateWithLifecycle(ReadProgressStore.all.value)
     val lastReadKey = progressMap["komiic/$comicId"]
-
-    // 收藏状态（右上角心形高亮）
-    val allItems by Repo.observeItems(null).collectAsStateWithLifecycle(initialValue = emptyList())
-    val collected = remember(allItems, comicId) {
-        allItems.any { it.category == "漫画" && it.doubanId == comicId }
-    }
 
     // 离线下载状态
     val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
@@ -718,11 +711,22 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
                     IconButton(onClick = { nav.safeNavigate("downloads") }) {
                         Icon(Icons.Rounded.Download, contentDescription = "我的下载")
                     }
-                    IconButton(onClick = { showCollect = true }) {
-                        Icon(
-                            if (collected) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = "收藏",
-                            tint = if (collected) Color(0xFFEF5350) else MaterialTheme.colorScheme.onSurface
+                    // 爱心快藏（详情加载完成后才可收藏）
+                    val dc = detail
+                    if (dc != null) {
+                        FavTopBarIcon(
+                            favModule = "comic",
+                            favId = comicId,
+                            build = {
+                                InnerFav(
+                                    module = "comic",
+                                    id = comicId,
+                                    title = dc.title,
+                                    subtitle = dc.authors.joinToString("、") { it.name },
+                                    cover = dc.imageUrl,
+                                    savedAt = System.currentTimeMillis()
+                                )
+                            }
                         )
                     }
                 }
@@ -1017,28 +1021,6 @@ fun ComicDetailScreen(nav: NavHostController, comicId: String) {
             onDismiss = {
                 if (loadingAll) allJob?.cancel()
                 allImages = null
-            }
-        )
-    }
-
-    // 收藏到里世界清单
-    if (showCollect) {
-        CollectDialog(
-            onDismiss = { showCollect = false },
-            collect = { listId ->
-                val c = detail
-                if (c == null) false
-                else {
-                    val itemId = Repo.saveCustomItem(
-                        category = "漫画",
-                        doubanId = comicId,
-                        title = c.title,
-                        coverUrl = c.imageUrl,
-                        subTitle = c.authors.joinToString("、") { it.name }
-                    )
-                    Repo.addItemToList(listId, itemId)
-                    true
-                }
             }
         )
     }
