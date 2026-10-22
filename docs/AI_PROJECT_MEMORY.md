@@ -110,3 +110,8 @@
   ④ 发版记录：commit `bcee767` / tag `v0.292` / **Release `420241167`** / 资产 `LaoZhengFenXiang-0.292.apk`（20,284,847 字节，SHA256 `1DEBBB464FDFC16D6A5600C85B645288B2F63FBECB54109AE5EE1EBEEE91DA94`）；桌面 `老郑分享-0.292.apk`。
   ⑤ 编译踩坑：H2SearchScreen 里 `Icons.Rounded.Favorite` 同时被「点赞数」展示用——把 import 换成 FavoriteBorder 会漏掉它（编译错 Unresolved reference），同文件需要两个 import 并存。
 - **⚠️ GitHub Release 中文 body 乱码教训（2026-10-22，v0.291/v0.292 双双踩坑后修复）**：PowerShell `Invoke-RestMethod -Body <含中文的字符串>` 会按 ANSI/GBK 发送，GitHub 收到全变 `????`。正解：**JSON body 先用 UTF-8 写入临时文件（Write 工具），再用 `curl.exe --data-binary "@文件"` + `Content-Type: application/json; charset=utf-8` 发送**；PATCH/POST 后必须 GET 回读验证（曾有一次 curl 静默未生效，重试才 200）。创建和修补 Release 一律走这条路。
+- **v0.293（收藏页改音乐清单样式 + 音乐爱心收藏 + 本子收藏入口归位，2026-10-22）**：
+  ① 收藏页重做（8 模块共用）：样式照搬音乐清单（ListDetailScreen 的音乐布局）——标题+计数、「排序」行（更新=savedAt 倒序 / 歌手·作者=Collator 拼音序，算法同 sortItemsByArtist）、52dp 方形封面行（CoverImage+标题+副标题）；点条目消费、长按确认删除不变。第二个排序 chip 文案：music=「歌手」、其余=「作者」。
+  ② 音乐加入爱心快藏：MusicHomeScreen 搜索行尾原「收藏到音乐清单」的心改为 InnerFav 同款（下载按钮保留）；**原收藏到清单入口仍在完整播放页（MusicPlayerScreen 有 CollectDialog），功能没丢**。InnerFav 新增 `payload` 字段（music 存 MusicSong 全量 JSON 含 raw 解析字段，`songPayload()` 编码 / `restoreSong()` 解码），收藏页点开 `MusicPlayback.play` 直接播。
+  ③ 本子收藏入口从各分类/搜索列表页顶栏（ComicListScreen）移到一级主页顶栏（用户明确要求「应在主页下 不应该在每个分类里」）；卡片上的爱心保留。
+  ④ 发版记录：commit `701a3e4` / tag `v0.293` / **Release `420256023`** / 资产 `LaoZhengFenXiang-0.293.apk`（20,284,851 字节，SHA256 `A725BEDC3E506EC07ADBCC6885CBB3E49DD9FF9E6188ED35DBFE409BFA0E1550`）；桌面 `老郑分享-0.293.apk`。
