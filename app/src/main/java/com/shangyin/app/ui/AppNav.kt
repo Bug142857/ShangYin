@@ -265,6 +265,11 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("listManager") { ListManagerScreen(nav) }
             // 我的下载（漫画 / 本子离线阅读）
             composable("downloads") { com.shangyin.app.ui.download.DownloadScreen(nav) }
+            composable("downloadsList/{section}") { e ->
+                com.shangyin.app.ui.download.DownloadListScreen(
+                    nav, e.arguments?.getString("section") ?: "video"
+                )
+            }
         }
 
         // Z-Library 接口用的常驻隐藏 WebView（DiamWall 是 JS 挑战，接口必须走浏览器环境）

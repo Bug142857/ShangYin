@@ -16,14 +16,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.outlined.Public
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +50,7 @@ import kotlinx.coroutines.launch
 
 /**
  * 清单管理（设置 → 清单管理）：
- * 独立页面，按表/里世界分节展示全部清单树，支持新建 / 重命名 / 删除。
+ * 独立页面，展示表世界全部清单树，支持新建 / 重命名 / 删除（清单只在表世界生效）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,7 +58,7 @@ fun ListManagerScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val lists by Repo.observeListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // 父子层级 → 深度优先扁平化（支持任意级子清单，逐级缩进），按表/里世界分两组
+    // 父子层级 → 深度优先扁平化（支持任意级子清单，逐级缩进）
     val childrenMap = lists.groupBy { it.list.parentId }
     fun buildTree(world: Int): List<Pair<com.shangyin.app.data.db.ListWithMeta, Int>> = buildList {
         fun push(parentId: Long?, depth: Int) {
@@ -74,11 +72,8 @@ fun ListManagerScreen(nav: NavHostController) {
         push(null, 0)
     }
     val surfaceTree = buildTree(0)
-    val innerTree = buildTree(1)
 
     var showCreate by remember { mutableStateOf(false) }
-    var createWorld by remember { mutableStateOf(0) } // 新建清单归属：0=表世界 1=里世界
-    var createMusic by remember { mutableStateOf(false) } // 新建清单类型：音乐清单（固定里世界）
     var renameTarget by remember { mutableStateOf<ItemListEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<com.shangyin.app.data.db.ListWithMeta?>(null) }
 
@@ -108,49 +103,31 @@ fun ListManagerScreen(nav: NavHostController) {
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            if (surfaceTree.isEmpty() && innerTree.isEmpty()) {
+            if (surfaceTree.isEmpty()) {
                 Text(
                     "还没有清单，点右上角「新建清单」创建一个",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.outline
                 )
             } else {
-                if (surfaceTree.isNotEmpty()) {
-                    WorldSectionHeader("表世界", Icons.Outlined.Public, surfaceTree.size)
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        surfaceTree.forEach { (meta, depth) ->
-                            ListManagerRow(
-                                name = meta.list.name,
-                                count = meta.itemCount,
-                                depth = depth,
-                                musicList = meta.list.musicList,
-                                onRename = { renameTarget = meta.list },
-                                onDelete = { deleteTarget = meta }
-                            )
-                        }
-                    }
-                }
-                if (innerTree.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    WorldSectionHeader("里世界", Icons.Outlined.Visibility, innerTree.size)
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        innerTree.forEach { (meta, depth) ->
-                            ListManagerRow(
-                                name = meta.list.name,
-                                count = meta.itemCount,
-                                depth = depth,
-                                musicList = meta.list.musicList,
-                                onRename = { renameTarget = meta.list },
-                                onDelete = { deleteTarget = meta }
-                            )
-                        }
+                WorldSectionHeader("表世界", Icons.Outlined.Public, surfaceTree.size)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    surfaceTree.forEach { (meta, depth) ->
+                        ListManagerRow(
+                            name = meta.list.name,
+                            count = meta.itemCount,
+                            depth = depth,
+                            musicList = meta.list.musicList,
+                            onRename = { renameTarget = meta.list },
+                            onDelete = { deleteTarget = meta }
+                        )
                     }
                 }
             }
         }
     }
 
-    // 新建清单：名称 + 类型（普通 / 音乐清单）+ 归属世界（音乐清单固定里世界）
+    // 新建清单：只填名称（清单固定为表世界普通清单——里世界已无清单功能）
     if (showCreate) {
         var name by remember { mutableStateOf("") }
         AlertDialog(
@@ -164,69 +141,14 @@ fun ListManagerScreen(nav: NavHostController) {
                         placeholder = { Text("清单名称") },
                         singleLine = true
                     )
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "类型",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
-                            selected = !createMusic,
-                            onClick = { createMusic = false },
-                            label = { Text("普通清单") }
-                        )
-                        FilterChip(
-                            selected = createMusic,
-                            onClick = { createMusic = true },
-                            label = { Text("音乐清单") }
-                        )
-                    }
-                    if (!createMusic) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "归属",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = createWorld == 0,
-                                onClick = { createWorld = 0 },
-                                label = { Text("表世界") }
-                            )
-                            FilterChip(
-                                selected = createWorld == 1,
-                                onClick = { createWorld = 1 },
-                                label = { Text("里世界") }
-                            )
-                        }
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            if (createWorld == 1) "里世界清单用于收藏番号、本子与漫画"
-                            else "表世界清单用于收藏豆瓣影视 / 图书 / 游戏",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    } else {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "音乐清单专放歌曲：固定列表布局、没有子清单、不参与拖拽排序，歌曲也会优先收藏到这里",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     enabled = name.isNotBlank(),
                     onClick = {
-                        // 音乐清单固定归里世界（里世界才是收藏歌曲的地方）
-                        val world = if (createMusic) 1 else createWorld
-                        scope.launch { Repo.createList(name, world = world, musicList = createMusic) }
+                        // 清单固定为表世界普通清单（里世界已无清单功能）
+                        scope.launch { Repo.createList(name, world = 0, musicList = false) }
                         showCreate = false
                     }
                 ) { Text("创建") }
@@ -284,7 +206,7 @@ fun ListManagerScreen(nav: NavHostController) {
     }
 }
 
-/** 清单管理的分节标题：表世界 / 里世界 */
+/** 清单管理的分节标题 */
 @Composable
 private fun WorldSectionHeader(label: String, icon: ImageVector, count: Int) {
     Row(

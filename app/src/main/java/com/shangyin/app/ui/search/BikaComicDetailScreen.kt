@@ -322,7 +322,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                    IconButton(onClick = { nav.safeNavigate("downloadsList/bika") }) {
                         Icon(Icons.Rounded.Download, contentDescription = "我的下载")
                     }
                     // 爱心快藏（详情加载完成后才可收藏）
@@ -590,7 +590,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                                 )
                                             }
                                         }
-                                        done -> IconButton(onClick = { nav.safeNavigate("downloads") }) {
+                                        done -> IconButton(onClick = { nav.safeNavigate("downloadsList/bika") }) {
                                             Icon(
                                                 Icons.Rounded.DownloadDone,
                                                 contentDescription = "已下载",

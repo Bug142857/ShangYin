@@ -77,7 +77,7 @@ import com.shangyin.app.ui.settings.SettingsStore
 /**
  * 主页：底部双标签「表世界 / 里世界」。
  * - 表世界：分类 chips + 搜索栏（跳搜索页）+ 豆瓣收藏清单
- * - 里世界：模块入口宫格（设置 → 模块管理 可开关）+ 里世界收藏清单
+ * - 里世界：模块入口宫格（设置 → 模块管理 可开关）；清单只在表世界生效
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -85,10 +85,8 @@ fun HomeScreen(nav: NavHostController) {
     val context = LocalContext.current
     var tab by rememberSaveable { mutableStateOf(0) } // 0=表世界 1=里世界
 
-    // 两个世界的清单流在顶层收集：Tab 切换不重建流，避免闪一下"还没有清单"
+    // 表世界清单流在顶层收集：Tab 切换不重建流，避免闪一下"还没有清单"
     val surfaceLists by Repo.observeRootListsWithMeta(0)
-        .collectAsStateWithLifecycle(initialValue = null)
-    val innerLists by Repo.observeRootListsWithMeta(1)
         .collectAsStateWithLifecycle(initialValue = null)
 
     // 双击返回退出应用（2 秒内按两次）；表/里世界是同级 Tab，返回键不切 Tab
@@ -133,7 +131,7 @@ fun HomeScreen(nav: NavHostController) {
     ) { pad ->
         when (tab) {
             0 -> SurfaceWorld(nav, surfaceLists, Modifier.padding(pad).fillMaxSize())
-            else -> InnerWorld(nav, innerLists, Modifier.padding(pad).fillMaxSize())
+            else -> InnerWorld(nav, Modifier.padding(pad).fillMaxSize())
         }
     }
 }
@@ -202,17 +200,16 @@ private fun SurfaceWorld(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp)
         )
-        WorldListSection(nav, world = 0, lists = lists, modifier = Modifier.weight(1f))
+        WorldListSection(nav, lists = lists, modifier = Modifier.weight(1f))
     }
 }
 
 // ---------------- 里世界 ----------------
 
-/** 里世界：番号 / 本子 / 漫画 / 游戏 / 图书 / 电视 入口 + 里世界清单 */
+/** 里世界：模块入口宫格（清单功能只在表世界生效） */
 @Composable
 private fun InnerWorld(
     nav: NavHostController,
-    lists: List<ListWithMeta>?,
     modifier: Modifier = Modifier
 ) {
     // 模块开关（设置 → 模块管理）：StateFlow 驱动，关掉的入口不在主页出现
@@ -220,6 +217,7 @@ private fun InnerWorld(
     val innerEntries = remember(disabledModules) {
         INNER_MODULE_ENTRIES.filter { it.key !in disabledModules }
     }
+    // 里世界只放模块宫格（清单功能只在表世界生效）
     Column(modifier) {
         innerEntries.chunked(4).forEachIndexed { rowIdx, rowEntries ->
             Row(
@@ -243,7 +241,6 @@ private fun InnerWorld(
                 repeat(4 - rowEntries.size) { Spacer(Modifier.weight(1f)) }
             }
         }
-        WorldListSection(nav, world = 1, lists = lists, modifier = Modifier.weight(1f))
     }
 }
 
@@ -279,12 +276,11 @@ private fun InnerWorldEntry(
     }
 }
 
-// ---------------- 清单区（两个世界共用） ----------------
+// ---------------- 清单区（表世界） ----------------
 
 @Composable
 private fun WorldListSection(
     nav: NavHostController,
-    world: Int,
     lists: List<ListWithMeta>?,
     modifier: Modifier = Modifier
 ) {
@@ -300,10 +296,7 @@ private fun WorldListSection(
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            EmptyView(
-                if (world == 0) "还没有清单\n去搜索收藏喜欢的，或到设置里创建清单"
-                else "还没有里世界清单\n到 设置 → 清单管理 创建，用来收藏番号视频和本子"
-            )
+            EmptyView("还没有清单\n去搜索收藏喜欢的，或到设置里创建清单")
         }
     } else {
         LazyColumn(
@@ -317,7 +310,7 @@ private fun WorldListSection(
                     isDragging = draggingId == meta.list.id,
                     currentIdsState = currentIds,
                     onDragStateChange = { draggingId = it },
-                    onReorder = { from, to -> Repo.reorderRootList(world, from, to) },
+                    onReorder = { from, to -> Repo.reorderRootList(0, from, to) },
                     onClick = { nav.safeNavigate("list/${meta.list.id}") }
                 )
             }
