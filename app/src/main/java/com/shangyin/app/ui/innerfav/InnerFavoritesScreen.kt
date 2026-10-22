@@ -216,10 +216,20 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                     }
                 },
                 actions = {
-                    // 下载管理入口：游戏 / 电视无下载功能，不显示
+                    // 下载管理入口：直达对应分区列表（游戏 / 电视无下载功能，不显示）
                     if (module != "game" && module != "tv") {
-                        IconButton(onClick = { nav.safeNavigate("downloads") }) {
-                            Icon(Icons.Rounded.Download, contentDescription = "下载管理")
+                        val section = when (module) {
+                            "h1", "melon", "xsite", "psite" -> "video"
+                            "h2" -> "bika"
+                            "comic" -> "comic"
+                            "book" -> "book"
+                            "music" -> "music"
+                            else -> null
+                        }
+                        if (section != null) {
+                            IconButton(onClick = { nav.safeNavigate("downloadsList/$section") }) {
+                                Icon(Icons.Rounded.Download, contentDescription = "下载管理")
+                            }
                         }
                     }
                 }
