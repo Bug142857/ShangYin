@@ -53,6 +53,7 @@ import com.shangyin.app.data.InnerFavorites
 import com.shangyin.app.data.xsite.XSiteClient
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.music.MusicMiniPlayer
 import com.shangyin.app.ui.music.MusicPlayback
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -204,7 +205,9 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                     }
                 }
             )
-        }
+        },
+        // 迷你播放条：在收藏页点歌后立即在本页底部出现（没在播时自隐藏为零高度）
+        bottomBar = { MusicMiniPlayer(nav) }
     ) { pad ->
         if (items.isEmpty()) {
             Box(
@@ -275,14 +278,6 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                        Icon(
-                            Icons.Rounded.Favorite,
-                            contentDescription = null,
-                            tint = FavHeartColor,
-                            modifier = Modifier
-                                .size(16.dp)
-                                .padding(start = 6.dp)
-                        )
                     }
                 }
             }
