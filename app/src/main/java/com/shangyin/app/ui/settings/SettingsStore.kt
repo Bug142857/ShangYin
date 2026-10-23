@@ -211,24 +211,54 @@ object SettingsStore {
 
     // ---------- 配置备份/恢复（配合 ConfigBackup 写公共目录，防卸载重装丢登录态） ----------
 
-    /** Boolean 型 SP 键：getString/putString 会 ClassCastException，导出/导入必须特判（v0.300 教训） */
+    /** Boolean 型 SP 键：旧备份（无类型前缀）导入时靠它决定写 Boolean 还是 String（v0.300 教训） */
     private val BOOLEAN_BACKUP_KEYS = setOf(
         KEY_DOWNLOAD_INTERNAL, KEY_CHAPTER_SORT_DESC, KEY_READER_VERTICAL
     )
 
-    /** 导出关键配置快照（key 与 SP key 一致；StringSet 键转逗号串，Boolean 键转 true/false） */
+    /** 类型前缀（v0.308）：导出时给非 String 值打标记，导入时按标记还原类型 */
+    private const val TAG_BOOL = "@b:"
+    private const val TAG_SET = "@s:"
+    private const val TAG_INT = "@i:"
+    private const val TAG_LONG = "@l:"
+    private const val TAG_FLOAT = "@f:"
+
+    /** 不参与备份的键：纯内部状态 / 设备私有 */
+    private val NON_BACKUP_KEYS = setOf(KEY_LAST_CLOUD_SYNC, KEY_CACHE_CLEARED_VERSION)
+
+    /**
+     * 该 SP 键是否参与备份（配置快照 / 云同步 / 公共目录自动备份共用）。
+     *
+     * v0.308 起**不再维护白名单**：除 [NON_BACKUP_KEYS] 与播放进度（`vod_progress_*`，
+     * 属于"播放位置记忆"，用户明确不备份）外，app_settings 里的键全部自动参与。
+     * 以前是 `ConfigBackup.KEYS` 白名单，新增设置项忘了加就静默漏备份（v0.299/v0.304 都犯过）。
+     */
+    fun isBackupKey(key: String): Boolean =
+        key !in NON_BACKUP_KEYS && !key.startsWith(KEY_VOD_PROGRESS_PREFIX)
+
+    /**
+     * 导出配置快照（key 与 SP key 一致）：app_settings 全量键（除 [isBackupKey] 排除项）。
+     * 编码：String 原样；Boolean/Int/Long/Float/StringSet 带类型前缀，保证任意新键都能原样往返。
+     */
     fun exportConfig(): Map<String, String> {
         val out = mutableMapOf<String, String>()
-        for (key in com.shangyin.app.data.ConfigBackup.KEYS) {
-            out[key] = when (key) {
-                KEY_DISABLED_INNER_MODULES ->
-                    sp.getStringSet(key, emptySet())?.joinToString(",").orEmpty()
-                // 用 sp.all 取原始值再 toString：getString 碰到 Boolean 型键会 ClassCastException
-                else -> sp.all[key]?.toString().orEmpty()
+        for ((key, raw) in sp.all) {
+            if (raw == null || !isBackupKey(key)) continue
+            out[key] = when (raw) {
+                is String -> raw
+                is Boolean -> TAG_BOOL + raw
+                is Set<*> -> TAG_SET + raw.joinToString(",")
+                is Int -> TAG_INT + raw
+                is Long -> TAG_LONG + raw
+                is Float -> TAG_FLOAT + raw
+                else -> raw.toString()
             }
         }
         return out
     }
+
+    private fun decodeSet(raw: String): Set<String> =
+        raw.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
 
     /**
      * 把快照写回 SP。overwrite=false 只补本机缺失的 key（ConfigBackup 启动恢复用），
@@ -238,37 +268,52 @@ object SettingsStore {
     private fun applyConfig(data: Map<String, String>, overwrite: Boolean): Int {
         var count = 0
         val editor = sp.edit()
-        for ((key, value) in data) {
-            if (value.isBlank()) continue
+        for ((key, raw) in data) {
+            if (raw.isBlank()) continue
             if (!overwrite && sp.contains(key)) continue
             when {
+                // ---- v0.308 带类型前缀的新备份：直接按原类型写回 ----
+                raw.startsWith(TAG_SET) -> {
+                    val set = decodeSet(raw.removePrefix(TAG_SET))
+                    editor.putStringSet(key, set)
+                    if (key == KEY_DISABLED_INNER_MODULES) disabledInnerModules.value = set
+                }
+                raw.startsWith(TAG_BOOL) ->
+                    editor.putBoolean(key, raw.removePrefix(TAG_BOOL).toBoolean())
+                raw.startsWith(TAG_INT) ->
+                    editor.putInt(key, raw.removePrefix(TAG_INT).toIntOrNull() ?: 0)
+                raw.startsWith(TAG_LONG) ->
+                    editor.putLong(key, raw.removePrefix(TAG_LONG).toLongOrNull() ?: 0L)
+                raw.startsWith(TAG_FLOAT) ->
+                    editor.putFloat(key, raw.removePrefix(TAG_FLOAT).toFloatOrNull() ?: 0f)
+                // ---- 旧备份（无前缀）兼容 ----
                 key == KEY_DISABLED_INNER_MODULES -> {
-                    val set = value.split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+                    val set = decodeSet(raw)
                     editor.putStringSet(key, set)
                     // 同步 StateFlow，否则主页模块开关不刷新
                     disabledInnerModules.value = set
                 }
-                key in BOOLEAN_BACKUP_KEYS -> editor.putBoolean(key, value == "true")
+                key in BOOLEAN_BACKUP_KEYS -> editor.putBoolean(key, raw == "true")
                 // v0.304：主题 / 主题色 / 模块顺序恢复后同步 StateFlow（界面立即按新配置重绘）
                 key == KEY_THEME -> {
-                    editor.putString(key, value); themeFlow.value = value
+                    editor.putString(key, raw); themeFlow.value = raw
                 }
                 key == KEY_ACCENT -> {
-                    editor.putString(key, value); accentFlow.value = value
+                    editor.putString(key, raw); accentFlow.value = raw
                 }
                 key == KEY_INNER_ORDER_TOP -> {
-                    editor.putString(key, value)
+                    editor.putString(key, raw)
                     innerModuleOrderTop.value = normalizeOrder(
-                        value.split(',').filter { it.isNotBlank() }, DEFAULT_INNER_ORDER_TOP
+                        raw.split(',').filter { it.isNotBlank() }, DEFAULT_INNER_ORDER_TOP
                     )
                 }
                 key == KEY_INNER_ORDER_BOTTOM -> {
-                    editor.putString(key, value)
+                    editor.putString(key, raw)
                     innerModuleOrderBottom.value = normalizeOrder(
-                        value.split(',').filter { it.isNotBlank() }, DEFAULT_INNER_ORDER_BOTTOM
+                        raw.split(',').filter { it.isNotBlank() }, DEFAULT_INNER_ORDER_BOTTOM
                     )
                 }
-                else -> editor.putString(key, value)
+                else -> editor.putString(key, raw)
             }
             count++
         }

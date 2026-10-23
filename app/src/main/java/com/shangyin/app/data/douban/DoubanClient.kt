@@ -21,12 +21,10 @@ import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
-import okhttp3.Cache
 import okhttp3.CacheControl
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.io.File
 
 /**
  * 豆瓣网页接口客户端（非官方）。
@@ -126,7 +124,9 @@ object DoubanClient {
         }
 
     private fun buildClient(): OkHttpClient = OkHttpClient.Builder()
-        .cache(Cache(File(com.shangyin.app.App.instance.cacheDir, "http"), 20 * 1024 * 1024L))
+        // v0.308：去掉 disk cache —— 豆瓣接口请求全是 noCache()/noStore()，缓存永远用不上；
+        // 而这里与 Coil 的 ImageLoader 同时指向 cacheDir/http 同一个目录，OkHttp 不允许
+        // 同一目录存在两个 Cache 实例（journal 竞争/文件互相删），删掉这层只留 Coil 那份。
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(15, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
@@ -184,17 +184,17 @@ object DoubanClient {
 
     /**
      * 彻底重建 OkHttpClient（核武器级清理）：
-     * 关闭旧 client（连接池 + 缓存），用全新的 ConnectionPool 和 Cache 实例替换。
+     * 关闭旧 client（连接池 + 缓存），用全新的 ConnectionPool 替换。
      * 适用于：连续多次失败、登录态变化、Cookie 更新后。
      */
     fun recreateClient() {
         synchronized(clientLock) {
             runCatching { clientRef?.connectionPool?.evictAll() }
             runCatching {
-                // 关闭旧 cache（否则旧 cache 文件句柄不释放，新 client 无法复用同一目录）
+                // 关闭旧 cache（v0.308 起本 client 已不挂 disk cache，这里只是兼容旧实例）
                 clientRef?.cache?.close()
             }
-            // 重建新 client（下次请求时会懒加载新连接池和新 Cache 实例）
+            // 重建新 client（下次请求时会懒加载新连接池）
             clientRef = null
         }
     }

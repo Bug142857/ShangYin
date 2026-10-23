@@ -76,6 +76,8 @@ fun buildExportJson(data: ExportData): String {
             put("baseUrl", v.baseUrl)
             put("enabled", v.enabled)
             put("region", v.region)
+            // v0.308：手动分组标记必须跟着走，否则导入后自动归组会覆盖用户手选的目录
+            put("regionManual", v.regionManual)
             v.testStatus?.let { put("testStatus", it) }
             v.testMsg?.let { put("testMsg", it) }
             put("testAt", v.testAt)
@@ -181,6 +183,7 @@ fun parseExportJson(json: String): ExportData {
                 baseUrl = o.optString("baseUrl"),
                 enabled = o.optBoolean("enabled", true),
                 region = o.optString("region", "cn").ifBlank { "cn" },
+                regionManual = o.optBoolean("regionManual", false),
                 testStatus = o.optString("testStatus", "").ifBlank { null },
                 testMsg = o.optString("testMsg", "").ifBlank { null },
                 testAt = o.optLong("testAt", 0L)

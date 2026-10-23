@@ -329,8 +329,12 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     // 路由里用 "-" 占位表示搜索结果的 hash 为空
     val hashId = hash.takeIf { it != "-" }.orEmpty()
 
-    var book by remember { mutableStateOf<Book?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    // v0.308：详情先吃缓存（看过的书再打开不重新拉），命中时后台静默刷新
+    val cachedBook = remember(bookId, hashId) {
+        com.shangyin.app.data.DetailCache.get<Book>("zlib:$bookId:$hashId")
+    }
+    var book by remember { mutableStateOf(cachedBook) }
+    var loading by remember { mutableStateOf(cachedBook == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
 
@@ -341,7 +345,7 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
     var quota by remember { mutableStateOf<ZlibClient.DownloadQuota?>(null) }
 
     LaunchedEffect(bookId, hashId, retryKey) {
-        loading = true
+        if (book == null) loading = true
         error = null
         if (hashId.isBlank()) {
             error = "缺少书籍标识，请返回重新搜索"
@@ -349,8 +353,15 @@ fun BookDetailScreen(nav: NavHostController, bookId: String, hash: String) {
             return@LaunchedEffect
         }
         runCatching { ZlibClient.detail(bookId, hashId) }
-            .onSuccess { book = it }
-            .onFailure { error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "加载失败" }
+            .onSuccess {
+                book = it
+                com.shangyin.app.data.DetailCache.put("zlib:$bookId:$hashId", it)
+            }
+            .onFailure {
+                if (book == null) {
+                    error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "加载失败"
+                }
+            }
         loading = false
         // 顺带取一次账号当日下载额度（站点按账号限制每日下载次数）
         quota = runCatching { ZlibClient.downloadQuota() }.getOrNull()

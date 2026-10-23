@@ -783,20 +783,31 @@ private fun XPostCard(post: XPost, rank: Int, onClick: () -> Unit) {
 fun XSiteDetailScreen(nav: NavHostController, urlCd: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var detail by remember { mutableStateOf<com.shangyin.app.data.xsite.XSiteClient.XDetail?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    // v0.308：详情先吃缓存（看过的帖子再打开不重新拉），命中时后台静默刷新
+    val cachedDetail = remember(urlCd) {
+        com.shangyin.app.data.DetailCache.get<com.shangyin.app.data.xsite.XSiteClient.XDetail>("xsite:$urlCd")
+    }
+    var detail by remember { mutableStateOf(cachedDetail) }
+    var loading by remember { mutableStateOf(cachedDetail == null) }
     var error by remember { mutableStateOf<String?>(null) }
     // v0.303：已下载库（按直链判断，下载按钮变对号）
     val dlLibrary by com.shangyin.app.data.download.VideoDownloadManager.library
         .collectAsStateWithLifecycle()
 
     fun reload() {
-        loading = true
+        if (detail == null) loading = true
         error = null
         scope.launch {
             runCatching { XSiteClient.detail(urlCd) }
-                .onSuccess { detail = it }
-                .onFailure { e -> error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败" }
+                .onSuccess {
+                    detail = it
+                    com.shangyin.app.data.DetailCache.put("xsite:$urlCd", it)
+                }
+                .onFailure { e ->
+                    if (detail == null) {
+                        error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
+                    }
+                }
             loading = false
         }
     }

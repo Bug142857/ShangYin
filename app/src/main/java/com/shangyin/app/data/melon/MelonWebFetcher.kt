@@ -96,6 +96,7 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
         runCatching {
             cacheFile.parentFile?.mkdirs()
             cacheFile.writeBytes(plain)
+            trimCache(cacheFile.parentFile)
         }
         return plain
     }
@@ -140,6 +141,10 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
     }
 
     companion object {
+        /** 明文缓存上限（v0.308）：以前只写不删，浏览越多占越大；超限按修改时间淘汰旧的 */
+        private const val MAX_CACHE_BYTES = 200L * 1024 * 1024
+        private const val TRIM_TARGET_BYTES = 160L * 1024 * 1024
+
         /** 解密明文的磁盘缓存文件（MD5(url)），设置页清缓存一并清理 */
         fun cacheDir(context: android.content.Context): File =
             File(context.cacheDir, "melon_web_img")
@@ -147,6 +152,18 @@ class MelonWebFetcher(private val url: String, private val options: Options) : F
         private fun cacheFile(context: android.content.Context, url: String): File {
             val md5 = MessageDigest.getInstance("MD5").digest(url.toByteArray())
             return File(cacheDir(context), md5.joinToString("") { "%02x".format(it) })
+        }
+
+        /** 超上限时从最久未修改的开始删，删到 TRIM_TARGET 为止（无 LRU，但有界） */
+        private fun trimCache(dir: File?) {
+            val files = dir?.listFiles() ?: return
+            var total = files.sumOf { it.length() }
+            if (total <= MAX_CACHE_BYTES) return
+            files.sortedBy { it.lastModified() }.forEach { f ->
+                if (total <= TRIM_TARGET_BYTES) return@forEach
+                val len = f.length()
+                if (f.delete()) total -= len
+            }
         }
     }
 }

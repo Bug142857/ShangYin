@@ -428,8 +428,12 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var detail by remember { mutableStateOf<GameDetail?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    // v0.308：详情先吃缓存（看过的游戏再打开不重新拉），命中时后台静默刷新
+    val cachedGame = remember(gameId) {
+        com.shangyin.app.data.DetailCache.get<GameDetail>("game:$gameId")
+    }
+    var detail by remember { mutableStateOf(cachedGame) }
+    var loading by remember { mutableStateOf(cachedGame == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var retryKey by remember { mutableIntStateOf(0) }
 
@@ -439,11 +443,18 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
     var viewerIndex by remember { mutableStateOf<Int?>(null) }    // 截图放大查看
 
     LaunchedEffect(gameId, retryKey) {
-        loading = true
+        if (detail == null) loading = true
         error = null
         runCatching { WygamerClient.detail(gameId) }
-            .onSuccess { detail = it }
-            .onFailure { error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "加载失败" }
+            .onSuccess {
+                detail = it
+                com.shangyin.app.data.DetailCache.put("game:$gameId", it)
+            }
+            .onFailure {
+                if (detail == null) {
+                    error = (it.message?.takeIf { m -> m.isNotBlank() } ?: it::class.simpleName) ?: "加载失败"
+                }
+            }
         loading = false
     }
 

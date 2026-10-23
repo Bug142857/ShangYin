@@ -62,9 +62,10 @@ class App : Application(), ImageLoaderFactory {
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
             runCatching { Repo.migrateLiveCategoryToTv() }
         }
-        // 配置变更（登录/云同步/片源等）时自动备份到公共目录
+        // 配置变更（登录/云同步/片源等）时自动备份到公共目录。
+        // v0.308：改为「除内部状态外全部键」——新增设置项自动纳入，不再维护白名单
         SettingsStore.registerListener { _, key ->
-            if (key in com.shangyin.app.data.ConfigBackup.KEYS) {
+            if (key != null && SettingsStore.isBackupKey(key)) {
                 kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                     runCatching { com.shangyin.app.data.ConfigBackup.backup(this@App) }
                 }
@@ -319,24 +320,27 @@ class App : Application(), ImageLoaderFactory {
         @Volatile
         var webViewUa: String = ""
 
-        /** 清理 Coil 图片缓存 + OkHttp HTTP 缓存 */
+        /** 清理 Coil 图片缓存 + OkHttp HTTP 缓存 + 吃瓜解密明文缓存 + 详情页内存缓存 */
         fun clearAllCaches(ctx: Context) {
             // 直接删缓存子目录：OkHttp 和 Coil 都会在下次请求时重建
             runCatching { deleteRecursive(File(ctx.cacheDir, "http")) }
             runCatching { deleteRecursive(File(ctx.cacheDir, "image_cache")) }
             // v0.235：吃瓜 WebView 解密管线的明文缓存（MelonWebFetcher 自建层）
             runCatching { deleteRecursive(com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(ctx)) }
-            // 兜底：清理 Coil 内存缓存
-            runCatching {
-                (ctx as? coil.ImageLoaderFactory)?.newImageLoader()?.memoryCache?.clear()
-            }
+            // v0.308 修复：原来调 newImageLoader() —— 那是工厂方法，每次都会**新建**一个
+            // ImageLoader，清的是新实例里空的内存缓存，对正在使用的单例毫无作用。
+            // 改用 Coil 全局单例（ImageLoaderFactory 首次创建后复用同一个）。
+            runCatching { coil.Coil.imageLoader(ctx).memoryCache?.clear() }
+            // 详情页缓存（吃瓜/X站/游戏/图书）：属于"看过的页面不重拉"的一部分，一并清
+            runCatching { com.shangyin.app.data.DetailCache.clear() }
         }
 
-        /** 查询当前缓存总大小（字节） */
+        /** 查询当前缓存总大小（字节）—— v0.308 起含吃瓜解密明文缓存，与清理范围保持一致 */
         fun cacheSizeBytes(ctx: Context): Long {
             val http = dirSize(File(ctx.cacheDir, "http"))
             val img = dirSize(File(ctx.cacheDir, "image_cache"))
-            return http + img
+            val melon = dirSize(com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(ctx))
+            return http + img + melon
         }
 
         private fun deleteRecursive(f: File) {

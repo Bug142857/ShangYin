@@ -714,24 +714,34 @@ private fun MelonPostCard(post: MelonPost, onClick: () -> Unit) {
 fun MelonDetailScreen(nav: NavHostController, id: String) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var detail by remember { mutableStateOf<com.shangyin.app.data.melon.MelonDetail?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    // v0.308：详情先吃缓存 —— 看过的帖子再打开立刻有内容，同时后台静默刷新
+    val cachedDetail = remember(id) {
+        com.shangyin.app.data.DetailCache.get<com.shangyin.app.data.melon.MelonDetail>("melon:$id")
+    }
+    var detail by remember { mutableStateOf(cachedDetail) }
+    var loading by remember { mutableStateOf(cachedDetail == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var viewerIndex by remember { mutableIntStateOf(-1) } // -1=关闭
 
     fun reload() {
-        loading = true
+        // 有缓存时不闪加载态；请求失败也不覆盖已显示的内容
+        if (detail == null) loading = true
         error = null
         scope.launch {
             runCatching { MelonClient.detail(id) }
                 .onSuccess {
                     detail = it
+                    com.shangyin.app.data.DetailCache.put("melon:$id", it)
                     // 会话内记住最后浏览的帖子（首页「上次看到」入口用）
                     MelonCache.last = MelonPost(
                         it.id, it.title, it.cover, it.author, it.date, it.categories
                     )
                 }
-                .onFailure { e -> error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败" }
+                .onFailure { e ->
+                    if (detail == null) {
+                        error = e.message?.takeIf { it.isNotBlank() } ?: "加载失败"
+                    }
+                }
             loading = false
         }
     }

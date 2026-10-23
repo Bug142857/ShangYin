@@ -24,39 +24,13 @@ object ConfigBackup {
     private const val DIR = "老郑分享"
     private const val FILE = "config_backup.json"
 
-    /** 支持备份/恢复的配置 key（与 SettingsStore 的 SP key 一致） */
-    val KEYS = listOf(
-        "douban_cookie",
-        "douban_ck",
-        "webdav_url",
-        "webdav_user",
-        "webdav_pass",
-        "vod_sources_json",
-        "bika_token",
-        // 哔咔账密：token 过期时靠它静默重登，重装后也要能恢复，否则会退回"请重新登录"
-        "bika_account",
-        "bika_password",
-        "wygamer_cookie",
-        "zlib_cookie",
-        "zlib_host",
-        "live_sources_json",
-        // 吃瓜当前可用镜像（v0.224）：换设备导入备份后直接用活线，不用再吃一次 301/重新探活
-        "melon_base",
-        "theme",
-        // v0.299：主备份"所有信息一起走"扩展（设置项 + 下载任务记录）。
-        // disabled_inner_modules 是 StringSet 键，导出/导入时由 SettingsStore 特判转逗号串
-        "nickname",
-        "avatar_uri",
-        "download_internal",
-        "chapter_sort_desc",
-        "reader_vertical",
-        "video_downloads_json",
-        "disabled_inner_modules",
-        // v0.304：主题色 + 里世界模块顺序（随主备份一起走）
-        "theme_accent",
-        "inner_module_order_top",
-        "inner_module_order_bottom"
-    )
+    /**
+     * 备份范围：`app_settings` 里**所有**参与备份的键（判定见 `SettingsStore.isBackupKey`）。
+     *
+     * v0.308 起取消白名单：以前这里列 25 个 key，新增设置项忘了加就静默漏备份；
+     * 现在任何新写入 app_settings 的配置（含以后新增的类型）自动进出备份文件。
+     * 仅排除内部状态（last_cloud_sync / cache_cleared_version）与播放进度 vod_progress_*。
+     */
 
     /** 备份当前配置到公共 Download 目录（API 29+ 用 MediaStore，旧版本跳过） */
     fun backup(context: Context): Boolean {
@@ -111,11 +85,11 @@ object ConfigBackup {
                 ?: return 0
             val obj = JSONObject(json)
             val restored = mutableMapOf<String, String>()
-            for (key in KEYS) {
-                if (obj.has(key)) {
-                    val v = obj.optString(key, "")
-                    if (v.isNotBlank()) restored[key] = v
-                }
+            // v0.308：不再只认白名单，备份文件里所有非内部键都参与「补缺」
+            for (key in obj.keys()) {
+                if (!SettingsStore.isBackupKey(key)) continue
+                val v = obj.optString(key, "")
+                if (v.isNotBlank()) restored[key] = v
             }
             SettingsStore.importConfigIfMissing(restored)
         }.getOrDefault(0)
