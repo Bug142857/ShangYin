@@ -8,7 +8,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shangyin.app.ui.AppNav
 import com.shangyin.app.ui.NavRestore
 import com.shangyin.app.ui.settings.SettingsStore
@@ -16,8 +18,8 @@ import com.shangyin.app.ui.theme.ShangYinTheme
 
 class MainActivity : ComponentActivity() {
 
-    private val spListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        if (key == "theme") runOnUiThread { recreate() }
+    private val spListener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+        // v0.304：主题/主题色改成 StateFlow 驱动（立即生效，不再 recreate 闪一下）
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -30,7 +32,13 @@ class MainActivity : ComponentActivity() {
         SettingsStore.registerListener(spListener)
         enableEdgeToEdge()
         setContent {
-            val forceDark = SettingsStore.isDark ?: isSystemInDarkTheme()
+            val themeMode by SettingsStore.themeFlow.collectAsStateWithLifecycle()
+            val accentKey by SettingsStore.accentFlow.collectAsStateWithLifecycle()
+            val forceDark = when (themeMode) {
+                SettingsStore.THEME_DARK -> true
+                SettingsStore.THEME_LIGHT -> false
+                else -> null
+            } ?: isSystemInDarkTheme()
 
             val insets = WindowCompat.getInsetsController(window, window.decorView)
             LaunchedEffect(forceDark) {
@@ -38,8 +46,8 @@ class MainActivity : ComponentActivity() {
                 insets.isAppearanceLightNavigationBars = !forceDark
             }
 
-            ShangYinTheme(forceDark = forceDark) {
-                AppNav(onThemeChanged = { recreate() })
+            ShangYinTheme(forceDark = forceDark, accentKey = accentKey) {
+                AppNav(onThemeChanged = { })
             }
         }
     }

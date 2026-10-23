@@ -79,17 +79,23 @@ private data class SrcState(
 /**
  * 番号页会话缓存：跨页面导航（进播放页/详情页再返回）保留搜索词与已加载结果，
  * 返回时不再重新加载（stateKeyword 记录 stateMap 对应的关键词）。
+ * v0.304：按模块序号分开缓存（番1~番4 各一份）。
  */
-private object H1Cache {
+private class H1CacheState {
     var stateKeyword: String? = null
     var keyword: String = ""
     var input: String = ""
     var stateMap: Map<String, SrcState> = emptyMap()
 }
 
+private val H1Caches = mutableMapOf<Int, H1CacheState>()
+
+/**
+ * @param sourceIndex 0 = 全部外网源（旧入口）；1..4 = 番1~番4，只展示第 N 个启用中的外网源
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
+fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int = 0) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
@@ -97,29 +103,34 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
         runCatching { java.net.URLDecoder.decode(kwEncoded, "UTF-8") }.getOrDefault(kwEncoded)
     }
 
-    // 只展示「需要外网」目录且启用的源
-    val sources = remember {
+    // 只展示「需要外网」目录且启用的源；番N 只取第 N 个
+    val allSources = remember {
         SettingsStore.getVodSources().filter { it.enabled && it.region == "proxy" }
     }
+    val sources = remember(allSources, sourceIndex) {
+        if (sourceIndex <= 0) allSources
+        else listOfNotNull(allSources.getOrNull(sourceIndex - 1))
+    }
+    val cache = remember(sourceIndex) { H1Caches.getOrPut(sourceIndex) { H1CacheState() } }
 
     // 从会话缓存恢复（首次进入用路由关键词初始化）
-    if (H1Cache.stateKeyword == null) {
-        H1Cache.keyword = initialKw.trim()
-        H1Cache.input = initialKw.trim()
+    if (cache.stateKeyword == null) {
+        cache.keyword = initialKw.trim()
+        cache.input = initialKw.trim()
     }
-    var keyword by remember { mutableStateOf(H1Cache.keyword) }
-    var input by remember { mutableStateOf(H1Cache.input) }
+    var keyword by remember { mutableStateOf(cache.keyword) }
+    var input by remember { mutableStateOf(cache.input) }
     // srcId -> 每源加载状态
-    var stateMap by remember { mutableStateOf(H1Cache.stateMap) }
+    var stateMap by remember { mutableStateOf(cache.stateMap) }
     val loadingKeys = remember { mutableSetOf<String>() } // "srcId:page" 防重复加载
     // 点击后正在取详情播放的影片 id（防重复点击）
     var openingId by remember { mutableStateOf<Long?>(null) }
 
     // 状态变化实时写回缓存（进播放页后返回可完整恢复）
     LaunchedEffect(keyword, input, stateMap) {
-        H1Cache.keyword = keyword
-        H1Cache.input = input
-        H1Cache.stateMap = stateMap
+        cache.keyword = keyword
+        cache.input = input
+        cache.stateMap = stateMap
     }
 
     /** 加载某源某页（kw 变化后返回的旧响应会被丢弃） */
@@ -150,10 +161,10 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
     // 关键词变化：新关键词全部源并行重载；恢复场景只补加载缺失的源
     LaunchedEffect(keyword) {
         if (sources.isEmpty()) return@LaunchedEffect
-        if (H1Cache.stateKeyword == keyword) {
+        if (cache.stateKeyword == keyword) {
             sources.filter { it.id !in stateMap }.forEach { src -> load(src, 1, keyword) }
         } else {
-            H1Cache.stateKeyword = keyword
+            cache.stateKeyword = keyword
             loadingKeys.clear()
             stateMap = emptyMap()
             coroutineScope {
@@ -179,9 +190,17 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
             TopAppBar(
                 title = {
                     Column {
-                        Text("番号", fontWeight = FontWeight.Bold)
                         Text(
-                            if (keyword.isBlank()) "共 ${sources.size} 个源 · 页内可搜索" else "搜索「$keyword」",
+                            if (sourceIndex > 0) "番$sourceIndex" else "番号",
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            when {
+                                sources.isEmpty() -> "暂无对应片源"
+                                keyword.isBlank() && sourceIndex > 0 -> "${sources.first().name} · 页内可搜索"
+                                keyword.isBlank() -> "共 ${sources.size} 个源 · 页内可搜索"
+                                else -> "搜索「$keyword」"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -211,10 +230,14 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("外网目录还没有片源", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (sourceIndex > 0) "番$sourceIndex 还没有对应片源" else "外网目录还没有片源",
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "先到 片源管理 里测试链接，测试为「需外网/返回异常」的源会自动归入外网目录；也可以在编辑片源时手动选择「需要外网」目录。",
+                    "番1~番4 依次对应外网目录里第 1~4 个启用中的片源；先到片源管理里添加/启用片源，"
+                        + "测试为「需外网/返回异常」的源会自动归入外网目录，也可以在编辑片源时手动选择「需要外网」目录。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -32,14 +32,70 @@ object SettingsStore {
         sp = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
         disabledInnerModules.value =
             sp.getStringSet(KEY_DISABLED_INNER_MODULES, emptySet())?.toSet() ?: emptySet()
+        // v0.304：恢复模块顺序 / 主题色（首次启动用默认值，不写盘）
+        innerModuleOrderTop.value = normalizeOrder(
+            sp.getString(KEY_INNER_ORDER_TOP, "").orEmpty().split(',').filter { it.isNotBlank() },
+            DEFAULT_INNER_ORDER_TOP
+        )
+        innerModuleOrderBottom.value = normalizeOrder(
+            sp.getString(KEY_INNER_ORDER_BOTTOM, "").orEmpty().split(',').filter { it.isNotBlank() },
+            DEFAULT_INNER_ORDER_BOTTOM
+        )
+        accentFlow.value = accent
+        themeFlow.value = theme
     }
 
     // ---------- 里世界模块开关（设置 → 模块管理） ----------
 
     private const val KEY_DISABLED_INNER_MODULES = "disabled_inner_modules"
+    private const val KEY_INNER_ORDER_TOP = "inner_module_order_top"
+    private const val KEY_INNER_ORDER_BOTTOM = "inner_module_order_bottom"
+    private const val KEY_ACCENT = "theme_accent"
 
     /** 被关闭的里世界模块 key 集合（StateFlow：设置页改完主页立即生效） */
     val disabledInnerModules = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
+
+    /** 里世界首页上区（本地）模块默认顺序 */
+    val DEFAULT_INNER_ORDER_TOP = listOf("game", "music", "tv", "melon")
+
+    /** 里世界首页下区（需要外网）模块默认顺序（v0.304：本子移到漫画与番号之间） */
+    val DEFAULT_INNER_ORDER_BOTTOM = listOf(
+        "book", "comic", "h2", "h1_1", "h1_2", "h1_3", "h1_4", "psite", "xsite"
+    )
+
+    /** 模块顺序（v0.304：模块管理可长按拖动调整，主页按它排列） */
+    val innerModuleOrderTop =
+        kotlinx.coroutines.flow.MutableStateFlow(DEFAULT_INNER_ORDER_TOP)
+    val innerModuleOrderBottom =
+        kotlinx.coroutines.flow.MutableStateFlow(DEFAULT_INNER_ORDER_BOTTOM)
+
+    /** 保存新的上下区顺序（缺的 key 自动补到末尾，删掉的 key 忽略） */
+    fun setInnerModuleOrder(top: List<String>, bottom: List<String>) {
+        val normalTop = normalizeOrder(top, DEFAULT_INNER_ORDER_TOP)
+        val normalBottom = normalizeOrder(bottom, DEFAULT_INNER_ORDER_BOTTOM)
+        sp.edit()
+            .putString(KEY_INNER_ORDER_TOP, normalTop.joinToString(","))
+            .putString(KEY_INNER_ORDER_BOTTOM, normalBottom.joinToString(","))
+            .apply()
+        innerModuleOrderTop.value = normalTop
+        innerModuleOrderBottom.value = normalBottom
+    }
+
+    private fun normalizeOrder(raw: List<String>, defaults: List<String>): List<String> {
+        val keep = raw.filter { it in defaults }.distinct()
+        return keep + defaults.filterNot { it in keep }
+    }
+
+    /** 主题强调色：dynamic（系统动态色）/ green / purple / blue / cyan / orange / pink */
+    var accent: String
+        get() = sp.getString(KEY_ACCENT, "dynamic").orEmpty().ifBlank { "dynamic" }
+        set(v) {
+            sp.edit().putString(KEY_ACCENT, v).apply()
+            accentFlow.value = v
+        }
+
+    /** 主题色 StateFlow（切换立即生效，不用重建 Activity） */
+    val accentFlow = kotlinx.coroutines.flow.MutableStateFlow("dynamic")
 
     /** 开关某个里世界模块入口（true=显示） */
     fun setInnerModuleEnabled(key: String, enabled: Boolean) {
@@ -65,7 +121,13 @@ object SettingsStore {
     /** theme: follow(系统) / light / dark */
     var theme: String
         get() = sp.getString(KEY_THEME, THEME_FOLLOW) ?: THEME_FOLLOW
-        set(v) = sp.edit().putString(KEY_THEME, v).apply()
+        set(v) {
+            sp.edit().putString(KEY_THEME, v).apply()
+            themeFlow.value = v
+        }
+
+    /** 主题模式 StateFlow（切换立即生效，不用重建 Activity） */
+    val themeFlow = kotlinx.coroutines.flow.MutableStateFlow(THEME_FOLLOW)
 
     val isDark: Boolean?
         get() = when (theme) {
@@ -187,6 +249,25 @@ object SettingsStore {
                     disabledInnerModules.value = set
                 }
                 key in BOOLEAN_BACKUP_KEYS -> editor.putBoolean(key, value == "true")
+                // v0.304：主题 / 主题色 / 模块顺序恢复后同步 StateFlow（界面立即按新配置重绘）
+                key == KEY_THEME -> {
+                    editor.putString(key, value); themeFlow.value = value
+                }
+                key == KEY_ACCENT -> {
+                    editor.putString(key, value); accentFlow.value = value
+                }
+                key == KEY_INNER_ORDER_TOP -> {
+                    editor.putString(key, value)
+                    innerModuleOrderTop.value = normalizeOrder(
+                        value.split(',').filter { it.isNotBlank() }, DEFAULT_INNER_ORDER_TOP
+                    )
+                }
+                key == KEY_INNER_ORDER_BOTTOM -> {
+                    editor.putString(key, value)
+                    innerModuleOrderBottom.value = normalizeOrder(
+                        value.split(',').filter { it.isNotBlank() }, DEFAULT_INNER_ORDER_BOTTOM
+                    )
+                }
                 else -> editor.putString(key, value)
             }
             count++

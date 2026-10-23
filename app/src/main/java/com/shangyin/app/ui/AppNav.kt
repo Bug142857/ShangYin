@@ -149,6 +149,7 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("settings") { SettingsScreen(nav, onThemeChanged) }
             composable("account") { com.shangyin.app.ui.settings.AccountScreen(nav) }
             composable("moduleManage") { com.shangyin.app.ui.settings.ModuleManageScreen(nav) }
+            composable("themeManage") { com.shangyin.app.ui.settings.ThemeManageScreen(nav) }
             // 里世界「点爱心」收藏页（吃瓜/X站/P站共用，module 区分）
             composable(
                 route = "innerFavs/{module}",
@@ -166,13 +167,23 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
             composable("sourceHub") { com.shangyin.app.ui.live.SourceHubScreen(nav) }
             composable("player") { PlayerScreen(nav) }
             composable(
-                route = "h1search?kw={kw}",
-                arguments = listOf(navArgument("kw") {
-                    type = NavType.StringType
-                    defaultValue = ""
-                })
+                route = "h1search?kw={kw}&idx={idx}",
+                arguments = listOf(
+                    navArgument("kw") {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    },
+                    navArgument("idx") {
+                        type = NavType.IntType
+                        defaultValue = 0
+                    }
+                )
             ) { entry ->
-                H1SearchScreen(nav, entry.arguments?.getString("kw").orEmpty())
+                H1SearchScreen(
+                    nav,
+                    entry.arguments?.getString("kw").orEmpty(),
+                    entry.arguments?.getInt("idx") ?: 0
+                )
             }
             composable(
                 route = "h1source/{srcId}",

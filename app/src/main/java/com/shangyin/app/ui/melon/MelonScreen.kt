@@ -744,7 +744,7 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
         PlayerSession.itemId = id.toLongOrNull() ?: 0L
         PlayerSession.title = d.title
         PlayerSession.subTitle = ""
-        PlayerSession.sourceName = "51爆料"
+        PlayerSession.sourceName = "吃瓜"
         PlayerSession.coverUrl = d.cover.orEmpty()
         PlayerSession.groups = listOf(
             VodPlayGroup("51爆料", vids.map { VodEpisode(it.title, it.url) })

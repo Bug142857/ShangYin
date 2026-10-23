@@ -74,8 +74,9 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var showThemePicker by remember { mutableStateOf(false) }
-    var currentTheme by rememberSaveable { mutableStateOf(SettingsStore.theme) }
+    val themeMode by SettingsStore.themeFlow.collectAsStateWithLifecycle()
+    val accentKey by SettingsStore.accentFlow.collectAsStateWithLifecycle()
+
     var showClearCache by remember { mutableStateOf(false) }
 
     var cacheSize by remember { mutableStateOf("计算中…") }
@@ -155,8 +156,8 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
             SettingsCard(
                 icon = Icons.Rounded.Palette,
                 title = "主题管理",
-                hint = themeLabel(currentTheme),
-                onClick = { showThemePicker = true }
+                hint = "${themeLabel(themeMode)} · ${com.shangyin.app.ui.theme.accentLabel(accentKey)}",
+                onClick = { nav.safeNavigate("themeManage") }
             )
             SettingsCard(
                 icon = Icons.Rounded.Person,
@@ -221,30 +222,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 }) { Text("清理") }
             },
             dismissButton = { TextButton(onClick = { showClearCache = false }) { Text("取消") } }
-        )
-    }
-
-    // 主题选择
-    if (showThemePicker) {
-        AlertDialog(
-            onDismissRequest = { showThemePicker = false },
-            title = { Text("选择主题") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("follow" to "跟随系统", "light" to "浅色", "dark" to "深色").forEach { (key, label) ->
-                        FilterChip(
-                            selected = currentTheme == key,
-                            onClick = {
-                                currentTheme = key
-                                SettingsStore.theme = key
-                                onThemeChanged()
-                            },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-            },
-            confirmButton = { }
         )
     }
 }

@@ -51,7 +51,11 @@ object ConfigBackup {
         "chapter_sort_desc",
         "reader_vertical",
         "video_downloads_json",
-        "disabled_inner_modules"
+        "disabled_inner_modules",
+        // v0.304：主题色 + 里世界模块顺序（随主备份一起走）
+        "theme_accent",
+        "inner_module_order_top",
+        "inner_module_order_bottom"
     )
 
     /** 备份当前配置到公共 Download 目录（API 29+ 用 MediaStore，旧版本跳过） */

@@ -50,6 +50,7 @@ suspend fun openVodAndPlay(
     }
     PlayerSession.itemId = 0L
     PlayerSession.title = full.vod_name
+    PlayerSession.sourceName = src.name
     PlayerSession.coverUrl = full.vod_pic.ifBlank { item.vod_pic }
     PlayerSession.groups = groups
     PlayerSession.groupIndex = 0

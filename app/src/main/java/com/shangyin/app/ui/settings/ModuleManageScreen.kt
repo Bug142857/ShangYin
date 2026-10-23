@@ -1,6 +1,5 @@
 package com.shangyin.app.ui.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,28 +22,44 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.shangyin.app.ui.common.INNER_MODULE_ENTRIES
+import com.shangyin.app.ui.common.InnerModuleEntry
 import com.shangyin.app.ui.common.ModuleIconBox
+import com.shangyin.app.ui.common.dragReorderModifier
 import com.shangyin.app.ui.safePopBackStack
 
 /**
- * 模块管理：里世界各模块入口的显示开关。
- * v0.302：与里世界主页完全同布局（每行 3 个 + 中间「需要外网环境」分隔），
- * 去掉开关——直接点图标切换，开 = 正常显示，关 = 变灰暗。
- * 关闭的模块不再出现在主页「里世界」宫格，收藏数据不受影响。
+ * 模块管理：里世界各模块入口的显示开关 + 顺序。
+ * 点图标 = 开关（正常 / 变灰），长按图标拖动 = 调整顺序（v0.304，顺序会同步到主页）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModuleManageScreen(nav: NavHostController) {
     val disabled by SettingsStore.disabledInnerModules.collectAsStateWithLifecycle()
+    val savedTop by SettingsStore.innerModuleOrderTop.collectAsStateWithLifecycle()
+    val savedBottom by SettingsStore.innerModuleOrderBottom.collectAsStateWithLifecycle()
+
+    // 本地顺序（拖动时即时重排），落库后与 StateFlow 保持一致
+    var topOrder by remember(savedTop) { mutableStateOf(savedTop) }
+    var bottomOrder by remember(savedBottom) { mutableStateOf(savedBottom) }
 
     fun entriesOf(keys: List<String>) = keys
         .mapNotNull { key -> INNER_MODULE_ENTRIES.firstOrNull { it.key == key } }
+
+    fun persist(newTop: List<String>, newBottom: List<String>) {
+        topOrder = newTop
+        bottomOrder = newBottom
+        SettingsStore.setInnerModuleOrder(newTop, newBottom)
+    }
 
     Scaffold(
         topBar = {
@@ -67,14 +82,26 @@ fun ModuleManageScreen(nav: NavHostController) {
         ) {
             Spacer(Modifier.height(6.dp))
             Text(
-                "点图标即可开关：正常 = 主页里世界显示，变灰 = 不显示（收藏数据保留）",
+                "点图标开关（变灰 = 主页不显示）；长按图标拖动可调整顺序",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
             Spacer(Modifier.height(10.dp))
-            GridManageRows(entriesOf(listOf("game", "music", "tv", "h2", "melon")), disabled)
-            // 中间分隔：细线 + 小字说明（细线 weight 平分，保证文字可见）
+
+            // 上区（本地模块）
+            DraggableModuleGrid(
+                entries = entriesOf(topOrder),
+                disabled = disabled,
+                onReorder = { from, to ->
+                    val list = topOrder.toMutableList()
+                    val item = list.removeAt(from)
+                    list.add(to, item)
+                    persist(list, bottomOrder)
+                }
+            )
+
+            // 分隔：细线 + 小字
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -98,18 +125,34 @@ fun ModuleManageScreen(nav: NavHostController) {
                     modifier = Modifier.weight(1f)
                 )
             }
-            GridManageRows(entriesOf(listOf("book", "comic", "h1", "psite", "xsite")), disabled)
+
+            // 下区（外网模块）
+            DraggableModuleGrid(
+                entries = entriesOf(bottomOrder),
+                disabled = disabled,
+                onReorder = { from, to ->
+                    val list = bottomOrder.toMutableList()
+                    val item = list.removeAt(from)
+                    list.add(to, item)
+                    persist(topOrder, list)
+                }
+            )
             Spacer(Modifier.height(20.dp))
         }
     }
 }
 
-/** 3 列模块宫格（图标 + 名称；点整格切换开关，关闭变灰暗），空位补齐对齐 */
+/** 3 列模块宫格：点 = 开关，长按拖动 = 排序 */
 @Composable
-private fun GridManageRows(
-    entries: List<com.shangyin.app.ui.common.InnerModuleEntry>,
-    disabled: Set<String>
+private fun DraggableModuleGrid(
+    entries: List<InnerModuleEntry>,
+    disabled: Set<String>,
+    onReorder: (from: Int, to: Int) -> Unit
 ) {
+    // 拖动换位时用到的 id 列表（key 的 hashCode 作为稳定 id，全部唯一）
+    val ids = remember(entries) { entries.map { it.key.hashCode().toLong() } }
+    val idsState = rememberUpdatedState(ids)
+
     entries.chunked(3).forEachIndexed { rowIdx, rowEntries ->
         Row(
             modifier = Modifier
@@ -123,7 +166,19 @@ private fun GridManageRows(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { SettingsStore.setInnerModuleEnabled(m.key, !on) }
+                        .then(
+                            dragReorderModifier(
+                                itemId = m.key.hashCode().toLong(),
+                                isListMode = false,
+                                gridColumns = 3,
+                                currentIdsState = idsState,
+                                onDragStateChange = { },
+                                onReorder = { from, to -> onReorder(from, to) },
+                                onTap = { SettingsStore.setInnerModuleEnabled(m.key, !on) },
+                                onLongPress = { },
+                                itemHeightDp = 100
+                            )
+                        )
                         .padding(vertical = 6.dp)
                 ) {
                     ModuleIconBox(m.icon, size = 64.dp, enabled = on)

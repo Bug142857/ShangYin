@@ -53,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -103,27 +104,41 @@ import java.io.File
 @Composable
 fun DownloadScreen(nav: NavHostController) {
     val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         ComicDownloadManager.refresh(context)
         VideoDownloadManager.refresh(context)
+    }
+    // v0.304：每次回到本页（含从系统目录/其他页面返回）重新统计，不再需要退出去再进来
+    var refreshTick by remember { mutableIntStateOf(0) }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        refreshTick++
+        scope.launch {
+            ComicDownloadManager.refresh(context)
+            VideoDownloadManager.refresh(context)
+        }
     }
 
     // 漫画 / 本子按来源拆分：bika = 本子（独立目录），其余 = 漫画
     val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
     val comics = remember(library) { library.filterNot { it.source == ComicDownloadStore.BIKA } }
     val bikas = remember(library) { library.filter { it.source == ComicDownloadStore.BIKA } }
-    val comicsSize = remember(comics) { comics.sumOf { ComicDownloadStore.size(context, it.source, it.id) } }
-    val bikasSize = remember(bikas) { bikas.sumOf { ComicDownloadStore.size(context, it.source, it.id) } }
+    val comicsSize = remember(comics, refreshTick) {
+        comics.sumOf { ComicDownloadStore.size(context, it.source, it.id) }
+    }
+    val bikasSize = remember(bikas, refreshTick) {
+        bikas.sumOf { ComicDownloadStore.size(context, it.source, it.id) }
+    }
 
     // 视频 / 音乐 / 书籍：文件系统枚举（Android 10+ 走 MediaStore，8/9 走私有目录），IO 放后台线程
-    val videos by produceState(MediaFileStore.EMPTY, context) {
+    val videos by produceState(MediaFileStore.EMPTY, context, refreshTick) {
         value = withContext(Dispatchers.IO) { MediaFileStore.videoSummary(context) }
     }
-    val music by produceState(MediaFileStore.EMPTY, context) {
+    val music by produceState(MediaFileStore.EMPTY, context, refreshTick) {
         value = withContext(Dispatchers.IO) { MediaFileStore.musicSummary(context) }
     }
-    val books by produceState(MediaFileStore.EMPTY, context) {
+    val books by produceState(MediaFileStore.EMPTY, context, refreshTick) {
         value = withContext(Dispatchers.IO) { MediaFileStore.bookSummary(context) }
     }
 
@@ -287,6 +302,14 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
     LaunchedEffect(Unit) {
         ComicDownloadManager.refresh(context)
         VideoDownloadManager.refresh(context)
+    }
+    // v0.304：回到本页自动刷新文件枚举/下载库（删除或新增后不用退出去再进来）
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        mediaRefresh++
+        scope.launch {
+            ComicDownloadManager.refresh(context)
+            VideoDownloadManager.refresh(context)
+        }
     }
 
     // 音乐 / 书籍：文件系统枚举（IO 放后台线程）；mediaRefresh 变化（编辑删除后）重查
@@ -723,7 +746,8 @@ private fun VideoGridCard(
                 )
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    "x1 · ${ComicDownloadStore.formatSize(video.sizeBytes)}",
+                    // v0.304：原来的「x1」没意义，改成来源（吃瓜 / P站 / X站 / 片源名）
+                    "${video.sourceName.ifBlank { "视频" }} · ${ComicDownloadStore.formatSize(video.sizeBytes)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

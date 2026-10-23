@@ -43,6 +43,7 @@ data class DownloadedVideo(
     val sizeBytes: Long = 0,
     val createdAt: Long = 0,
     val coverUrl: String = "",  // v0.302：收藏时的封面（下载管理网格直接展示）
+    val sourceName: String = "", // v0.304：来源（吃瓜 / P站 / X站 / 片源名），下载管理网格展示
 )
 
 /** 进行中的视频下载任务（key = sourceUrl） */
@@ -53,6 +54,7 @@ data class VideoTask(
     val bytesCopied: Long = 0L, // 已下载字节（v0.249：progress=-1 时 UI 显示"已下载 x MB"，转圈不再是"没动"）
     val error: String? = null,
     val coverUrl: String = "", // v0.302：收藏时的封面
+    val sourceName: String = "", // v0.304：来源
 )
 
 /** HLS AES-128 密钥信息 */
@@ -114,7 +116,8 @@ object VideoDownloadManager {
                     displayPath = o.optString("displayPath"),
                     sizeBytes = o.optLong("sizeBytes"),
                     createdAt = o.optLong("createdAt"),
-                    coverUrl = o.optString("coverUrl")
+                    coverUrl = o.optString("coverUrl"),
+                    sourceName = o.optString("sourceName")
                 )
             }
         }.getOrDefault(emptyList())
@@ -123,16 +126,19 @@ object VideoDownloadManager {
 
     fun isDownloading(url: String): Boolean = jobs.containsKey(url)
 
-    /** 启动下载（同 URL 已在下载中则忽略；返回是否成功启动）。coverUrl = 收藏时的封面 */
+    /** 启动下载（同 URL 已在下载中则忽略；返回是否成功启动）。coverUrl = 收藏时的封面，sourceName = 来源名 */
     fun start(
         context: Context,
         title: String,
         url: String,
         headers: Map<String, String>,
-        coverUrl: String = ""
+        coverUrl: String = "",
+        sourceName: String = ""
     ): Boolean {
         if (isDownloading(url)) return false
-        active.value = active.value + (url to VideoTask(title, url, coverUrl = coverUrl))
+        active.value = active.value + (
+            url to VideoTask(title, url, coverUrl = coverUrl, sourceName = sourceName)
+            )
         val appContext = context.applicationContext
         jobs[url] = scope.launch {
             val task = active.value[url] ?: return@launch
@@ -314,7 +320,8 @@ object VideoDownloadManager {
                 displayPath = "$rel$fileName",
                 sizeBytes = size,
                 createdAt = createdAt,
-                coverUrl = task.coverUrl
+                coverUrl = task.coverUrl,
+                sourceName = task.sourceName
             )
         } catch (e: Exception) {
             runCatching { resolver.delete(uri, null, null) }
@@ -341,7 +348,8 @@ object VideoDownloadManager {
             displayPath = out.absolutePath,
             sizeBytes = out.length(),
             createdAt = createdAt,
-            coverUrl = task.coverUrl
+            coverUrl = task.coverUrl,
+            sourceName = task.sourceName
         )
     }
 
@@ -521,6 +529,7 @@ object VideoDownloadManager {
                     .put("sizeBytes", v.sizeBytes)
                     .put("createdAt", v.createdAt)
                     .put("coverUrl", v.coverUrl)
+                    .put("sourceName", v.sourceName)
             )
         }
         SettingsStore.videoDownloadsJson = arr.toString()

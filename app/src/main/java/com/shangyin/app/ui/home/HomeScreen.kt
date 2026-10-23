@@ -206,12 +206,15 @@ private fun InnerWorld(
 ) {
     // 模块开关（设置 → 模块管理）：StateFlow 驱动，关掉的入口不在主页出现
     val disabledModules by SettingsStore.disabledInnerModules.collectAsStateWithLifecycle()
+    // 模块顺序（v0.304：模块管理里长按拖动可调整，主页按保存的顺序排）
+    val topOrder by SettingsStore.innerModuleOrderTop.collectAsStateWithLifecycle()
+    val bottomOrder by SettingsStore.innerModuleOrderBottom.collectAsStateWithLifecycle()
     val enabledKeys = disabledModules
     fun entriesOf(keys: List<String>) = keys
         .mapNotNull { key -> INNER_MODULE_ENTRIES.firstOrNull { it.key == key } }
         .filter { it.key !in enabledKeys }
-    val topEntries = entriesOf(listOf("game", "music", "tv", "h2", "melon"))
-    val bottomEntries = entriesOf(listOf("book", "comic", "h1", "psite", "xsite"))
+    val topEntries = entriesOf(topOrder)
+    val bottomEntries = entriesOf(bottomOrder)
 
     // 里世界只放模块宫格（清单功能只在表世界生效）
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {

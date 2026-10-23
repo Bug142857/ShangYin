@@ -22,7 +22,11 @@ data class InnerModuleEntry(
 )
 
 val INNER_MODULE_ENTRIES: List<InnerModuleEntry> = listOf(
-    InnerModuleEntry("h1", "番号", Icons.Rounded.Movie, "h1search"),
+    // v0.304：番号按片源拆成四个入口（番1~番4，各自只看对应片源，避免混在一起太杂）
+    InnerModuleEntry("h1_1", "番1", Icons.Rounded.Movie, "h1search?idx=1"),
+    InnerModuleEntry("h1_2", "番2", Icons.Rounded.Movie, "h1search?idx=2"),
+    InnerModuleEntry("h1_3", "番3", Icons.Rounded.Movie, "h1search?idx=3"),
+    InnerModuleEntry("h1_4", "番4", Icons.Rounded.Movie, "h1search?idx=4"),
     InnerModuleEntry("h2", "本子", Icons.Rounded.Book, "h2search"),
     InnerModuleEntry("comic", "漫画", Icons.AutoMirrored.Rounded.Chat, "comicHome"),
     InnerModuleEntry("game", "游戏", Icons.Rounded.SportsEsports, "gameHome"),
