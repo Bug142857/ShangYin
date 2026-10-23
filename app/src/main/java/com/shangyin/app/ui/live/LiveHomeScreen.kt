@@ -68,6 +68,7 @@ import com.shangyin.app.data.live.LiveQuality
 import com.shangyin.app.data.live.LiveRoom
 import com.shangyin.app.data.live.M3uClient
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.settings.SettingsStore
@@ -164,8 +165,8 @@ fun LiveHomeScreen(nav: NavHostController) {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            // 页内搜索窗：没有单独的搜索按钮，输入法回车即搜（与其它模块一致）
-            OutlinedTextField(
+            // 页内搜索窗：没有单独的搜索按钮，输入法回车即搜（与其它模块一致；v0.301 全局统一样式）
+            AppSearchField(
                 value = query,
                 onValueChange = {
                     query = it
@@ -175,24 +176,11 @@ fun LiveHomeScreen(nav: NavHostController) {
                         LiveCache.searchKeyword = ""
                     }
                 },
-                placeholder = { Text("搜索电视频道名") },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = {
-                            query = ""
-                            keyword = ""
-                            LiveCache.searchInput = ""
-                            LiveCache.searchKeyword = ""
-                        }) { Icon(Icons.Rounded.Close, contentDescription = "清空") }
-                    }
-                },
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = {
+                onSearch = {
                     keyword = query.trim()
                     LiveCache.searchKeyword = keyword
-                }),
+                },
+                placeholder = "搜索电视频道名",
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp)

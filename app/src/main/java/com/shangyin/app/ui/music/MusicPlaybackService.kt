@@ -1,6 +1,7 @@
 package com.shangyin.app.ui.music
 
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.annotation.OptIn
@@ -8,8 +9,11 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.ResolvingDataSource
+import androidx.media3.datasource.TransferListener
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
@@ -39,7 +43,7 @@ class MusicPlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        val dataSourceFactory = MusicAudioDataSourceFactory()
+        val dataSourceFactory = MusicAudioDataSourceFactory(applicationContext)
         val exoPlayer = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             // 后台播放：熄屏/切后台也继续播；耳机拔出自动暂停
@@ -98,11 +102,12 @@ class MusicPlaybackService : MediaSessionService() {
 
 /**
  * 音乐直链解析数据源：
- * 把 `music://song/{songKey}` 占位地址在真正发起请求时换成解析出来的 http(s) 直链，
+ * 在线歌把 `music://song/{songKey}` 占位地址在真正发起请求时换成解析出来的 http(s) 直链，
  * 并带上 UA（直链来自酷狗/酷我 CDN，不需要 Referer）。
+ * 本地已下载歌曲（下载管理直播，v0.301）URI 是 content:// / file://，不经解析、走 DefaultDataSource。
  */
 @OptIn(UnstableApi::class)
-class MusicAudioDataSourceFactory : DataSource.Factory {
+class MusicAudioDataSourceFactory(private val appContext: Context) : DataSource.Factory {
 
     private val upstream = DefaultHttpDataSource.Factory()
         .setUserAgent(
@@ -114,7 +119,9 @@ class MusicAudioDataSourceFactory : DataSource.Factory {
         .setAllowCrossProtocolRedirects(true)
 
     override fun createDataSource(): DataSource =
-        ResolvingDataSource(upstream.createDataSource()) { dataSpec ->
+        ResolvingDataSource(SwitchingDataSource(appContext, upstream.createDataSource())) { dataSpec ->
+            // 本地文件（content://、file://）直接放行，不做直链解析
+            if (dataSpec.uri.scheme != "music") return@ResolvingDataSource dataSpec
             val key = dataSpec.uri.lastPathSegment.orEmpty()
             val song = MusicQueueRegistry.get(key)
                 ?: throw IOException("歌曲信息已失效，请重新播放")
@@ -125,4 +132,35 @@ class MusicAudioDataSourceFactory : DataSource.Factory {
             headers.putAll(dataSpec.httpRequestHeaders)
             dataSpec.withUri(Uri.parse(info.url)).withRequestHeaders(headers)
         }
+
+    /** 按 URI scheme 分流：music:// 走 http 直链源，本地（content://、file://）走 DefaultDataSource */
+    private class SwitchingDataSource(
+        context: Context,
+        private val http: DataSource
+    ) : DataSource {
+        private val local = DefaultDataSource(context, true)
+        private var current: DataSource? = null
+
+        override fun addTransferListener(transferListener: TransferListener) {
+            http.addTransferListener(transferListener)
+            local.addTransferListener(transferListener)
+        }
+
+        override fun open(dataSpec: DataSpec): Long {
+            val ds = if (dataSpec.uri.scheme == "music") http else local
+            current = ds
+            return ds.open(dataSpec)
+        }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            current?.read(buffer, offset, length)
+                ?: throw IOException("数据源未打开")
+
+        override fun getUri(): Uri? = current?.uri
+
+        override fun close() {
+            current?.close()
+            current = null
+        }
+    }
 }

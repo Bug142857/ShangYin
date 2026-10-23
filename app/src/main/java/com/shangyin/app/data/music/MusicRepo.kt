@@ -45,12 +45,16 @@ object MusicRepo {
         MusicPlatform.S33VE -> Site33.search(keyword, page)
         MusicPlatform.MVMMP3 -> MvMp3.search(keyword, page)
         MusicPlatform.JOOX, MusicPlatform.NETEASE -> GdStudio.search(platform, keyword, page)
+        // 本地歌曲不走搜索（下载管理直接构造 MusicSong）
+        MusicPlatform.LOCAL -> emptyList()
     }
 
     suspend fun lyric(song: MusicSong): MusicLyric = when (song.platform) {
         MusicPlatform.S33VE -> Site33.lyric(song)
         MusicPlatform.MVMMP3 -> MvMp3.lyric(song)
         MusicPlatform.JOOX, MusicPlatform.NETEASE -> GdStudio.lyric(song.platform, song.id)
+        // 本地文件没有在线歌词
+        MusicPlatform.LOCAL -> MusicLyric()
     }
 
     /** 清空直链缓存（直链带时效签名，需要强制换新时用） */
@@ -91,6 +95,12 @@ object MusicRepo {
                     ?: resolveViaSite(song, useMvmp3 = false)
                     ?: throw MusicResolveException("没有找到这首歌的可播放资源（mvmp3 / 33ve 里也没有同名的歌）")
             }
+
+            // 本地已下载文件：URI 就是真实播放地址，直接放行（不做直链解析、不进缓存）
+            MusicPlatform.LOCAL -> MusicPlayInfo(
+                song.raw["path"].orEmpty(),
+                emptyMap()
+            )
         }
         urlCache[song.key] = info.url to System.currentTimeMillis()
         return info

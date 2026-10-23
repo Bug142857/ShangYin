@@ -52,6 +52,7 @@ import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -169,18 +170,13 @@ fun VodSearchSheet(
                 }
             }
 
-            // 搜索框
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { doSearch(query) }) {
-                    Icon(Icons.Rounded.Search, contentDescription = "搜索")
-                }
-            }
+            // 搜索框（v0.301 全局统一样式，回车或键盘搜索键触发）
+            AppSearchField(
+                value = query,
+                onValueChange = { query = it },
+                onSearch = { doSearch(query) },
+                placeholder = "搜索片名…"
+            )
             Spacer(Modifier.height(8.dp))
 
             // 状态行

@@ -13,6 +13,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import com.shangyin.app.data.music.MusicQueueRegistry
 import com.shangyin.app.data.music.MusicRepo
+import com.shangyin.app.data.music.MusicPlatform
 import com.shangyin.app.data.music.MusicSong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -223,16 +224,24 @@ object MusicPlayback {
     }
 }
 
-/** 歌曲 → media3 播放项（URI 是占位符，真正地址由数据源在播放时向 24bit 现取） */
-internal fun MusicSong.toMediaItem(): MediaItem = MediaItem.Builder()
-    .setMediaId(key)
-    .setUri(Uri.parse("music://song/${Uri.encode(key)}"))
-    .setMediaMetadata(
-        MediaMetadata.Builder()
-            .setTitle(name)
-            .setArtist(artists)
-            .setAlbumTitle(album)
-            .setArtworkUri(cover.takeIf { it.isNotBlank() }?.let { Uri.parse(it) })
-            .build()
-    )
-    .build()
+/** 歌曲 → media3 播放项：
+ *  本地歌曲（platform=LOCAL）直接用真实文件地址；在线歌用占位 URI，播放时由数据源现取直链 */
+internal fun MusicSong.toMediaItem(): MediaItem {
+    val uri = if (platform == MusicPlatform.LOCAL) {
+        Uri.parse(raw["path"].orEmpty())
+    } else {
+        Uri.parse("music://song/${Uri.encode(key)}")
+    }
+    return MediaItem.Builder()
+        .setMediaId(key)
+        .setUri(uri)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(name)
+                .setArtist(artists)
+                .setAlbumTitle(album)
+                .setArtworkUri(cover.takeIf { it.isNotBlank() }?.let { Uri.parse(it) })
+                .build()
+        )
+        .build()
+}

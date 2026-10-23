@@ -77,6 +77,7 @@ import com.shangyin.app.data.music.MusicRepo
 import com.shangyin.app.data.music.MusicSong
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -407,23 +408,15 @@ private fun SearchTab(st: SearchTabState) {
     }
 
     Column(Modifier.fillMaxSize()) {
-        // 搜索框：样式与表世界（HomeScreen）保持一致
-        OutlinedTextField(
+        // 搜索框：v0.301 全局统一搜索栏（与表世界一致）
+        AppSearchField(
             value = st.input,
             onValueChange = { st.input = it },
-            placeholder = { Text("搜索歌曲 / 歌手") },
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { doSearch() }),
-            trailingIcon = {
-                IconButton(onClick = { doSearch() }) {
-                    Icon(Icons.Rounded.KeyboardArrowRight, contentDescription = "搜索")
-                }
-            },
+            onSearch = { doSearch() },
+            placeholder = "搜索歌曲 / 歌手",
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .padding(horizontal = 16.dp, vertical = 6.dp)
         )
 
         // 列表区占满剩余高度，底部留给下载进度条

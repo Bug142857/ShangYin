@@ -57,6 +57,7 @@ import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.data.InnerFav
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
@@ -226,44 +227,22 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String) {
                     .padding(pad)
                     .fillMaxSize()
             ) {
-                // 页内搜索框：输入法确认键（搜索）直接触发，无需再点右侧放大镜
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
+                // 页内搜索框：输入法确认键（搜索）直接触发；右侧放大镜在输入变化后可再点（v0.301 统一样式）
+                AppSearchField(
+                    value = input,
+                    onValueChange = {
+                        input = it
+                        if (it.isEmpty()) keyword = ""
+                    },
+                    onSearch = {
+                        keyboard?.hide()
+                        keyword = input.trim()
+                    },
+                    placeholder = "搜索外网片源，留空浏览全部",
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                ) {
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        placeholder = { Text("搜索外网片源，留空浏览全部") },
-                        singleLine = true,
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            imeAction = androidx.compose.ui.text.input.ImeAction.Search
-                        ),
-                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                            onSearch = {
-                                keyboard?.hide()
-                                keyword = input.trim()
-                            }
-                        ),
-                        shape = RoundedCornerShape(24.dp),
-                        trailingIcon = {
-                            if (input.isNotEmpty()) {
-                                IconButton(onClick = { input = ""; keyword = "" }) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "清空")
-                                }
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(
-                        onClick = { keyword = input.trim() },
-                        enabled = input.trim() != keyword
-                    ) {
-                        Icon(Icons.Rounded.Search, contentDescription = "搜索")
-                    }
-                }
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                )
 
                 LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                     sources.forEach { src ->

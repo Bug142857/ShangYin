@@ -1,9 +1,15 @@
 package com.shangyin.app.data.download
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.media.MediaMetadataRetriever
 import android.os.Build
+import android.os.CancellationSignal
 import android.os.Environment
 import android.provider.MediaStore
+import android.util.Size
 import java.io.File
 
 /**
@@ -27,8 +33,13 @@ object MediaFileStore {
     /** 视频公共目录（v0.225：与音乐/书籍统一） */
     const val VIDEO_RELATIVE = "Download/老郑分享/视频/"
 
-    /** 单个文件 */
-    data class Entry(val name: String, val size: Long, val modified: Long)
+    /** 单个文件。[uri] 可直接交给播放器（content:// 或 file://），为空表示拿不到 */
+    data class Entry(
+        val name: String,
+        val size: Long,
+        val modified: Long,
+        val uri: String? = null
+    )
 
     /**
      * 某目录的摘要。
@@ -61,6 +72,156 @@ object MediaFileStore {
     fun bookAppDir(context: Context): File =
         File(context.getExternalFilesDir(null) ?: context.filesDir, "书籍")
 
+    /**
+     * 删除一个下载文件（下载管理「编辑→选择删除」用）。
+     * Q+ 按 RELATIVE_PATH + DISPLAY_NAME 找 MediaStore 记录删；8/9 直接删私有目录文件。
+     */
+    fun deleteEntry(context: Context, relative: String, name: String): Boolean = runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val resolver = context.contentResolver
+            resolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.RELATIVE_PATH}=? AND ${MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                arrayOf(relative, name),
+                null
+            )?.use { c ->
+                var deleted = false
+                while (c.moveToNext()) {
+                    val uri = android.content.ContentUris.withAppendedId(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0)
+                    )
+                    if (resolver.delete(uri, null, null) > 0) deleted = true
+                }
+                deleted
+            } ?: false
+        } else {
+            File(appDirFor(relative, context), name).delete()
+        }
+    }.getOrDefault(false)
+
+    private fun appDirFor(relative: String, context: Context): File = when (relative) {
+        MUSIC_RELATIVE -> musicAppDir(context)
+        BOOK_RELATIVE -> bookAppDir(context)
+        else -> File(context.getExternalFilesDir(null) ?: context.filesDir, "下载")
+    }
+
+    /** 视频元信息：时长（毫秒）+ 封面帧 */
+    data class VideoMeta(val durationMs: Long = 0L, val thumbnail: Bitmap? = null)
+
+    /**
+     * 读取本地视频的时长 + 封面帧（下载管理网格用）。
+     * location 支持 content://（Q+ 公共目录）与文件绝对路径（8/9）。
+     */
+    fun loadVideoMeta(context: Context, location: String): VideoMeta = runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            if (location.startsWith("content:")) {
+                retriever.setDataSource(context, android.net.Uri.parse(location))
+            } else {
+                retriever.setDataSource(location)
+            }
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+            val thumb = loadThumb(context, location, retriever)
+            VideoMeta(duration, thumb)
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }.getOrDefault(VideoMeta())
+
+    private fun loadThumb(context: Context, location: String, retriever: MediaMetadataRetriever): Bitmap? =
+        runCatching {
+            if (location.startsWith("content:") && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                context.contentResolver.loadThumbnail(
+                    android.net.Uri.parse(location), Size(320, 180), CancellationSignal()
+                )
+            } else {
+                retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            }
+        }.getOrNull()
+
+    /** 音乐元信息：时长（毫秒）+ 内嵌封面图（播放行用），一次 IO 全拿到 */
+    fun loadMusicMeta(context: Context, entry: Entry): Pair<Long, Bitmap?> = runCatching {
+        val retriever = MediaMetadataRetriever()
+        try {
+            if (entry.uri?.startsWith("content:") == true) {
+                retriever.setDataSource(context, android.net.Uri.parse(entry.uri))
+            } else {
+                retriever.setDataSource(entry.uri ?: entry.name)
+            }
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull() ?: 0L
+            val cover = retriever.embeddedPicture?.let { bytes ->
+                runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+            }
+            duration to cover
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }.getOrDefault(0L to null)
+
+    /**
+     * 书籍封面（下载管理用）：PDF 取首页渲染，EPUB 从压缩包里找 cover 图片，
+     * 其余格式返回 null（UI 用文件名占位）。
+     */
+    fun loadBookCover(context: Context, entry: Entry): Bitmap? {
+        val ext = entry.name.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "pdf" -> pdfFirstPage(context, entry)
+            "epub" -> epubCover(context, entry)
+            else -> null
+        }
+    }
+
+    private fun pdfFirstPage(context: Context, entry: Entry): Bitmap? = runCatching {
+        val pfd = if (entry.uri?.startsWith("content:") == true) {
+            context.contentResolver.openFileDescriptor(android.net.Uri.parse(entry.uri), "r")
+        } else {
+            val f = File(entry.uri ?: entry.name)
+            if (f.exists()) android.os.ParcelFileDescriptor.open(f, android.os.ParcelFileDescriptor.MODE_READ_ONLY)
+            else null
+        } ?: return@runCatching null
+        pfd.use { descriptor ->
+            android.graphics.pdf.PdfRenderer(descriptor).use { renderer ->
+                renderer.openPage(0).use { page ->
+                    val w = 240
+                    val h = (w * page.height.toFloat() / page.width).toInt().coerceAtLeast(1)
+                    Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
+                        bmp.eraseColor(android.graphics.Color.WHITE)
+                        page.render(bmp, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    }
+                }
+            }
+        }
+    }.getOrNull()
+
+    private fun epubCover(context: Context, entry: Entry): Bitmap? = runCatching {
+        val bytes = if (entry.uri?.startsWith("content:") == true) {
+            context.contentResolver.openInputStream(android.net.Uri.parse(entry.uri))?.use { it.readBytes() }
+        } else {
+            File(entry.uri ?: entry.name).takeIf { it.exists() }?.readBytes()
+        } ?: return@runCatching null
+        val zip = java.util.zip.ZipInputStream(bytes.inputStream())
+        var cover: ByteArray? = null
+        val coverRegex = Regex("(?i).*/?cover[^/]*\\.(jpe?g|png)")
+        zip.forEachEntry { e ->
+            if (cover == null && coverRegex.matches(e.name)) {
+                cover = zip.readBytes()
+            }
+        }
+        cover?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+    }.getOrNull()
+
+    private inline fun java.util.zip.ZipInputStream.forEachEntry(action: (java.util.zip.ZipEntry) -> Unit) {
+        while (true) {
+            val e = nextEntry ?: break
+            action(e)
+            closeEntry()
+        }
+        close()
+    }
+
     private fun summary(context: Context, relative: String, appDir: File): Summary = runCatching {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val entries = queryPublic(context, relative)
@@ -71,10 +232,11 @@ object MediaFileStore {
         }
     }.getOrDefault(EMPTY)
 
-    /** Android 10+：MediaStore 按 RELATIVE_PATH 查询（按修改时间倒序） */
+    /** Android 10+：MediaStore 按 RELATIVE_PATH 查询（按修改时间倒序），带可播放的 content:// URI */
     private fun queryPublic(context: Context, relative: String): List<Entry> {
         val out = mutableListOf<Entry>()
         val projection = arrayOf(
+            MediaStore.MediaColumns._ID,
             MediaStore.MediaColumns.DISPLAY_NAME,
             MediaStore.MediaColumns.SIZE,
             MediaStore.MediaColumns.DATE_MODIFIED
@@ -87,6 +249,7 @@ object MediaFileStore {
                 arrayOf(relative),
                 "${MediaStore.MediaColumns.DATE_MODIFIED} DESC"
             )?.use { c ->
+                val idIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
                 val nameIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
                 val sizeIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
                 val timeIdx = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
@@ -94,17 +257,20 @@ object MediaFileStore {
                     val name = c.getString(nameIdx).orEmpty()
                     if (name.isBlank()) continue
                     // DATE_MODIFIED 单位是秒，统一乘 1000 变毫秒
-                    out += Entry(name, c.getLong(sizeIdx), c.getLong(timeIdx) * 1000L)
+                    val uri = android.content.ContentUris.withAppendedId(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(idIdx)
+                    )
+                    out += Entry(name, c.getLong(sizeIdx), c.getLong(timeIdx) * 1000L, uri.toString())
                 }
             }
         }
         return out
     }
 
-    /** Android 8/9：直接枚举私有目录（按修改时间倒序） */
+    /** Android 8/9：直接枚举私有目录（按修改时间倒序），URI 用 file:// 绝对路径 */
     private fun listDir(dir: File): List<Entry> =
         runCatching { dir.listFiles() }.getOrNull().orEmpty()
             .filter { it.isFile }
-            .map { Entry(it.name, it.length(), it.lastModified()) }
+            .map { Entry(it.name, it.length(), it.lastModified(), "file://${it.absolutePath}") }
             .sortedByDescending { it.modified }
 }

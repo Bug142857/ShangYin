@@ -85,6 +85,7 @@ import com.shangyin.app.data.wygamer.GameDownload
 import com.shangyin.app.data.wygamer.GameItem
 import com.shangyin.app.data.wygamer.WygamerClient
 import com.shangyin.app.ui.common.PhotoViewerDialog
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -203,25 +204,19 @@ fun GameHomeScreen(nav: NavHostController) {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            OutlinedTextField(
+            // 搜索框（v0.301 全局统一样式）
+            AppSearchField(
                 value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                placeholder = { Text("搜索游戏", style = MaterialTheme.typography.bodyMedium) },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
+                onValueChange = {
+                    input = it
+                    if (it.isEmpty()) keyword = ""
+                },
+                onSearch = {
                     keyboard?.hide()
                     keyword = input.trim()
-                }),
-                trailingIcon = {
-                    if (input.isNotEmpty()) {
-                        IconButton(onClick = { input = ""; keyword = "" }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "清空", modifier = Modifier.padding(4.dp))
-                        }
-                    }
-                }
+                },
+                placeholder = "搜索游戏",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
             if (keyword.isBlank()) {

@@ -18,7 +18,9 @@ enum class MusicPlatform(val key: String, val label: String) {
     S33VE("33ve", "音乐"),
     MVMMP3("mvmp3", "mvmp3"),
     JOOX("joox", "JOOX"),
-    NETEASE("netease", "网易云");
+    NETEASE("netease", "网易云"),
+    /** 本地已下载文件（下载管理直播用）：raw["path"] = content:// 或 file:// 播放地址 */
+    LOCAL("local", "本地");
 
     companion object {
         fun of(key: String): MusicPlatform? = entries.firstOrNull { it.key == key }

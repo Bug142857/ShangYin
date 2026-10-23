@@ -66,6 +66,7 @@ import com.shangyin.app.data.zlib.Book
 import com.shangyin.app.data.zlib.BookDownload
 import com.shangyin.app.data.zlib.ZlibClient
 import com.shangyin.app.ui.innerfav.FavHeartButton
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
@@ -182,15 +183,11 @@ fun BookHomeScreen(nav: NavHostController) {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            OutlinedTextField(
+            // 搜索框（v0.301 全局统一样式）
+            AppSearchField(
                 value = input,
                 onValueChange = { input = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                placeholder = { Text("搜索书名 / 作者 / ISBN", style = MaterialTheme.typography.bodyMedium) },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
+                onSearch = {
                     keyboard?.hide()
                     val k = input.trim()
                     if (k.isNotBlank() && k != keyword) {
@@ -198,14 +195,9 @@ fun BookHomeScreen(nav: NavHostController) {
                         loadedKey = k
                         load(true)
                     }
-                }),
-                trailingIcon = {
-                    if (input.isNotEmpty()) {
-                        IconButton(onClick = { input = "" }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "清空", modifier = Modifier.padding(4.dp))
-                        }
-                    }
-                }
+                },
+                placeholder = "搜索书名 / 作者 / ISBN",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
             if (!loggedIn) {

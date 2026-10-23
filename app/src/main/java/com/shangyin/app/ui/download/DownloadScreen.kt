@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,16 +22,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.RadioButtonUnchecked
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -53,13 +58,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
@@ -75,9 +83,12 @@ import com.shangyin.app.data.vod.VodEpisode
 import com.shangyin.app.data.vod.VodPlayGroup
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.player.PlayerSession
+import com.shangyin.app.ui.music.MusicPlayback
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -249,6 +260,7 @@ private fun FolderCard(
 @Composable
 fun DownloadListScreen(nav: NavHostController, section: String) {
     val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     // 漫画 / 本子共用 ComicDownloadManager：任务与库按 source 过滤
     val library by ComicDownloadManager.library.collectAsStateWithLifecycle()
@@ -259,20 +271,27 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
     var expanded by remember { mutableStateOf<Set<String>>(emptySet()) }
     // 离线阅读：漫画 + 章节 key + 页面（支持"下一章"继续阅读已下载章节）
     var viewer by remember { mutableStateOf<Triple<DownloadedComic, String, List<String>>?>(null) }
-    var pendingComicDelete by remember { mutableStateOf<DownloadedComic?>(null) }
-    var pendingChapterDelete by remember { mutableStateOf<Pair<DownloadedComic, String>?>(null) }
-    var pendingVideoDelete by remember { mutableStateOf<DownloadedVideo?>(null) }
+    // v0.301：删除统一走「编辑 → 勾选 → 删除」，不再有逐条删除按钮
+    var editing by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    // 音乐/书籍文件增删后刷新枚举
+    var mediaRefresh by remember { mutableStateOf(0) }
+
+    fun toggleSelect(key: String) {
+        selected = if (key in selected) selected - key else selected + key
+    }
 
     LaunchedEffect(Unit) {
         ComicDownloadManager.refresh(context)
         VideoDownloadManager.refresh(context)
     }
 
-    // 音乐 / 书籍：文件系统枚举（IO 放后台线程）
-    val music by produceState(MediaFileStore.EMPTY, context) {
+    // 音乐 / 书籍：文件系统枚举（IO 放后台线程）；mediaRefresh 变化（编辑删除后）重查
+    val music by produceState(MediaFileStore.EMPTY, mediaRefresh, context) {
         value = withContext(Dispatchers.IO) { MediaFileStore.musicSummary(context) }
     }
-    val books by produceState(MediaFileStore.EMPTY, context) {
+    val books by produceState(MediaFileStore.EMPTY, mediaRefresh, context) {
         value = withContext(Dispatchers.IO) { MediaFileStore.bookSummary(context) }
     }
 
@@ -280,6 +299,16 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
     val bikas = remember(library) { library.filter { it.source == ComicDownloadStore.BIKA } }
     val comicsSize = remember(comics) { comics.sumOf { ComicDownloadStore.size(context, it.source, it.id) } }
     val bikasSize = remember(bikas) { bikas.sumOf { ComicDownloadStore.size(context, it.source, it.id) } }
+
+    // 本节已下载条目数（决定「编辑」按钮是否出现）
+    val downloadedCount = when (section) {
+        "video" -> videoLibrary.size
+        "comic" -> comics.size
+        "bika" -> bikas.size
+        "music" -> music.entries.size
+        "book" -> books.entries.size
+        else -> 0
+    }
 
     /** 先按当前活跃任务做一次快照（Map 顺序稳定，避免下标越界） */
     val allTasks = active.values.toList()
@@ -307,13 +336,34 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
             TopAppBar(
                 title = { Text(title) },
                 navigationIcon = {
-                    IconButton(onClick = { nav.safePopBackStack() }) {
+                    IconButton(onClick = {
+                        if (editing) { editing = false; selected = emptySet() }
+                        else nav.safePopBackStack()
+                    }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
                     if (sectionTasks.isNotEmpty()) {
                         TextButton(onClick = { ComicDownloadManager.cancelAll() }) { Text("全部取消") }
+                    }
+                    // v0.301：编辑模式统一删除入口
+                    if (downloadedCount > 0) {
+                        if (editing) {
+                            TextButton(
+                                enabled = selected.isNotEmpty(),
+                                onClick = { confirmDelete = true }
+                            ) {
+                                Text(
+                                    if (selected.isEmpty()) "删除" else "删除(${selected.size})",
+                                    color = if (selected.isEmpty()) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                    else MaterialTheme.colorScheme.error
+                                )
+                            }
+                            TextButton(onClick = { editing = false; selected = emptySet() }) { Text("完成") }
+                        } else {
+                            TextButton(onClick = { editing = true; selected = emptySet() }) { Text("编辑") }
+                        }
                     }
                 }
             )
@@ -327,38 +377,44 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
             when (section) {
                 "video" -> videoSection(
                     context, videoTasks, videoLibrary,
-                    onPlay = { playLocalVideo(nav, it) },
-                    onDelete = { pendingVideoDelete = it }
+                    editing = editing,
+                    selected = selected,
+                    onToggle = { toggleSelect("video/$it") },
+                    onPlay = { playLocalVideo(nav, it) }
                 )
                 "comic" -> comicSectionContent(
                     keyPrefix = "comic", unit = "部", comics = comics, totalBytes = comicsSize,
                     tasks = comicTasks, emptyHint = "还没有下载漫画，去漫画详情页点「下载全部」或章节右侧的下载按钮",
-                    expanded = expanded,
-                    onToggle = { c -> expanded = toggleKey(expanded, c) },
-                    onDeleteComic = { pendingComicDelete = it },
+                    expanded = expanded, editing = editing, selected = selected,
+                    onToggleExpand = { c -> expanded = toggleKey(expanded, c) },
+                    onToggleSelect = { c -> toggleSelect("comic/${c.source}/${c.id}") },
                     onReadChapter = { c, chapterKey ->
                         openChapter(context, c, chapterKey) { pages -> viewer = Triple(c, chapterKey, pages) }
-                    },
-                    onDeleteChapter = { c, chapterKey -> pendingChapterDelete = c to chapterKey }
+                    }
                 )
                 "bika" -> comicSectionContent(
                     keyPrefix = "bika", unit = "本", comics = bikas, totalBytes = bikasSize,
                     tasks = bikaTasks, emptyHint = "还没有下载本子，去哔咔详情页点「下载全部」或章节右侧的下载按钮",
-                    expanded = expanded,
-                    onToggle = { c -> expanded = toggleKey(expanded, c) },
-                    onDeleteComic = { pendingComicDelete = it },
+                    expanded = expanded, editing = editing, selected = selected,
+                    onToggleExpand = { c -> expanded = toggleKey(expanded, c) },
+                    onToggleSelect = { c -> toggleSelect("comic/${c.source}/${c.id}") },
                     onReadChapter = { c, chapterKey ->
                         openChapter(context, c, chapterKey) { pages -> viewer = Triple(c, chapterKey, pages) }
-                    },
-                    onDeleteChapter = { c, chapterKey -> pendingChapterDelete = c to chapterKey }
+                    }
                 )
-                "music" -> mediaSectionContent(
-                    keyPrefix = "music", summary = music,
-                    emptyHint = "还没有下载音乐，去音乐页点下载按钮吧"
+                "music" -> musicSectionContent(
+                    context, music,
+                    editing = editing,
+                    selected = selected,
+                    onToggleSelect = { toggleSelect("music/$it") },
+                    onPlay = { songs, idx -> MusicPlayback.play(context, songs, idx) }
                 )
-                "book" -> mediaSectionContent(
-                    keyPrefix = "book", summary = books,
-                    emptyHint = "还没有下载书籍，去图书详情页点「下载」吧"
+                "book" -> bookSectionContent(
+                    context, books,
+                    editing = editing,
+                    selected = selected,
+                    onToggleSelect = { toggleSelect("book/$it") },
+                    onOpen = { openBook(context, it) }
                 )
             }
         }
@@ -393,59 +449,52 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
         }
     }
 
-    // 删除整本确认
-    pendingComicDelete?.let { c ->
+    // 编辑模式统一删除：先按 key 删真实文件，再清选择、刷新音乐/书籍枚举
+    if (confirmDelete) {
+        val n = selected.size
         AlertDialog(
-            onDismissRequest = { pendingComicDelete = null },
-            title = { Text("删除整本下载") },
-            text = { Text("确定删除《${c.title}》的全部 ${c.chapters.size} 章下载文件吗？此操作不可恢复。") },
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("删除所选") },
+            text = { Text("确定删除选中的 $n 项下载内容吗？此操作不可恢复。") },
             confirmButton = {
                 TextButton(onClick = {
-                    ComicDownloadManager.deleteComic(context, c.source, c.id)
-                    Toast.makeText(context, "已删除《${c.title}》全部下载", Toast.LENGTH_SHORT).show()
-                    pendingComicDelete = null
+                    scope.launch(Dispatchers.IO) {
+                        var ok = 0
+                        selected.forEach { key ->
+                            val done = when {
+                                key.startsWith("video/") -> {
+                                    videoLibrary.firstOrNull { "video/${it.id}" == key }
+                                        ?.let { VideoDownloadManager.delete(context, it) }
+                                    true
+                                }
+                                key.startsWith("comic/") -> {
+                                    val parts = key.removePrefix("comic/").split("/")
+                                    val comic = library.firstOrNull { it.source == parts.getOrNull(0) && it.id == parts.getOrNull(1) }
+                                    if (comic != null) {
+                                        ComicDownloadManager.deleteComic(context, comic.source, comic.id); true
+                                    } else false
+                                }
+                                key.startsWith("music/") -> MediaFileStore.deleteEntry(
+                                    context, MediaFileStore.MUSIC_RELATIVE, key.removePrefix("music/")
+                                )
+                                key.startsWith("book/") -> MediaFileStore.deleteEntry(
+                                    context, MediaFileStore.BOOK_RELATIVE, key.removePrefix("book/")
+                                )
+                                else -> false
+                            }
+                            if (done) ok++
+                        }
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "已删除 $ok 项", Toast.LENGTH_SHORT).show()
+                            selected = emptySet()
+                            editing = false
+                            mediaRefresh++
+                        }
+                    }
+                    confirmDelete = false
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = {
-                TextButton(onClick = { pendingComicDelete = null }) { Text("取消") }
-            }
-        )
-    }
-    // 删除单章确认
-    pendingChapterDelete?.let { (c, key0) ->
-        val name = c.chapters.firstOrNull { it.key == key0 }?.name ?: "该章"
-        AlertDialog(
-            onDismissRequest = { pendingChapterDelete = null },
-            title = { Text("删除章节下载") },
-            text = { Text("确定删除《${c.title}》「$name」的下载文件吗？此操作不可恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    ComicDownloadManager.deleteChapter(context, c.source, c.id, key0)
-                    Toast.makeText(context, "已删除「$name」下载", Toast.LENGTH_SHORT).show()
-                    pendingChapterDelete = null
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingChapterDelete = null }) { Text("取消") }
-            }
-        )
-    }
-    // 删除已下载视频确认
-    pendingVideoDelete?.let { v ->
-        AlertDialog(
-            onDismissRequest = { pendingVideoDelete = null },
-            title = { Text("删除视频") },
-            text = { Text("确定删除「${v.title}」（${ComicDownloadStore.formatSize(v.sizeBytes)}）吗？此操作不可恢复。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    VideoDownloadManager.delete(context, v)
-                    Toast.makeText(context, "已删除「${v.title}」", Toast.LENGTH_SHORT).show()
-                    pendingVideoDelete = null
-                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingVideoDelete = null }) { Text("取消") }
-            }
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("取消") } }
         )
     }
 }
@@ -551,36 +600,98 @@ private fun VideoTaskCard(task: VideoTask, onCancel: () -> Unit, onDismiss: () -
     }
 }
 
-/** 已下载视频行：点击播放 + 删除 */
+/** 毫秒 → "x:xx / xx:xx"；拿不到时长返回 null */
+private fun formatDuration(ms: Long): String? {
+    if (ms <= 0) return null
+    val totalSec = ms / 1000
+    val h = totalSec / 3600
+    val m = (totalSec % 3600) / 60
+    val s = totalSec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
+/** 已下载视频卡（v0.301：双列网格，封面 + 时长角标 + 大小 + 编辑勾选） */
 @Composable
-private fun VideoRow(video: DownloadedVideo, onPlay: () -> Unit, onDelete: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable { onPlay() }) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Rounded.PlayArrow,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
+private fun VideoGridCard(
+    video: DownloadedVideo,
+    editing: Boolean,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    onPlay: () -> Unit
+) {
+    val context = LocalContext.current
+    val meta by produceState(MediaFileStore.VideoMeta(), video.location) {
+        value = withContext(Dispatchers.IO) { MediaFileStore.loadVideoMeta(context, video.location) }
+    }
+    Card(Modifier.fillMaxWidth().clickable(enabled = !editing) { onPlay() }) {
+        Column {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                meta.thumbnail?.let { bmp ->
+                    androidx.compose.foundation.Image(
+                        bitmap = bmp.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } ?: run {
+                    Icon(
+                        Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.align(Alignment.Center).size(32.dp)
+                    )
+                }
+                // 右下角时长角标（黑底白字，封面缺失时不显示）
+                formatDuration(meta.durationMs)?.let { d ->
+                    Text(
+                        d,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(6.dp)
+                            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
+                // 编辑模式：整卡左上角勾选圈
+                if (editing) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black.copy(alpha = 0.35f))
+                            .clickable { onToggle() }
+                    )
+                    Icon(
+                        if (selected) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+                        contentDescription = if (selected) "已选中" else "未选中",
+                        tint = if (selected) MaterialTheme.colorScheme.primary else Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(8.dp)
+                            .size(24.dp)
+                    )
+                }
+            }
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                 Text(
                     video.title,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(Modifier.height(2.dp))
+                Spacer(Modifier.height(3.dp))
                 Text(
-                    "${ComicDownloadStore.formatSize(video.sizeBytes)} · 点击播放",
+                    "x1 · ${ComicDownloadStore.formatSize(video.sizeBytes)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Rounded.Delete, contentDescription = "删除视频")
             }
         }
     }
@@ -612,13 +723,15 @@ private fun EmptyHint(text: String) {
     )
 }
 
-/** 视频列表页内容：下载中任务 + 已下载列表（点击播放） */
+/** 视频分区：下载中任务 + 已下载封面网格（v0.301 双列，点击播放，编辑模式勾选删除） */
 private fun LazyListScope.videoSection(
     context: Context,
     tasks: Map<String, VideoTask>,
     library: List<DownloadedVideo>,
-    onPlay: (DownloadedVideo) -> Unit,
-    onDelete: (DownloadedVideo) -> Unit
+    editing: Boolean,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    onPlay: (DownloadedVideo) -> Unit
 ) {
     if (tasks.isNotEmpty()) {
         items(tasks.values.sortedBy { it.title }, key = { "video-task-${it.url}" }) { t ->
@@ -634,31 +747,309 @@ private fun LazyListScope.videoSection(
             EmptyHint("还没有下载视频，播放器右上角点下载按钮试试（吃瓜/在线观影都支持）")
         }
     } else {
-        items(library.sortedByDescending { it.createdAt }, key = { "video-${it.id}" }) { v ->
-            VideoRow(video = v, onPlay = { onPlay(v) }, onDelete = { onDelete(v) })
+        val sorted = library.sortedByDescending { it.createdAt }
+        // LazyColumn 里模拟双列网格：两两一组成行
+        items(
+            sorted.chunked(2),
+            key = { row -> "video-row-${row.joinToString("_") { it.id.toString() }}" }
+        ) { row ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                row.forEach { v ->
+                    Box(Modifier.weight(1f)) {
+                        VideoGridCard(
+                            video = v,
+                            editing = editing,
+                            selected = "video/${v.id}" in selected,
+                            onToggle = { onToggle(v.id) },
+                            onPlay = { onPlay(v) }
+                        )
+                    }
+                }
+                if (row.size == 1) Spacer(Modifier.weight(1f))
+            }
         }
     }
 }
 
-/** 音乐 / 书籍的一节：标题（数量 · 大小）+ 文件列表（文件名 + 大小） */
-private fun LazyListScope.mediaSectionContent(
-    keyPrefix: String,
+/** 音乐分区（v0.301）：与音乐主页同款歌曲行——封面 + 歌名 + 歌手 + 时长，行尾播放/暂停，编辑模式勾选删除 */
+private fun LazyListScope.musicSectionContent(
+    context: Context,
     summary: MediaFileStore.Summary,
-    emptyHint: String
+    editing: Boolean,
+    selected: Set<String>,
+    onToggleSelect: (String) -> Unit,
+    onPlay: (List<com.shangyin.app.data.music.MusicSong>, Int) -> Unit
 ) {
-    item(key = "$keyPrefix-header") {
-        SectionHeader(keyHeaderTitle(keyPrefix), "${summary.count} 个文件 · ${ComicDownloadStore.formatSize(summary.totalBytes)}")
+    item(key = "music-header") {
+        SectionHeader("音乐", "${summary.count} 个文件 · ${ComicDownloadStore.formatSize(summary.totalBytes)}")
     }
     if (summary.entries.isEmpty()) {
-        item(key = "$keyPrefix-empty") { EmptyHint(emptyHint) }
+        item(key = "music-empty") { EmptyHint("还没有下载音乐，去音乐页点下载按钮吧") }
     } else {
-        items(summary.entries, key = { "$keyPrefix-${it.name}" }) { e ->
-            MediaFileRow(e)
+        val songs = summary.entries.map { e ->
+            com.shangyin.app.data.music.MusicSong(
+                platform = com.shangyin.app.data.music.MusicPlatform.LOCAL,
+                id = e.name,
+                name = e.name.substringBeforeLast('.'),
+                artists = "本地下载",
+                raw = mapOf("path" to e.uri.orEmpty())
+            )
+        }
+        items(summary.entries, key = { "music-${it.name}" }) { e ->
+            val idx = summary.entries.indexOf(e)
+            MusicFileRow(
+                context = context,
+                entry = e,
+                song = songs[idx],
+                editing = editing,
+                selected = "music/${e.name}" in selected,
+                onToggleSelect = { onToggleSelect(e.name) },
+                onPlay = { onPlay(songs, idx) }
+            )
         }
     }
 }
 
-/** 漫画 / 本子的一节：标题（数量 · 大小）+ 下载中任务 + 已下载条目卡片（展开逐章） */
+/** 书籍分区（v0.301）：封面行（PDF/EPUB 提取封面，点击直接打开阅读），编辑模式勾选删除 */
+private fun LazyListScope.bookSectionContent(
+    context: Context,
+    summary: MediaFileStore.Summary,
+    editing: Boolean,
+    selected: Set<String>,
+    onToggleSelect: (String) -> Unit,
+    onOpen: (MediaFileStore.Entry) -> Unit
+) {
+    item(key = "book-header") {
+        SectionHeader("书籍", "${summary.count} 个文件 · ${ComicDownloadStore.formatSize(summary.totalBytes)}")
+    }
+    if (summary.entries.isEmpty()) {
+        item(key = "book-empty") { EmptyHint("还没有下载书籍，去图书详情页点「下载」吧") }
+    } else {
+        items(summary.entries, key = { "book-${it.name}" }) { e ->
+            BookFileRow(
+                context = context,
+                entry = e,
+                editing = editing,
+                selected = "book/${e.name}" in selected,
+                onToggleSelect = { onToggleSelect(e.name) },
+                onOpen = { onOpen(e) }
+            )
+        }
+    }
+}
+
+/** 勾选圈（编辑模式）：选中 = primary 实心，未选中 = 灰圈 */
+@Composable
+private fun SelectDot(selected: Boolean, onClick: () -> Unit) {
+    Icon(
+        if (selected) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked,
+        contentDescription = if (selected) "已选中" else "未选中",
+        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+        modifier = Modifier
+            .size(26.dp)
+            .clickable { onClick() }
+    )
+}
+
+/** 音乐文件行（对齐音乐主页样式）：封面 + 歌名/歌手 + 时长 + 播放按钮 */
+@Composable
+private fun MusicFileRow(
+    context: Context,
+    entry: MediaFileStore.Entry,
+    song: com.shangyin.app.data.music.MusicSong,
+    editing: Boolean,
+    selected: Boolean,
+    onToggleSelect: () -> Unit,
+    onPlay: () -> Unit
+) {
+    // 是否正在播放这首歌（队列当前 + 播放中）
+    val playState by MusicPlayback.state.collectAsStateWithLifecycle()
+    val isPlayingThis = playState.song?.key == song.key && playState.isPlaying
+    // 时长 + 内嵌封面（一次 IO）
+    var durationMs by remember(entry.name) { mutableStateOf(0L) }
+    var cover by remember(entry.name) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    androidx.compose.runtime.LaunchedEffect(entry.name) {
+        val (d, c) = withContext(Dispatchers.IO) { MediaFileStore.loadMusicMeta(context, entry) }
+        durationMs = d; cover = c
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !editing) { if (isPlayingThis) MusicPlayback.toggle(context) else onPlay() }
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (editing) {
+            SelectDot(selected) { onToggleSelect() }
+            Spacer(Modifier.width(10.dp))
+        }
+        // 52dp 封面：内嵌图 → 音符占位
+        Box(
+            Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (cover != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = cover!!.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(
+                    Icons.Rounded.MusicNote,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.name.substringBeforeLast('.'),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (isPlayingThis) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                buildString {
+                    append("本地下载")
+                    formatDuration(durationMs)?.let { append(" · $it") }
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        IconButton(onClick = {
+            if (editing) onToggleSelect()
+            else if (isPlayingThis) MusicPlayback.toggle(context) else onPlay()
+        }) {
+            Icon(
+                if (isPlayingThis) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                contentDescription = if (isPlayingThis) "暂停" else "播放",
+                tint = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
+/** 书籍文件行：封面（PDF 首页 / EPUB cover）+ 文件名 + 打开阅读 */
+@Composable
+private fun BookFileRow(
+    context: Context,
+    entry: MediaFileStore.Entry,
+    editing: Boolean,
+    selected: Boolean,
+    onToggleSelect: () -> Unit,
+    onOpen: () -> Unit
+) {
+    // 封面提取放后台（PDF 渲染 / EPUB 解压较慢），只取一次
+    var cover by remember(entry.name) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var tried by remember(entry.name) { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(entry.name) {
+        if (!tried) {
+            tried = true
+            cover = withContext(Dispatchers.IO) { MediaFileStore.loadBookCover(context, entry) }
+        }
+    }
+    val ext = entry.name.substringAfterLast('.', "").uppercase()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !editing) { onOpen() }
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (editing) {
+            SelectDot(selected) { onToggleSelect() }
+            Spacer(Modifier.width(10.dp))
+        }
+        Box(
+            Modifier
+                .size(width = 42.dp, height = 56.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            if (cover != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = cover!!.asImageBitmap(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Text(
+                    ext.ifBlank { "书" },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                entry.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${ext.ifBlank { "文件" }} · ${ComicDownloadStore.formatSize(entry.size)} · 点击阅读",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+/** 打开本地书籍：PDF 用系统查看器，EPUB/TXT/MOBI/AZW3 尝试系统应用，失败给提示 */
+private fun openBook(context: Context, entry: MediaFileStore.Entry) {
+    val uriStr = entry.uri ?: run {
+        Toast.makeText(context, "文件不可访问", Toast.LENGTH_SHORT).show(); return
+    }
+    val ext = entry.name.substringAfterLast('.', "").lowercase()
+    runCatching {
+        val uri = if (uriStr.startsWith("content:")) {
+            android.net.Uri.parse(uriStr)
+        } else {
+            // 8/9 私有目录 file:// → FileProvider（外部应用读不了私有路径）
+            FileProvider.getUriForFile(
+                context, "${context.packageName}.fileprovider", File(uriStr.removePrefix("file://"))
+            )
+        }
+        val mime = when (ext) {
+            "pdf" -> "application/pdf"
+            "epub" -> "application/epub+zip"
+            "mobi" -> "application/x-mobipocket-ebook"
+            "azw3" -> "application/vnd.amazon.ebook"
+            "txt" -> "text/plain"
+            else -> "*/*"
+        }
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, mime)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.onFailure {
+        Toast.makeText(context, "没有找到能打开 $ext 的应用", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 漫画 / 本子的一节：标题（数量 · 大小）+ 下载中任务 + 已下载条目卡片（展开逐章；v0.301 编辑勾选删除） */
 private fun LazyListScope.comicSectionContent(
     keyPrefix: String,
     unit: String,
@@ -667,10 +1058,11 @@ private fun LazyListScope.comicSectionContent(
     tasks: List<ComicDownloadManager.Task>,
     emptyHint: String,
     expanded: Set<String>,
-    onToggle: (DownloadedComic) -> Unit,
-    onDeleteComic: (DownloadedComic) -> Unit,
-    onReadChapter: (DownloadedComic, String) -> Unit,
-    onDeleteChapter: (DownloadedComic, String) -> Unit
+    editing: Boolean,
+    selected: Set<String>,
+    onToggleExpand: (DownloadedComic) -> Unit,
+    onToggleSelect: (DownloadedComic) -> Unit,
+    onReadChapter: (DownloadedComic, String) -> Unit
 ) {
     item(key = "$keyPrefix-header") {
         SectionHeader(keyHeaderTitle(keyPrefix), "${comics.size} $unit · ${ComicDownloadStore.formatSize(totalBytes)}")
@@ -688,10 +1080,11 @@ private fun LazyListScope.comicSectionContent(
             ComicDownloadRow(
                 comic = comic,
                 expanded = "${comic.source}/${comic.id}" in expanded,
-                onToggle = { onToggle(comic) },
-                onDeleteComic = { onDeleteComic(comic) },
-                onReadChapter = { key -> onReadChapter(comic, key) },
-                onDeleteChapter = { key -> onDeleteChapter(comic, key) }
+                editing = editing,
+                selected = "comic/${comic.source}/${comic.id}" in selected,
+                onToggleExpand = { onToggleExpand(comic) },
+                onToggleSelect = { onToggleSelect(comic) },
+                onReadChapter = { key -> onReadChapter(comic, key) }
             )
         }
     }
@@ -785,22 +1178,25 @@ private fun DownloadTaskCard(t: ComicDownloadManager.Task) {
     }
 }
 
-/** 单本已下载漫画：封面 + 标题 + 大小，展开后逐章离线阅读 */
+/** 单本已下载漫画：封面 + 标题 + 大小，展开后逐章离线阅读（v0.301：编辑模式用勾选圈替代删除按钮） */
 @Composable
 private fun ComicDownloadRow(
     comic: DownloadedComic,
     expanded: Boolean,
-    onToggle: () -> Unit,
-    onDeleteComic: () -> Unit,
-    onReadChapter: (String) -> Unit,
-    onDeleteChapter: (String) -> Unit
+    editing: Boolean,
+    selected: Boolean,
+    onToggleExpand: () -> Unit,
+    onToggleSelect: () -> Unit,
+    onReadChapter: (String) -> Unit
 ) {
     val context = LocalContext.current
     val size = remember(comic) { ComicDownloadStore.size(context, comic.source, comic.id) }
     Card(Modifier.fillMaxWidth()) {
         Column {
             Row(
-                Modifier.fillMaxWidth().clickable { onToggle() }.padding(12.dp),
+                Modifier.fillMaxWidth().clickable {
+                    if (editing) onToggleSelect() else onToggleExpand()
+                }.padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
@@ -833,17 +1229,18 @@ private fun ComicDownloadRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                IconButton(onClick = { onDeleteComic() }) {
-                    Icon(Icons.Rounded.Delete, contentDescription = "删除整本下载")
+                if (editing) {
+                    SelectDot(selected) { onToggleSelect() }
+                } else {
+                    Icon(
+                        if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                Icon(
-                    if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
             val progressMap by ReadProgressStore.all.collectAsStateWithLifecycle(ReadProgressStore.all.value)
-            if (expanded) {
+            if (expanded && !editing) {
                 comic.chapters.sortedBy { chapterNo(it.name) }.forEach { ch ->
                     val isLast = ch.key == progressMap["${comic.source}/${comic.id}"]
                     Row(
@@ -874,14 +1271,6 @@ private fun ComicDownloadRow(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        IconButton(onClick = { onDeleteChapter(ch.key) }, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                Icons.Rounded.Delete,
-                                contentDescription = "删除该章",
-                                tint = MaterialTheme.colorScheme.outline,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
                     }
                 }
                 Spacer(Modifier.height(6.dp))

@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="share" path="share/" />
+    <!-- 下载管理：书籍/视频在私有目录（Android 8/9）时用 FileProvider 打开 -->
+    <external-files-path name="books" path="书籍/" />
+    <external-files-path name="videos" path="视频/" />
 </paths>

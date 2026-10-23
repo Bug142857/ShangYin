@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.List
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.SwapVert
@@ -741,6 +742,106 @@ fun PhotoGridDialog(
         images?.let {
             PhotoViewerDialog(urls = it, initialIndex = openIndex, onDismiss = { openIndex = -1 })
         }
+    }
+}
+
+/**
+ * 全局统一搜索栏（v0.301 UI 统一）：
+ * 填充式圆角输入框 + 前置放大镜 + 后置清空按钮，回车触发 [onSearch]。
+ * 所有模块的搜索入口一律用它（表单/配置类输入框不在此列，仍用 OutlinedTextField）。
+ */
+@Composable
+fun AppSearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String = "搜索",
+    enabled: Boolean = true
+) {
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    androidx.compose.foundation.text.BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        enabled = enabled,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(
+            color = MaterialTheme.colorScheme.onSurface
+        ),
+        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            imeAction = androidx.compose.ui.text.input.ImeAction.Search
+        ),
+        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+            onSearch = {
+                focusManager.clearFocus()
+                onSearch()
+            }
+        ),
+        decorationBox = { inner ->
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 14.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Rounded.Search,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Box(Modifier.weight(1f)) {
+                    if (value.isEmpty()) {
+                        Text(
+                            placeholder,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    inner()
+                }
+                if (value.isNotEmpty()) {
+                    IconButton(onClick = { onValueChange("") }, modifier = Modifier.size(28.dp)) {
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "清空",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+        },
+        modifier = modifier
+    )
+}
+
+/**
+ * 模块图标容器（v0.301 里世界统一）：squircle 圆角方块 + 居中模块图标，
+ * 背景 surfaceVariant、图标 primary 着色。里世界主页与模块管理共用，保证视觉一致。
+ */
+@Composable
+fun ModuleIconBox(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    modifier: Modifier = Modifier,
+    size: Dp = 50.dp,
+    enabled: Boolean = true
+) {
+    val tint = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(RoundedCornerShape(size / 3))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.46f))
     }
 }
 

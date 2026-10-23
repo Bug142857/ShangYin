@@ -15,7 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -38,7 +37,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -110,7 +108,7 @@ fun ListManagerScreen(nav: NavHostController) {
                     color = MaterialTheme.colorScheme.outline
                 )
             } else {
-                WorldSectionHeader("表世界", Icons.Outlined.Public, surfaceTree.size)
+                // v0.301：不再分「表世界」分节（清单只在表世界生效，无需重复说明）
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     surfaceTree.forEach { (meta, depth) ->
                         ListManagerRow(
@@ -202,35 +200,6 @@ fun ListManagerScreen(nav: NavHostController) {
                 ) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } }
-        )
-    }
-}
-
-/** 清单管理的分节标题 */
-@Composable
-private fun WorldSectionHeader(label: String, icon: ImageVector, count: Int) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.padding(bottom = 6.dp)
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(16.dp)
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "$count 个清单",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline
         )
     }
 }

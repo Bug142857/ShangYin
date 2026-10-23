@@ -80,6 +80,7 @@ import com.shangyin.app.data.psite.PsiteClient.PVideo
 import com.shangyin.app.data.vod.VodEpisode
 import com.shangyin.app.data.vod.VodPlayGroup
 import com.shangyin.app.ui.innerfav.FavHeartButton
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -239,25 +240,18 @@ fun PsiteHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 搜索栏：输入法确认键或右侧按钮触发；清空并回车 = 退出搜索态
-            OutlinedTextField(
+            // 搜索栏：输入法确认键触发（v0.301 全局统一样式）
+            AppSearchField(
                 value = input,
-                onValueChange = { input = it },
-                placeholder = { Text("搜索 P站 视频…") },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
-                    query = input.trim()
-                }),
-                trailingIcon = {
-                    IconButton(onClick = { query = input.trim() }) {
-                        Icon(Icons.Rounded.Search, contentDescription = "搜索")
-                    }
+                onValueChange = {
+                    input = it
+                    if (it.isEmpty()) query = ""
                 },
+                onSearch = { query = input.trim() },
+                placeholder = "搜索 P站 视频…",
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
             // 排序 tabs（点已选 = 刷新；5 个 chip 超出屏宽，横向滚动）
             Row(

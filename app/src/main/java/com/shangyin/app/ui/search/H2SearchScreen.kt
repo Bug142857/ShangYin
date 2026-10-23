@@ -71,6 +71,7 @@ import com.shangyin.app.data.bika.BikaCategory
 import com.shangyin.app.data.bika.BikaComicsPage
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
@@ -222,26 +223,19 @@ private fun CategoryGridPage(
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            // 搜索栏：输入回车进入搜索结果列表
-            OutlinedTextField(
+            // 搜索栏：输入回车进入搜索结果列表（v0.301 全局统一样式）
+            AppSearchField(
                 value = query,
                 onValueChange = { query = it },
-                placeholder = { Text("搜索本子…") },
-                singleLine = true,
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    imeAction = androidx.compose.ui.text.input.ImeAction.Search
-                ),
-                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                    onSearch = {
-                        val kw = query.trim()
-                        if (kw.isNotEmpty()) {
-                            keyboard?.hide()
-                            onSearch(kw)
-                        }
+                onSearch = {
+                    val kw = query.trim()
+                    if (kw.isNotEmpty()) {
+                        keyboard?.hide()
+                        onSearch(kw)
                     }
-                ),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
+                },
+                placeholder = "搜索本子…",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
             when {

@@ -63,6 +63,7 @@ import com.shangyin.app.data.douban.DoubanClient
 import com.shangyin.app.data.douban.DoubanResult
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.DoubanRating
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
@@ -226,25 +227,16 @@ fun SearchScreen(
                     )
                 }
             }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 16.dp)
-            ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    placeholder = {
-                        Text(if (selectedCat.isEmpty()) "先选分类，再输入关键词" else "在${selectedCat}中搜索…")
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { doSearch() }),
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = { doSearch() }) {
-                    Icon(Icons.Rounded.Search, contentDescription = "搜索")
-                }
-            }
+            // 搜索框（v0.301 全局统一样式，回车触发）
+            AppSearchField(
+                value = query,
+                onValueChange = { query = it },
+                onSearch = { doSearch() },
+                placeholder = if (selectedCat.isEmpty()) "先选分类，再输入关键词" else "在${selectedCat}中搜索…",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
 
             if (searching) {
                 Column(

@@ -89,6 +89,7 @@ import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.vod.VodEpisode
 import com.shangyin.app.data.vod.VodPlayGroup
 import com.shangyin.app.ui.common.PhotoViewerDialog
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.player.PlayerSession
@@ -259,32 +260,21 @@ fun MelonHomeScreen(nav: NavHostController) {
                 .padding(pad)
                 .fillMaxSize()
         ) {
-            // 搜索框
-            OutlinedTextField(
+            // 搜索框（v0.301 全局统一样式）
+            AppSearchField(
                 value = input,
-                onValueChange = { input = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                placeholder = { Text("搜索吃瓜爆料", style = MaterialTheme.typography.bodyMedium) },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (input.isNotEmpty()) {
-                        IconButton(onClick = {
-                            input = ""
-                            if (keyword.isNotEmpty()) keyword = ""
-                        }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "清空")
-                        }
-                    }
+                onValueChange = {
+                    input = it
+                    if (it.isEmpty() && keyword.isNotEmpty()) keyword = ""
                 },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
+                onSearch = {
                     keyboard?.hide()
                     keyword = input.trim()
-                })
+                },
+                placeholder = "搜索吃瓜爆料",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
             // 分类：与游戏模块同款——收起=横滑一行 + 下拉箭头；展开=换行 chips（限高可滚）
             var catExpanded by rememberSaveable { mutableStateOf(false) }

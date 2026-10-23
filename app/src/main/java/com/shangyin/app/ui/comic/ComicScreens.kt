@@ -94,6 +94,7 @@ import com.shangyin.app.data.komiic.KomiicComic
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.innerfav.FavTopBarIcon
 import com.shangyin.app.ui.common.LoadingPill
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.common.PhotoGridDialog
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.safeNavigate
@@ -268,27 +269,19 @@ fun ComicHomeScreen(nav: NavHostController) {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            // 搜索框（回车触发）
-            OutlinedTextField(
+            // 搜索框（回车触发，v0.301 全局统一样式）
+            AppSearchField(
                 value = input,
-                onValueChange = { input = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                placeholder = { Text("搜索漫画", style = MaterialTheme.typography.bodyMedium) },
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = {
+                onValueChange = {
+                    input = it
+                    if (it.isEmpty()) keyword = ""
+                },
+                onSearch = {
                     keyboard?.hide()
                     keyword = input.trim()
-                }),
-                trailingIcon = {
-                    if (input.isNotEmpty()) {
-                        IconButton(onClick = {
-                            input = ""
-                            keyword = ""
-                        }) { Icon(Icons.Rounded.Close, contentDescription = "清空", modifier = Modifier.padding(4.dp)) }
-                    }
-                }
+                },
+                placeholder = "搜索漫画",
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
             )
             if (keyword.isBlank()) {
                 // 最近更新 / 热门 / 连载中 / 完结 同一行

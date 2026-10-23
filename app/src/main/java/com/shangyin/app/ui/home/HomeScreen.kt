@@ -22,22 +22,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.outlined.Public
-import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material.icons.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Menu
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -117,13 +117,13 @@ fun HomeScreen(nav: NavHostController) {
                 NavigationBarItem(
                     selected = tab == 0,
                     onClick = { tab = 0 },
-                    icon = { Icon(Icons.Outlined.Public, contentDescription = null) },
+                    icon = { Icon(Icons.Outlined.WbSunny, contentDescription = null) },
                     label = { Text("表世界") }
                 )
                 NavigationBarItem(
                     selected = tab == 1,
                     onClick = { tab = 1 },
-                    icon = { Icon(Icons.Outlined.Visibility, contentDescription = null) },
+                    icon = { Icon(Icons.Outlined.DarkMode, contentDescription = null) },
                     label = { Text("里世界") }
                 )
             }
@@ -181,24 +181,14 @@ private fun SurfaceWorld(
             }
         }
         // 搜索栏：回车或点右侧按钮跳搜索页执行搜索
-        OutlinedTextField(
+        com.shangyin.app.ui.common.AppSearchField(
             value = query,
             onValueChange = { query = it },
-            placeholder = { Text("在${searchCat}中搜索…") },
-            singleLine = true,
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                imeAction = androidx.compose.ui.text.input.ImeAction.Search
-            ),
-            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { goSearch() }),
-            trailingIcon = {
-                IconButton(onClick = { goSearch() }) {
-                    Icon(Icons.Rounded.KeyboardArrowRight, contentDescription = "搜索")
-                }
-            },
+            onSearch = { goSearch() },
+            placeholder = "在${searchCat}中搜索…",
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .padding(horizontal = 16.dp, vertical = 6.dp)
         )
         WorldListSection(nav, lists = lists, modifier = Modifier.weight(1f))
     }
@@ -206,7 +196,9 @@ private fun SurfaceWorld(
 
 // ---------------- 里世界 ----------------
 
-/** 里世界：模块入口宫格（清单功能只在表世界生效） */
+/** 里世界：模块入口宫格（清单功能只在表世界生效）。
+ *  v0.301：每行 3 个模块，分上下两区——上区常规（游戏/音乐/电视/本子/吃瓜），
+ *  中间小字分隔（需要外网环境），下区特殊源（图书/漫画/番号/P站/X站）。 */
 @Composable
 private fun InnerWorld(
     nav: NavHostController,
@@ -214,65 +206,90 @@ private fun InnerWorld(
 ) {
     // 模块开关（设置 → 模块管理）：StateFlow 驱动，关掉的入口不在主页出现
     val disabledModules by SettingsStore.disabledInnerModules.collectAsStateWithLifecycle()
-    val innerEntries = remember(disabledModules) {
-        INNER_MODULE_ENTRIES.filter { it.key !in disabledModules }
-    }
+    val enabledKeys = disabledModules
+    fun entriesOf(keys: List<String>) = keys
+        .mapNotNull { key -> INNER_MODULE_ENTRIES.firstOrNull { it.key == key } }
+        .filter { it.key !in enabledKeys }
+    val topEntries = entriesOf(listOf("game", "music", "tv", "h2", "melon"))
+    val bottomEntries = entriesOf(listOf("book", "comic", "h1", "psite", "xsite"))
+
     // 里世界只放模块宫格（清单功能只在表世界生效）
-    Column(modifier) {
-        innerEntries.chunked(4).forEachIndexed { rowIdx, rowEntries ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(
-                        start = 16.dp, end = 16.dp,
-                        top = if (rowIdx == 0) 8.dp else 0.dp,
-                        bottom = if (rowIdx == 0) 4.dp else 8.dp
-                    ),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                rowEntries.forEach { e ->
-                    InnerWorldEntry(
-                        icon = e.icon,
-                        title = e.title,
-                        modifier = Modifier.weight(1f),
-                        onClick = { nav.safeNavigate(e.route) }
-                    )
-                }
-                repeat(4 - rowEntries.size) { Spacer(Modifier.weight(1f)) }
+    Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+        Spacer(Modifier.height(10.dp))
+        GridModuleRows(topEntries) { e -> nav.safeNavigate(e.route) }
+        // 中间分隔：细线 + 小字说明
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 14.dp)
+        ) {
+            HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            Text(
+                "以下模块需要外网环境",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(horizontal = 12.dp)
+            )
+            HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+        }
+        GridModuleRows(bottomEntries) { e -> nav.safeNavigate(e.route) }
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
+/** 3 列模块宫格（自动换行，空位补齐对齐） */
+@Composable
+private fun GridModuleRows(
+    entries: List<com.shangyin.app.ui.common.InnerModuleEntry>,
+    onClick: (com.shangyin.app.ui.common.InnerModuleEntry) -> Unit
+) {
+    entries.chunked(3).forEachIndexed { rowIdx, rowEntries ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = 16.dp, end = 16.dp,
+                    top = if (rowIdx == 0) 0.dp else 12.dp
+                ),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            rowEntries.forEach { e ->
+                InnerWorldEntry(
+                    icon = e.icon,
+                    title = e.title,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onClick(e) }
+                )
             }
+            repeat(3 - rowEntries.size) { Spacer(Modifier.weight(1f)) }
         }
     }
 }
 
-/** 里世界入口卡片 */
+/** 里世界入口（squircle 图标 + 文字，v0.301 统一样式） */
 @Composable
 private fun InnerWorldEntry(
     icon: ImageVector,
     title: String,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    Card(modifier = modifier.clickable(enabled = enabled) { onClick() }) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = if (enabled) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                modifier = Modifier.size(30.dp)
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                color = if (enabled) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.outline
-            )
-        }
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { onClick() }
+            .padding(vertical = 10.dp)
+    ) {
+        com.shangyin.app.ui.common.ModuleIconBox(icon, size = 52.dp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1
+        )
     }
 }
 
