@@ -163,13 +163,23 @@ private fun SurfaceWorld(
     }
 
     Column(modifier) {
+        // 搜索栏：回车或点右侧按钮跳搜索页执行搜索（v0.302：搜索栏在上、分类按钮在下）
+        com.shangyin.app.ui.common.AppSearchField(
+            value = query,
+            onValueChange = { query = it },
+            onSearch = { goSearch() },
+            placeholder = "在${searchCat}中搜索…",
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+        )
         // 分类 chips
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 4.dp)
+                .padding(horizontal = 16.dp, vertical = 2.dp)
         ) {
             listOf("影视", "图书", "游戏", "人物").forEach { label ->
                 FilterChip(
@@ -180,16 +190,6 @@ private fun SurfaceWorld(
                 )
             }
         }
-        // 搜索栏：回车或点右侧按钮跳搜索页执行搜索
-        com.shangyin.app.ui.common.AppSearchField(
-            value = query,
-            onValueChange = { query = it },
-            onSearch = { goSearch() },
-            placeholder = "在${searchCat}中搜索…",
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 6.dp)
-        )
         WorldListSection(nav, lists = lists, modifier = Modifier.weight(1f))
     }
 }
@@ -215,30 +215,38 @@ private fun InnerWorld(
 
     // 里世界只放模块宫格（清单功能只在表世界生效）
     Column(modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(4.dp))
         GridModuleRows(topEntries) { e -> nav.safeNavigate(e.route) }
-        // 中间分隔：细线 + 小字说明
+        // 中间分隔：细线 + 小字说明（细线 weight 平分剩余宽度，保证文字始终可见）
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 14.dp)
+                .padding(horizontal = 20.dp, vertical = 6.dp)
         ) {
-            HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(
+                thickness = 0.75.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.weight(1f)
+            )
             Text(
                 "以下模块需要外网环境",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(horizontal = 12.dp)
             )
-            HorizontalDivider(thickness = 0.75.dp, color = MaterialTheme.colorScheme.outlineVariant)
+            HorizontalDivider(
+                thickness = 0.75.dp,
+                color = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.weight(1f)
+            )
         }
         GridModuleRows(bottomEntries) { e -> nav.safeNavigate(e.route) }
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(8.dp))
     }
 }
 
-/** 3 列模块宫格（自动换行，空位补齐对齐） */
+/** 3 列模块宫格（自动换行，空位补齐对齐；v0.302 图标加大、行距收紧，一屏放下不滚动） */
 @Composable
 private fun GridModuleRows(
     entries: List<com.shangyin.app.ui.common.InnerModuleEntry>,
@@ -250,7 +258,7 @@ private fun GridModuleRows(
                 .fillMaxWidth()
                 .padding(
                     start = 16.dp, end = 16.dp,
-                    top = if (rowIdx == 0) 0.dp else 12.dp
+                    top = if (rowIdx == 0) 0.dp else 6.dp
                 ),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -267,7 +275,7 @@ private fun GridModuleRows(
     }
 }
 
-/** 里世界入口（squircle 图标 + 文字，v0.301 统一样式） */
+/** 里世界入口（squircle 图标 + 文字，v0.302 图标加大到 64dp） */
 @Composable
 private fun InnerWorldEntry(
     icon: ImageVector,
@@ -280,10 +288,10 @@ private fun InnerWorldEntry(
         modifier = modifier
             .clip(RoundedCornerShape(16.dp))
             .clickable { onClick() }
-            .padding(vertical = 10.dp)
+            .padding(vertical = 6.dp)
     ) {
-        com.shangyin.app.ui.common.ModuleIconBox(icon, size = 52.dp)
-        Spacer(Modifier.height(8.dp))
+        com.shangyin.app.ui.common.ModuleIconBox(icon, size = 64.dp)
+        Spacer(Modifier.height(5.dp))
         Text(
             title,
             style = MaterialTheme.typography.labelLarge,

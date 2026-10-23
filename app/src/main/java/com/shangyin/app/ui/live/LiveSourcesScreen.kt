@@ -30,7 +30,6 @@ import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -265,7 +264,7 @@ fun LiveSourcesScreen(nav: NavHostController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("电视源配置", fontWeight = FontWeight.Bold) },
+                title = { Text("电视源", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -289,14 +288,11 @@ fun LiveSourcesScreen(nav: NavHostController) {
                     IconButton(onClick = { showImport = true }) {
                         Icon(Icons.Rounded.CloudDownload, contentDescription = "批量导入电视源")
                     }
+                    // v0.302：加号移到右上角，与影视源页一致
+                    IconButton(onClick = { showAdd = true }) {
+                        Icon(Icons.Rounded.Add, contentDescription = "添加电视源")
+                    }
                 }
-            )
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showAdd = true },
-                icon = { Icon(Icons.Rounded.Add, contentDescription = null) },
-                text = { Text("添加电视源") }
             )
         }
     ) { pad ->

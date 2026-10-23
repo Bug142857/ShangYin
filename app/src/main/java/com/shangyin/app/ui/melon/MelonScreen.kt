@@ -1,7 +1,5 @@
 package com.shangyin.app.ui.melon
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -32,7 +30,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.Close
@@ -740,14 +737,6 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
     }
     LaunchedEffect(id) { reload() }
 
-    fun openInBrowser(url: String) {
-        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-            .onFailure {
-                android.widget.Toast.makeText(context, "无法打开链接", android.widget.Toast.LENGTH_SHORT)
-                    .show()
-            }
-    }
-
     fun play(video: MelonBlock.Video) {
         val d = detail ?: return
         val vids = d.blocks.filterIsInstance<MelonBlock.Video>()
@@ -756,6 +745,7 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
         PlayerSession.title = d.title
         PlayerSession.subTitle = ""
         PlayerSession.sourceName = "51爆料"
+        PlayerSession.coverUrl = d.cover.orEmpty()
         PlayerSession.groups = listOf(
             VodPlayGroup("51爆料", vids.map { VodEpisode(it.title, it.url) })
         )
@@ -804,12 +794,7 @@ fun MelonDetailScreen(nav: NavHostController, id: String) {
                             }
                         )
                     }
-                    IconButton(onClick = { openInBrowser("${MelonClient.lastBase}/archives/$id/") }) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.OpenInNew,
-                            contentDescription = "浏览器打开"
-                        )
-                    }
+                    // v0.302：去掉「在浏览器打开」按钮，只保留爱心收藏
                 }
             )
         }

@@ -28,7 +28,6 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,7 +48,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -66,8 +64,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 配置管理（v0.301 由「设置」更名）：
- * 单层紧凑列表，8 个条目统一高度（单行小字说明），常规屏幕不用滚动即可完整展示。
+ * 配置管理（v0.302 恢复 v0.300 卡片风格）：
+ * 单列卡片条目（图标 + 标题 + 小字说明 + 右箭头），条目间留白。
  * 条目顺序：主题管理 / 账号管理 / 数据管理 / 片源管理 / 清单管理 / 模块管理 / 下载管理 / 清理缓存。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -90,13 +88,6 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 else -> "$bytes B"
             }
         }.getOrDefault("未知")
-    }
-
-    // 版本号（标题后面直接展示）
-    val versionName = remember {
-        runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: ""
     }
 
     // 清单总数（清单管理标题后直接展示）
@@ -125,19 +116,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("配置管理")
-                        if (versionName.isNotBlank()) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "v$versionName",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
+                title = { Text("配置管理") },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -151,57 +130,52 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 .padding(pad)
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
         ) {
-            SettingsRow(
+            Spacer(Modifier.height(8.dp))
+            SettingsCard(
                 icon = Icons.Rounded.Palette,
                 title = "主题管理",
                 hint = themeLabel(currentTheme),
                 onClick = { showThemePicker = true }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.Person,
                 title = "账号管理",
                 hint = "豆瓣·哔咔·无忧·Zlib",
                 onClick = { nav.safeNavigate("account") }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.CloudSync,
                 title = "数据管理",
                 hint = "云端同步·导出/导入备份",
                 onClick = { nav.safeNavigate("dataManage") }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.LiveTv,
                 title = "片源管理",
                 hint = "电视源&影视源（观影/番号）",
                 onClick = { nav.safeNavigate("sourceHub") }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.ListAlt,
                 title = "清单管理",
                 hint = "共 ${lists.size} 个清单",
                 onClick = { nav.safeNavigate("listManager") }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.Tune,
                 title = "模块管理",
                 hint = "里世界模块入口开关",
                 onClick = { nav.safeNavigate("moduleManage") }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.Download,
                 title = "下载管理",
                 hint = downloadHint,
                 onClick = { nav.safeNavigate("downloads") }
             )
-            SettingsDivider()
-            SettingsRow(
+            SettingsCard(
                 icon = Icons.Rounded.CleaningServices,
                 title = "清理缓存",
                 hint = "当前缓存：$cacheSize",
@@ -251,61 +225,57 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showThemePicker = false }) { Text("完成") } }
+            confirmButton = { }
         )
     }
 }
 
-/** 统一高度的紧凑条目：图标 + 标题 + 单行小字说明 + 右箭头 */
+/** 卡片条目（v0.300 风格）：图标 + 标题 + 小字说明 + 右箭头 */
 @Composable
-private fun SettingsRow(
+private fun SettingsCard(
     icon: ImageVector,
     title: String,
     hint: String,
     onClick: () -> Unit
 ) {
-    Row(
+    androidx.compose.material3.Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
-            .padding(horizontal = 20.dp, vertical = 13.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(22.dp)
+            .padding(top = 12.dp)
+            .clickable { onClick() },
+        colors = androidx.compose.material3.CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         )
-        Spacer(Modifier.width(16.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-            // 小字说明压成一行（超长省略），保证所有条目等高、整页不滚动
-            Text(
-                hint,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.size(20.dp)
             )
         }
-        Icon(
-            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.outline,
-            modifier = Modifier.size(20.dp)
-        )
     }
-}
-
-/** 条目间细分隔线（起点对齐文字，视觉更整齐） */
-@Composable
-private fun SettingsDivider() {
-    HorizontalDivider(
-        thickness = 0.75.dp,
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-        modifier = Modifier.padding(start = 58.dp)
-    )
 }
 
 private fun themeLabel(theme: String): String = when (theme) {

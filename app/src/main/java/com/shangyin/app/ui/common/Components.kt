@@ -838,7 +838,10 @@ fun ModuleIconBox(
         modifier = modifier
             .size(size)
             .clip(RoundedCornerShape(size / 3))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .background(
+                if (enabled) MaterialTheme.colorScheme.surfaceVariant
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            ),
         contentAlignment = Alignment.Center
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size * 0.46f))

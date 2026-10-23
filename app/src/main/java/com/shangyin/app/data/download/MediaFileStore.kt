@@ -100,6 +100,23 @@ object MediaFileStore {
         }
     }.getOrDefault(false)
 
+    /**
+     * v0.302：按枚举出的 Entry 直接删除（优先用 entry 自带 URI，命中更准）。
+     * 修复：按名称匹配在某些机型（DISPLAY_NAME 被系统改名/后缀大小写不一致）找不到记录，
+     * 导致书籍等文件在手机里没被真正删除。
+     */
+    fun deleteEntry(context: Context, entry: Entry): Boolean = runCatching {
+        val uri = entry.uri
+        when {
+            uri == null -> false
+            uri.startsWith("content:") ->
+                context.contentResolver.delete(android.net.Uri.parse(uri), null, null) > 0
+            uri.startsWith("file:") ->
+                File(uri.removePrefix("file://")).delete()
+            else -> File(uri).delete()
+        }
+    }.getOrDefault(false)
+
     private fun appDirFor(relative: String, context: Context): File = when (relative) {
         MUSIC_RELATIVE -> musicAppDir(context)
         BOOK_RELATIVE -> bookAppDir(context)
@@ -141,8 +158,10 @@ object MediaFileStore {
             }
         }.getOrNull()
 
-    /** 音乐元信息：时长（毫秒）+ 内嵌封面图（播放行用），一次 IO 全拿到 */
-    fun loadMusicMeta(context: Context, entry: Entry): Pair<Long, Bitmap?> = runCatching {
+    /** 音乐元信息：时长（毫秒）+ 内嵌封面图 + 歌手（v0.302 增加歌手，下载列表与音乐收藏对齐用） */
+    data class MusicMeta(val durationMs: Long = 0L, val cover: Bitmap? = null, val artist: String = "")
+
+    fun loadMusicMeta(context: Context, entry: Entry): MusicMeta = runCatching {
         val retriever = MediaMetadataRetriever()
         try {
             if (entry.uri?.startsWith("content:") == true) {
@@ -155,11 +174,13 @@ object MediaFileStore {
             val cover = retriever.embeddedPicture?.let { bytes ->
                 runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
             }
-            duration to cover
+            val artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                ?.takeIf { it.isNotBlank() && it != "<unknown>" } ?: ""
+            MusicMeta(duration, cover, artist)
         } finally {
             runCatching { retriever.release() }
         }
-    }.getOrDefault(0L to null)
+    }.getOrDefault(MusicMeta())
 
     /**
      * 书籍封面（下载管理用）：PDF 取首页渲染，EPUB 从压缩包里找 cover 图片，

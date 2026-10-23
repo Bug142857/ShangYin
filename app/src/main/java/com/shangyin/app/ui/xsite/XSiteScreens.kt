@@ -123,7 +123,8 @@ fun playPost(nav: NavHostController, post: XPost) {
 private fun downloadPost(context: android.content.Context, post: XPost) {
     val title = "X视频 @${post.account}"
     val ok = VideoDownloadManager.start(
-        context, title, post.videoUrl, mapOf("User-Agent" to XSiteClient.UA)
+        context, title, post.videoUrl, mapOf("User-Agent" to XSiteClient.UA),
+        post.thumbnail.orEmpty()
     )
     Toast.makeText(
         context,

@@ -59,7 +59,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -259,18 +258,15 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
             TopAppBar(
                 title = {
                     if (isSearching) {
-                        OutlinedTextField(
+                        // v0.302：与其他页面搜索栏统一为 AppSearchField
+                        com.shangyin.app.ui.common.AppSearchField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
-                            placeholder = {
-                                Text("搜索本清单及子清单", style = MaterialTheme.typography.bodyMedium)
-                            },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            colors = androidx.compose.material3.OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
-                            ),
-                            modifier = Modifier.fillMaxWidth()
+                            onSearch = { },
+                            placeholder = "搜索本清单及子清单",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = 8.dp)
                         )
                     } else {
                         Row(verticalAlignment = Alignment.CenterVertically) {

@@ -66,7 +66,19 @@ object MusicPlayback {
         if (controllerFuture != null) return
         val appContext = context.applicationContext
         val token = SessionToken(appContext, ComponentName(appContext, MusicPlaybackService::class.java))
-        val future = MediaController.Builder(appContext, token).buildAsync()
+        // v0.302：Builder 阶段挂 MediaController.Listener，服务端关闭（划掉最近任务/服务被杀）
+        // 时回调 onDisconnected —— 重置状态让 App 内底部播放条同步消失
+        val future = MediaController.Builder(appContext, token)
+            .setListener(object : MediaController.Listener {
+                override fun onDisconnected(controller: MediaController) {
+                    this@MusicPlayback.controller = null
+                    controllerFuture = null
+                    progressJob?.cancel()
+                    progressJob = null
+                    _state.value = State()
+                }
+            })
+            .buildAsync()
         controllerFuture = future
         future.addListener({
             val c = runCatching { future.get() }.getOrNull() ?: return@addListener

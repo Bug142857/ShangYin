@@ -1516,9 +1516,9 @@ fun PlayerScreen(nav: NavHostController) {
             confirmButton = {
                 TextButton(onClick = {
                     com.shangyin.app.data.download.VideoDownloadManager.start(
-                        context, dlTitle, dlUrl, PlayerSession.streamHeaders
+                        context, dlTitle, dlUrl, PlayerSession.streamHeaders, PlayerSession.coverUrl
                     )
-                    Toast.makeText(context, "已开始下载，可在「我的下载 → 视频」查看进度", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "已开始下载，可在「下载管理 → 视频」查看进度", Toast.LENGTH_SHORT).show()
                     pendingDownload = null
                 }) { Text("开始下载") }
             },

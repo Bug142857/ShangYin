@@ -85,10 +85,9 @@ class MusicPlaybackService : MediaSessionService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
-    /** 用户划掉最近任务：没在播就收工，不残留前台服务 */
+    /** 用户划掉最近任务（后台关闭播放器）：停播并移除通知；App 内底部播放条随控制器断连一并消失 */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val current = player
-        if (current == null || !current.playWhenReady || current.mediaItemCount == 0) stopSelf()
+        stopSelf()
     }
 
     override fun onDestroy() {

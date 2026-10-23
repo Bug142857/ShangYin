@@ -38,6 +38,9 @@ object PlayerSession {
     /** 当前频道：播放页的「刷新」与断流自动重连要用它重新解析（流会断开） */
     var liveRoom: com.shangyin.app.data.live.LiveRoom? = null
 
+    /** 收藏时的封面图（v0.302：视频下载记录带上封面，下载管理网格直接展示） */
+    var coverUrl: String = ""
+
     fun clear() {
         itemId = 0L
         title = ""
@@ -51,5 +54,6 @@ object PlayerSession {
         streamHeaders = emptyMap()
         liveQualities = emptyList()
         liveRoom = null
+        coverUrl = ""
     }
 }
