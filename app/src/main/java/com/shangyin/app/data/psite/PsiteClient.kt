@@ -151,9 +151,6 @@ object PsiteClient {
 
     // ---------------- 列表 ----------------
 
-    /** 列表结果 + 尾页（v0.305：页码条显示尾页用；0 = 没解析到） */
-    data class PListPage(val items: List<PVideo>, val lastPage: Int = 0)
-
     /**
      * 拉取视频列表。
      * @param sortCode SORTS 的 code（"" = 首页默认）
@@ -165,7 +162,7 @@ object PsiteClient {
         catId: Int,
         query: String,
         page: Int
-    ): PListPage = withContext(Dispatchers.IO) {
+    ): List<PVideo> = withContext(Dispatchers.IO) {
         val p = page.coerceAtLeast(1)
         // 实测搜索接口不接受 o= 参数（404 Page Not Found），搜索态忽略排序档位
         val path: String = if (query.isNotBlank()) {
@@ -189,8 +186,7 @@ object PsiteClient {
                 append(q.joinToString("&"))
             }
         }
-        val html = httpGet(path)
-        PListPage(parseList(html), lastPageOf(html))
+        parseList(httpGet(path))
     }
 
     /** 从列表页 HTML 里找分页链接的最大页码（站点末页按钮带 page=N）；找不到返回 0 */

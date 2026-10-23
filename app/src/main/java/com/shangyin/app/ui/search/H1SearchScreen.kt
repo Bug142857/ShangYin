@@ -278,7 +278,9 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
             )
 
             // 分类筛选（v0.305 恢复：收起=横滑一行；展开=换行 chips，带各自数量）
-            if (keyword.isBlank() && categories.isNotEmpty()) {
+            // v0.306：探测到 0 个资源的分类不显示（未探测到的先显示）
+            val visibleCats = categories.filter { (catCounts[it.type_id] ?: 1) > 0 }
+            if (keyword.isBlank() && visibleCats.isNotEmpty()) {
                 if (!catExpanded) {
                     Row(
                         Modifier.padding(start = 12.dp, end = 4.dp),
@@ -295,7 +297,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                                 label = { Text("全部") },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
-                            categories.forEach { c ->
+                            visibleCats.forEach { c ->
                                 FilterChip(
                                     selected = selectedType == c.type_id,
                                     onClick = { selectedType = c.type_id },
@@ -340,7 +342,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                                 onClick = { selectedType = null; catExpanded = false },
                                 label = { Text("全部") }
                             )
-                            categories.forEach { c ->
+                            visibleCats.forEach { c ->
                                 FilterChip(
                                     selected = selectedType == c.type_id,
                                     onClick = { selectedType = c.type_id; catExpanded = false },
