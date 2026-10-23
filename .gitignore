@@ -70,10 +70,11 @@ _testsources_*.py
 .vs/
 
 # Build outputs
-app-debug.apk
-老郑分享-debug.apk
+*.apk
+*.aab
 .kotlin/
 .trae/
+.trae-html-share-packages/
 jstmp/
 zzz2.js
 a.bin
@@ -82,3 +83,4 @@ c.bin
 seg*.bin
 t1.bin
 t2.bin
+parse_test.py
