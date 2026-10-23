@@ -189,6 +189,17 @@ object PsiteClient {
         parseList(httpGet(path))
     }
 
+    /**
+     * 某分类的视频数量文案（v0.304：分类下拉显示数量）。
+     * 站点不提供数字接口，从分类页 HTML 里抓「1.2M Videos」这类计数；拿不到返回 null。
+     */
+    suspend fun categoryCount(catId: Int): String? = withContext(Dispatchers.IO) {
+        val html = httpGet("$BASE/video?c=$catId") ?: return@withContext null
+        Regex("""([\d.,]+\s*[KMB]?)\+?\s*[Vv]ideos""").find(html)
+            ?.groupValues?.getOrNull(1)?.replace(" ", "")?.trim()
+            ?.takeIf { it.isNotBlank() }
+    }
+
     /** 从列表页 HTML 解析视频条目（列表/搜索同构标记） */
     internal fun parseList(html: String): List<PVideo> {
         val doc = Jsoup.parse(html)

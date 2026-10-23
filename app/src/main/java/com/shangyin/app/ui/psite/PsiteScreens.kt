@@ -85,6 +85,8 @@ import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * P站（里世界第十入口）：pornhub.com 原生解析，无 WebView。
@@ -280,6 +282,26 @@ fun PsiteHomeScreen(nav: NavHostController) {
             }
             // 分类筛选（横滑一行，可展开）
             var catExpanded by remember { mutableStateOf(false) }
+            // v0.304：各分类视频数（下拉展开后并发探测；拿不到的保持无后缀）
+            var catCounts by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+            LaunchedEffect(catExpanded) {
+                if (!catExpanded) return@LaunchedEffect
+                val missing = PsiteClient.CATEGORIES.filter { it.id !in catCounts }
+                if (missing.isEmpty()) return@LaunchedEffect
+                val sem = Semaphore(3)
+                kotlinx.coroutines.coroutineScope {
+                    missing.map { c ->
+                        launch {
+                            sem.withPermit {
+                                val n = runCatching { PsiteClient.categoryCount(c.id) }.getOrNull()
+                                if (n != null) catCounts = catCounts + (c.id to n)
+                            }
+                        }
+                    }
+                }
+            }
+            fun catLabel(c: PsiteClient.PCategory): String =
+                "${c.label}${catCounts[c.id]?.let { " ($it)" } ?: ""}"
             if (!catExpanded) {
                 Row(
                     Modifier.padding(start = 12.dp, end = 4.dp),
@@ -309,7 +331,7 @@ fun PsiteHomeScreen(nav: NavHostController) {
                                         category = c.id
                                     }
                                 },
-                                label = { Text(c.label) },
+                                label = { Text(catLabel(c)) },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -354,7 +376,7 @@ fun PsiteHomeScreen(nav: NavHostController) {
                             FilterChip(
                                 selected = category == c.id,
                                 onClick = { category = c.id; catExpanded = false },
-                                label = { Text(c.label) }
+                                label = { Text(catLabel(c)) }
                             )
                         }
                     }

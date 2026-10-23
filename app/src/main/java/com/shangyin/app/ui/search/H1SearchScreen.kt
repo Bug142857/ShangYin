@@ -1,6 +1,5 @@
 package com.shangyin.app.ui.search
 
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,34 +8,32 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.FavoriteBorder
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,161 +42,127 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.shangyin.app.data.Repo
+import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.vod.VodClient
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.data.vod.VodSource
-import com.shangyin.app.data.InnerFav
-import com.shangyin.app.ui.innerfav.FavHeartButton
-import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.common.AppPageBar
 import com.shangyin.app.ui.common.AppSearchField
+import com.shangyin.app.ui.common.CoverImage
+import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 /**
- * H1 外网片源浏览页：直接进入（无需先搜索），
- * 每个外网源一个分组，横向卡片展示该源资源（默认第一页，可加载更多）；
- * 页内搜索框可按关键词搜全部外网源；点击影片直接进播放页（可切线路/集数）。
- */
-private data class SrcState(
-    val status: Int,          // 0=加载中 1=完成 2=失败
-    val total: Int,           // 源报告的总量（浏览=库总量，搜索=命中数）
-    val items: List<VodItem>,
-    val page: Int             // 已加载到的页码
-)
-
-/**
- * 番号页会话缓存：跨页面导航（进播放页/详情页再返回）保留搜索词与已加载结果，
- * 返回时不再重新加载（stateKeyword 记录 stateMap 对应的关键词）。
- * v0.304：按模块序号分开缓存（番1~番4 各一份）。
+ * 番号模块（番1~番4，v0.304 重做）：
+ * 打开即为「搜索框 + 该片源全部影片网格 + 底部页码条」，不再按源分组横滑。
+ * 第 N 个模块对应外网目录里第 N 个启用中的片源；封面显示时长（源提供时）。
  */
 private class H1CacheState {
-    var stateKeyword: String? = null
     var keyword: String = ""
-    var input: String = ""
-    var stateMap: Map<String, SrcState> = emptyMap()
+    var items: List<VodItem> = emptyList()
+    var total: Int = 0
+    var lastPage: Int = 0
+    var page: Int = 1
+    var loaded: Boolean = false
 }
 
 private val H1Caches = mutableMapOf<Int, H1CacheState>()
 
-/**
- * @param sourceIndex 0 = 全部外网源（旧入口）；1..4 = 番1~番4，只展示第 N 个启用中的外网源
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int = 0) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val idx = sourceIndex.coerceAtLeast(1)
     val initialKw = remember {
         runCatching { java.net.URLDecoder.decode(kwEncoded, "UTF-8") }.getOrDefault(kwEncoded)
     }
 
-    // 只展示「需要外网」目录且启用的源；番N 只取第 N 个
-    val allSources = remember {
-        SettingsStore.getVodSources().filter { it.enabled && it.region == "proxy" }
+    // 第 N 个启用中的外网片源
+    val src: VodSource? = remember(idx) {
+        SettingsStore.getVodSources()
+            .filter { it.enabled && it.region == "proxy" }
+            .getOrNull(idx - 1)
     }
-    val sources = remember(allSources, sourceIndex) {
-        if (sourceIndex <= 0) allSources
-        else listOfNotNull(allSources.getOrNull(sourceIndex - 1))
-    }
-    val cache = remember(sourceIndex) { H1Caches.getOrPut(sourceIndex) { H1CacheState() } }
+    val cache = remember(idx) { H1Caches.getOrPut(idx) { H1CacheState() } }
 
-    // 从会话缓存恢复（首次进入用路由关键词初始化）
-    if (cache.stateKeyword == null) {
-        cache.keyword = initialKw.trim()
-        cache.input = initialKw.trim()
-    }
+    var input by remember { mutableStateOf(cache.keyword.ifBlank { initialKw.trim() }) }
     var keyword by remember { mutableStateOf(cache.keyword) }
-    var input by remember { mutableStateOf(cache.input) }
-    // srcId -> 每源加载状态
-    var stateMap by remember { mutableStateOf(cache.stateMap) }
-    val loadingKeys = remember { mutableSetOf<String>() } // "srcId:page" 防重复加载
-    // 点击后正在取详情播放的影片 id（防重复点击）
+    var items by remember { mutableStateOf(cache.items) }
+    var total by remember { mutableIntStateOf(cache.total) }
+    var lastPage by remember { mutableIntStateOf(cache.lastPage) }
+    var page by remember { mutableIntStateOf(cache.page) }
+    var loading by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
     var openingId by remember { mutableStateOf<Long?>(null) }
 
-    // 状态变化实时写回缓存（进播放页后返回可完整恢复）
-    LaunchedEffect(keyword, input, stateMap) {
-        cache.keyword = keyword
-        cache.input = input
-        cache.stateMap = stateMap
-    }
-
-    /** 加载某源某页（kw 变化后返回的旧响应会被丢弃） */
-    fun load(src: VodSource, page: Int, kw: String) {
-        val key = "${src.id}:$page"
-        if (!loadingKeys.add(key)) return
-        // 首次进入时先显示加载中
-        if (page == 1) {
-            stateMap = stateMap + (src.id to SrcState(0, 0, emptyList(), 0))
-        }
+    fun load(target: Int) {
+        val s = src ?: return
+        if (loading) return
+        loading = true
         scope.launch {
-            val resp = VodClient.fetchList(src, kw, page)
-            if (kw != keyword) { loadingKeys.remove(key); return@launch } // 关键词已变，丢弃
-            stateMap = stateMap.toMutableMap().apply {
-                val old = get(src.id)
-                if (resp == null) {
-                    put(src.id, SrcState(2, old?.total ?: 0, old?.items ?: emptyList(), old?.page ?: 0))
-                } else {
-                    val merged = ((old?.items ?: emptyList()) + resp.list)
-                        .distinctBy { it.vod_id }
-                    put(src.id, SrcState(1, resp.total, merged, page))
-                }
+            val resp = VodClient.fetchList(s, keyword, target)
+            if (resp != null) {
+                items = resp.list
+                total = resp.total
+                lastPage = resp.pagecount
+                page = target
+                failed = false
+                cache.keyword = keyword
+                cache.items = resp.list
+                cache.total = resp.total
+                cache.lastPage = resp.pagecount
+                cache.page = target
+                cache.loaded = true
+            } else {
+                failed = true
             }
-            loadingKeys.remove(key)
+            loading = false
         }
     }
 
-    // 关键词变化：新关键词全部源并行重载；恢复场景只补加载缺失的源
-    LaunchedEffect(keyword) {
-        if (sources.isEmpty()) return@LaunchedEffect
-        if (cache.stateKeyword == keyword) {
-            sources.filter { it.id !in stateMap }.forEach { src -> load(src, 1, keyword) }
-        } else {
-            cache.stateKeyword = keyword
-            loadingKeys.clear()
-            stateMap = emptyMap()
-            coroutineScope {
-                sources.forEach { src -> launch { load(src, 1, keyword) } }
-            }
-        }
+    // 首次进入 / 关键词变化 → 拉第一页；返回本页时用缓存恢复，不重复请求
+    LaunchedEffect(src?.id, keyword) {
+        if (src == null) return@LaunchedEffect
+        if (cache.loaded && cache.keyword == keyword) return@LaunchedEffect
+        items = emptyList()
+        total = 0
+        lastPage = 0
+        page = 1
+        load(1)
     }
 
-    /** 点击影片：公共播放流程（补详情→解析线路→断点续播→跳播放页） */
-    fun playItem(src: VodSource, item: VodItem) {
+    fun play(item: VodItem) {
+        val s = src ?: return
         if (openingId != null) return
         openingId = item.vod_id
         scope.launch {
-            val ok = openVodAndPlay(nav, context, src, item)
+            val ok = openVodAndPlay(nav, context, s, item)
             if (!ok) openingId = null
         }
     }
-
-    // 爱心快藏（与吃瓜/X站/P站同款）：数据在 InnerFavorites，设置页模块管理不受影响
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text(
-                            if (sourceIndex > 0) "番$sourceIndex" else "番号",
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text("番$idx", fontWeight = FontWeight.Bold)
                         Text(
                             when {
-                                sources.isEmpty() -> "暂无对应片源"
-                                keyword.isBlank() && sourceIndex > 0 -> "${sources.first().name} · 页内可搜索"
-                                keyword.isBlank() -> "共 ${sources.size} 个源 · 页内可搜索"
-                                else -> "搜索「$keyword」"
+                                src == null -> "暂无对应片源"
+                                failed && items.isEmpty() -> "加载失败（可能需外网环境）"
+                                loading && items.isEmpty() -> "加载中…"
+                                else -> "${src.name} · 共 $total 部"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -221,7 +184,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
             )
         }
     ) { pad ->
-        if (sources.isEmpty()) {
+        if (src == null) {
             Column(
                 Modifier
                     .padding(pad)
@@ -230,106 +193,98 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text(
-                    if (sourceIndex > 0) "番$sourceIndex 还没有对应片源" else "外网目录还没有片源",
-                    style = MaterialTheme.typography.titleMedium
-                )
+                Text("番$idx 还没有对应片源", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "番1~番4 依次对应外网目录里第 1~4 个启用中的片源；先到片源管理里添加/启用片源，"
-                        + "测试为「需外网/返回异常」的源会自动归入外网目录，也可以在编辑片源时手动选择「需要外网」目录。",
+                    "番1~番4 依次对应外网目录里第 1~4 个启用中的片源；到片源管理里添加/启用片源后即可使用。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(16.dp))
                 Button(onClick = { nav.safeNavigate("vodSources") }) { Text("去片源管理") }
             }
-        } else {
-            Column(
-                Modifier
-                    .padding(pad)
-                    .fillMaxSize()
-            ) {
-                // 页内搜索框：输入法确认键（搜索）直接触发；右侧放大镜在输入变化后可再点（v0.301 统一样式）
-                AppSearchField(
-                    value = input,
-                    onValueChange = {
-                        input = it
-                        if (it.isEmpty()) keyword = ""
-                    },
-                    onSearch = {
-                        keyboard?.hide()
-                        keyword = input.trim()
-                    },
-                    placeholder = "搜索外网片源，留空浏览全部",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                )
+            return@Scaffold
+        }
 
-                LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-                    sources.forEach { src ->
-                        val state = stateMap[src.id] ?: SrcState(0, 0, emptyList(), 0)
-                        item(key = "h_${src.id}") {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp, bottom = 6.dp)
-                            ) {
-                                Text(
-                                    src.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    when {
-                                        state.status == 0 -> "加载中…"
-                                        state.status == 2 && state.items.isEmpty() -> "加载失败（可能需外网环境）"
-                                        keyword.isBlank() -> "共 ${state.total} 部"
-                                        else -> "命中 ${state.total} 部"
-                                    },
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.weight(1f))
-                                if (state.status == 1) {
-                                    TextButton(onClick = { nav.safeNavigate("h1source/" + src.id) }) {
-                                        Text(
-                                            "查看全部",
-                                            style = MaterialTheme.typography.labelMedium
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                        if (state.items.isNotEmpty()) {
-                            item(key = "r_${src.id}") {
-                                LazyRow(
-                                    contentPadding = PaddingValues(horizontal = 16.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                ) {
-                                    items(state.items, key = { "${src.id}_${it.vod_id}" }) { item ->
-                                        VodCard(
-                                            item = item,
-                                            opening = openingId == item.vod_id,
-                                            favId = "${src.id}|${item.vod_id}",
-                                            favSubtitle = src.name,
-                                            onClick = { playItem(src, item) }
-                                        )
-                                    }
-                                }
-                            }
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            AppSearchField(
+                value = input,
+                onValueChange = {
+                    input = it
+                    if (it.isEmpty()) keyword = ""
+                },
+                onSearch = {
+                    keyboard?.hide()
+                    keyword = input.trim()
+                },
+                placeholder = "在 ${src.name} 里搜索",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            )
+
+            when {
+                loading && items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
+                }
+                failed && items.isEmpty() -> Column(
+                    Modifier.fillMaxSize().padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("加载失败", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "该源可能需要外网环境才能访问，或接口暂时不可用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Button(onClick = { load(page.coerceAtLeast(1)) }) { Text("重试") }
+                }
+                items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        if (keyword.isBlank()) "该源暂无内容" else "没有找到「$keyword」",
+                        color = MaterialTheme.colorScheme.outline
+                    )
+                }
+                else -> {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        items(items, key = { it.vod_id }) { item ->
+                            H1GridCard(
+                                item = item,
+                                opening = openingId == item.vod_id,
+                                favId = "${src.id}|${item.vod_id}",
+                                favSubtitle = src.name,
+                                onClick = { play(item) }
+                            )
                         }
                     }
+                    // 底部页码条（v0.304：与吃瓜/P站/X站一致）
+                    AppPageBar(
+                        currentPage = page,
+                        lastPage = lastPage,
+                        loading = loading,
+                        onGo = { p -> if (!loading) load(p) },
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                            .navigationBarsPadding()
+                    )
                 }
             }
         }
     }
 }
 
-/** 外网片源卡片：海报 + 片名 + 备注，点击播放；右上角爱心快藏（InnerFavorites） */
+/** 番号网格卡：海报 + 时长角标 + 片名 + 备注，右上角爱心快藏 */
 @Composable
-private fun VodCard(
+private fun H1GridCard(
     item: VodItem,
     opening: Boolean,
     favId: String,
@@ -338,18 +293,31 @@ private fun VodCard(
 ) {
     Column(
         Modifier
-            .width(96.dp)
+            .fillMaxWidth()
             .clickable(enabled = !opening, onClick = onClick)
     ) {
         Box {
             CoverImage(
                 url = item.vod_pic,
                 modifier = Modifier
-                    .width(96.dp)
-                    .height(128.dp),
+                    .fillMaxWidth()
+                    .aspectRatio(3f / 4f),
                 corner = 8.dp
             )
-            // 爱心快藏（右上角，不挡海报点击）
+            // 时长角标（右下角黑底白字；源没给时长就不显示）
+            vodDurationLabel(item)?.let { d ->
+                Text(
+                    d,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.dp)
+                )
+            }
             FavHeartButton(
                 favModule = "h1",
                 favId = favId,
@@ -370,8 +338,8 @@ private fun VodCard(
             if (opening) {
                 Box(
                     Modifier
-                        .width(96.dp)
-                        .height(128.dp)
+                        .fillMaxWidth()
+                        .aspectRatio(3f / 4f)
                         .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(8.dp)),
                     contentAlignment = Alignment.Center
                 ) {
@@ -393,8 +361,9 @@ private fun VodCard(
         Text(
             when {
                 item.vod_remarks.isNotBlank() -> item.vod_remarks
+                item.type_name.isNotBlank() -> item.type_name
                 item.vod_year.isNotBlank() -> item.vod_year
-                else -> " "
+                else -> ""
             },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -402,4 +371,17 @@ private fun VodCard(
             overflow = TextOverflow.Ellipsis
         )
     }
+}
+
+/**
+ * 时长展示：优先用源给的 vod_duration；没有时从备注里找「mm:ss / hh:mm:ss / N分钟」。
+ * 都找不到返回 null（不显示角标，绝不编造）。
+ */
+private fun vodDurationLabel(item: VodItem): String? {
+    val raw = item.vod_duration.trim()
+    if (raw.isNotBlank()) {
+        return if (raw.all { it.isDigit() }) "${raw}分钟" else raw
+    }
+    val m = Regex("""(\d{1,2}:\d{2}(?::\d{2})?|\d{1,3}\s*分钟)""").find(item.vod_remarks)
+    return m?.value
 }

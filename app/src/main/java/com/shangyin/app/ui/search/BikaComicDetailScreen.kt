@@ -87,7 +87,12 @@ import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -123,6 +128,34 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     }
     var chaptersLoading by remember {
         mutableStateOf(BikaUiCache.chapters[id] == null && diskCache?.chapters.isNullOrEmpty())
+    }
+    // v0.304：每章图片张数（逐章探测一次，结果进 BikaUiCache 复用）
+    var chapterCounts by remember {
+        mutableStateOf<Map<Int, Int>>(BikaUiCache.chapterCounts[id]?.toMap() ?: emptyMap())
+    }
+    LaunchedEffect(chapters) {
+        if (chapters.isEmpty()) {
+            chapterCounts = emptyMap()
+            return@LaunchedEffect
+        }
+        val cache = BikaUiCache.chapterCounts.getOrPut(id) { mutableMapOf() }
+        chapterCounts = cache.toMap()
+        val missing = chapters.filter { it.order !in cache }
+        if (missing.isEmpty()) return@LaunchedEffect
+        val sem = Semaphore(4)
+        val results = coroutineScope {
+            missing.map { ch ->
+                async {
+                    sem.withPermit {
+                        runCatching {
+                            BikaClient.withAuth { t -> BikaClient.fetchChapterPageCount(t, id, ch.order) }
+                        }.getOrNull()
+                    }
+                }
+            }.awaitAll()
+        }
+        missing.forEachIndexed { i, ch -> results[i]?.let { cache[ch.order] = it } }
+        chapterCounts = cache.toMap()
     }
 
     var loadingEp by remember { mutableStateOf<Int?>(null) }   // 正在取图的章节 order
@@ -539,6 +572,15 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                                         )
                                     }
                                     Spacer(Modifier.weight(1f))
+                                    // v0.304：本章图片张数（未探测到时先不显示）
+                                    chapterCounts[ch.order]?.let { n ->
+                                        Text(
+                                            "$n 张",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(end = 4.dp)
+                                        )
+                                    }
                                     // 本章图片总览（网格浏览本章，不合并其他章节）
                                     IconButton(
                                         onClick = { openChapterGrid(i) },

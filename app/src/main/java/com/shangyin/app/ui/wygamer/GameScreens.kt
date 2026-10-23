@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -101,7 +102,7 @@ import kotlinx.serialization.json.Json
 private data class GameHomeCache(
     val catUrl: String,
     val keyword: String,
-    val nextPage: Int,
+    val page: Int,
     val items: List<GameItem>
 )
 
@@ -119,6 +120,7 @@ private val resolvedCache = mutableMapOf<String, String>()
 fun GameHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var cacheJson by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -126,7 +128,8 @@ fun GameHomeScreen(nav: NavHostController) {
     var keyword by rememberSaveable { mutableStateOf("") }    // 非空=搜索模式
     var input by rememberSaveable { mutableStateOf("") }
     var items by remember { mutableStateOf<List<GameItem>>(emptyList()) }
-    var page by remember { mutableStateOf(1) }
+    // v0.304：页码条模式（站点不暴露总页数，末页未知）
+    var curPage by remember { mutableStateOf(1) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var categories by remember { mutableStateOf<List<GameCategory>>(emptyList()) }
@@ -134,27 +137,26 @@ fun GameHomeScreen(nav: NavHostController) {
     var loadedKey by remember { mutableStateOf<String?>(null) }
     var loadJob by remember { mutableStateOf<Job?>(null) }
 
-    fun load(reset: Boolean) {
+    fun loadPage(target: Int) {
         loadJob?.cancel()
-        val startPage = if (reset) 1 else page
-        if (reset) {
-            page = 1
-            items = emptyList()
-        }
         error = null
         loading = true
         loadJob = scope.launch {
             runCatching {
                 when {
-                    keyword.isNotBlank() -> WygamerClient.search(keyword, startPage)
-                    catUrl.isNotBlank() -> WygamerClient.category(catUrl, startPage)
-                    else -> WygamerClient.home(startPage)
+                    keyword.isNotBlank() -> WygamerClient.search(keyword, target)
+                    catUrl.isNotBlank() -> WygamerClient.category(catUrl, target)
+                    else -> WygamerClient.home(target)
                 }
             }.onSuccess { list ->
-                // 列表 key = 游戏 id：翻页可能回带同一篇 → 去重，否则重复 key 崩 LazyGrid
-                items = (if (reset) list else items + list).distinctBy { it.id }
-                page = startPage + 1
-                cacheJson = gameJson.encodeToString(GameHomeCache(catUrl, keyword, page, items))
+                if (list.isEmpty() && target > 1) {
+                    // 越界：停在原页并提示
+                    Toast.makeText(context, "已经是最后一页", Toast.LENGTH_SHORT).show()
+                } else {
+                    curPage = target
+                    items = list.distinctBy { it.id }
+                    cacheJson = gameJson.encodeToString(GameHomeCache(catUrl, keyword, target, items))
+                }
             }.onFailure { e ->
                 if (e is CancellationException) throw e
                 error = (e.message?.takeIf { m -> m.isNotBlank() } ?: e::class.simpleName) ?: "网络错误"
@@ -173,7 +175,7 @@ fun GameHomeScreen(nav: NavHostController) {
                 loadJob?.cancel()
                 loading = false
                 catUrl = c.catUrl; keyword = c.keyword; input = c.keyword
-                page = c.nextPage; items = c.items.distinctBy { it.id }
+                curPage = c.page; items = c.items.distinctBy { it.id }
                 loadedKey = "${c.catUrl}|${c.keyword}"
             }
         }
@@ -182,7 +184,9 @@ fun GameHomeScreen(nav: NavHostController) {
         val k = "$catUrl|$keyword"
         if (k != loadedKey) {
             loadedKey = k
-            load(true)
+            curPage = 1
+            items = emptyList()
+            loadPage(1)
         }
     }
 
@@ -241,7 +245,7 @@ fun GameHomeScreen(nav: NavHostController) {
                                 FilterChip(
                                     selected = catUrl == c.url,
                                     onClick = { catUrl = c.url },
-                                    label = { Text(c.name) },
+                                    label = { Text("${c.name} (${c.count})") },
                                     modifier = Modifier.padding(horizontal = 4.dp)
                                 )
                             }
@@ -282,7 +286,7 @@ fun GameHomeScreen(nav: NavHostController) {
                                 FilterChip(
                                     selected = catUrl == c.url,
                                     onClick = { catUrl = c.url; catExpanded = false },
-                                    label = { Text(c.name) }
+                                    label = { Text("${c.name} (${c.count})") }
                                 )
                             }
                         }
@@ -309,32 +313,33 @@ fun GameHomeScreen(nav: NavHostController) {
                 ) {
                     Text(error ?: "加载失败", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = { load(true) }) { Text("重试") }
+                    TextButton(onClick = { loadPage(curPage) }) { Text("重试") }
                 }
                 items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("没有找到游戏", color = MaterialTheme.colorScheme.outline)
                 }
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    contentPadding = PaddingValues(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(items.size, key = { items[it].id }) { i ->
-                        GameGridCard(items[i]) { nav.safeNavigate("gameDetail/${items[i].id}") }
-                    }
-                    item {
-                        Box(Modifier.fillMaxWidth().padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                            when {
-                                loading -> CircularProgressIndicator(modifier = Modifier.padding(4.dp))
-                                error != null -> TextButton(onClick = { load(false) }) { Text("重试") }
-                                else -> TextButton(onClick = { load(false) }, enabled = items.isNotEmpty()) {
-                                    Text("加载更多")
-                                }
-                            }
+                else -> Column(Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        contentPadding = PaddingValues(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        items(items.size, key = { items[it].id }) { i ->
+                            GameGridCard(items[i]) { nav.safeNavigate("gameDetail/${items[i].id}") }
                         }
                     }
+                    // v0.304：底部页码条（站点不暴露总页数 → 末页未知模式，可跳页）
+                    com.shangyin.app.ui.common.AppPageBar(
+                        currentPage = curPage,
+                        lastPage = 0,
+                        loading = loading,
+                        onGo = { p -> if (!loading) loadPage(p) },
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 4.dp)
+                            .navigationBarsPadding()
+                    )
                 }
             }
         }

@@ -57,6 +57,8 @@ data class VodItem(
     val vod_year: String = "",
     val vod_area: String = "",
     val vod_remarks: String = "",
+    /** 时长（部分源提供，如 "01:35:20" / "90分钟"；没有则为空） */
+    val vod_duration: String = "",
     val vod_douban_id: Long = 0,
     /** 播放组名，如 "jsyun$$$jsm3u8" */
     val vod_play_from: String = "",

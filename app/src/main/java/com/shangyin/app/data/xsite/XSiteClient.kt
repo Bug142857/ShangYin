@@ -206,6 +206,11 @@ object XSiteClient {
         )
     }
 
+    /** 某标签下的视频总数（v0.304：分类下拉显示数量）；失败返回 null（不当成 0） */
+    suspend fun categoryTotal(range: String, code: String): Int? = runCatching {
+        list(range, 1, code).total
+    }.getOrNull()
+
     // ---------------- 详情 ----------------
 
     suspend fun detail(urlCd: String): XDetail = withContext(Dispatchers.IO) {

@@ -353,6 +353,34 @@ object BikaClient {
         }.sortedBy { it.order }
     }
 
+    /**
+     * 某章节图片总数（v0.304：本子章节列表显示「N 张」用）。
+     * 先请求第一页，若还有分页则并行补齐；失败返回 null（不能当 0，UI 显示未知）。
+     */
+    suspend fun fetchChapterPageCount(token: String, id: String, order: Int): Int? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val path = "comics/$id/order/$order/pages"
+                val first = request("GET", "$path?page=1", token)
+                val pages = first["pages"]?.jsonObject ?: return@runCatching null
+                val totalPages = pages["pages"]?.jsonPrimitive?.intOrNull ?: 1
+                var count = pages["docs"]?.jsonArray?.size ?: 0
+                if (totalPages > 1) {
+                    coroutineScope {
+                        (2..totalPages).map { p ->
+                            async {
+                                runCatching {
+                                    request("GET", "$path?page=$p", token)["pages"]
+                                        ?.jsonObject?.get("docs")?.jsonArray?.size ?: 0
+                                }.getOrDefault(0)
+                            }
+                        }.awaitAll().forEach { count += it }
+                    }
+                }
+                count
+            }.getOrNull()
+        }
+
     /** 某一章节全部图片地址（自动拉全部分页） */
     suspend fun fetchChapterImages(token: String, id: String, order: Int): List<String> =
         withContext(Dispatchers.IO) {

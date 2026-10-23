@@ -95,7 +95,12 @@ import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.data.vod.VodEpisode
 import com.shangyin.app.data.vod.VodPlayGroup
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * X站（里世界第九入口）：pektino.com 排行榜，原生渲染无 WebView。
@@ -171,11 +176,38 @@ fun XSiteHomeScreen(nav: NavHostController) {
     var lastRequested by remember { mutableIntStateOf(1) } // 失败重试要重复的请求页码
     var reqSeq by remember { mutableIntStateOf(0) }        // 请求代序号：丢弃被更新的请求所取代的旧响应
     var catList by remember { mutableStateOf<List<XCategory>?>(null) } // null=标签加载中
+    // v0.304：各标签视频数（分类下拉显示「名称 (数量)」）
+    var catCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var countsRange by remember { mutableStateOf(range) } // 榜单变了要重探（数量随榜单变化）
     val gridState = rememberLazyGridState()
 
     // 标签分类：进程内缓存，首次进入拉一次（失败回退内置表，UI 恒有值）
     LaunchedEffect(Unit) {
         if (catList == null) catList = XSiteClient.categories()
+    }
+
+    // 并发探测各标签数量（限并发 6；失败保持未知，不显示 0）
+    LaunchedEffect(catList, range) {
+        val cats = catList ?: return@LaunchedEffect
+        if (countsRange != range) {
+            countsRange = range
+            catCounts = emptyMap()
+        }
+        val missing = cats.filter { it.code !in catCounts }
+        if (missing.isEmpty()) return@LaunchedEffect
+        val sem = Semaphore(6)
+        val results = coroutineScope {
+            missing.map { c ->
+                async {
+                    sem.withPermit {
+                        runCatching { XSiteClient.categoryTotal(range, c.code) }.getOrNull()
+                    }
+                }
+            }.awaitAll()
+        }
+        val add = mutableMapOf<String, Int>()
+        missing.forEachIndexed { i, c -> results[i]?.let { add[c.code] = it } }
+        if (add.isNotEmpty()) catCounts = catCounts + add
     }
 
     /** 回第 1 页重载。先清空列表让转圈立即出现（0.272 反馈：切榜单点完没反应/像空了），
@@ -312,7 +344,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                                         category = c.code
                                     }
                                 },
-                                label = { Text(c.name) },
+                                label = { Text("${c.name}${catCounts[c.code]?.let { n -> " ($n)" } ?: ""}") },
                                 modifier = Modifier.padding(horizontal = 4.dp)
                             )
                         }
@@ -357,7 +389,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                             FilterChip(
                                 selected = category == c.code,
                                 onClick = { category = c.code; catExpanded = false },
-                                label = { Text(c.name) }
+                                label = { Text("${c.name}${catCounts[c.code]?.let { n -> " ($n)" } ?: ""}") }
                             )
                         }
                     }

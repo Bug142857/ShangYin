@@ -93,6 +93,9 @@ object BikaUiCache {
     val details = mutableMapOf<String, BikaComic>() // comicId -> 详情
     val chapters = mutableMapOf<String, List<BikaChapter>>() // comicId -> 章节
 
+    /** 章节图片数缓存（v0.304）：comicId -> (order -> 张数)，逐章探测后复用 */
+    val chapterCounts = mutableMapOf<String, MutableMap<Int, Int>>()
+
     fun comicsKey(category: String?, keyword: String?, sort: String): String =
         "${category ?: ""}|${keyword ?: ""}|$sort"
 }
