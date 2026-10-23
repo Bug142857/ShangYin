@@ -237,7 +237,12 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
         },
         // 迷你播放条：点歌后立即在本页底部出现（没在播时自隐藏为零高度）；
         // navigationBarsPadding 抬到手势导航栏之上，与其他页的播放条位置一致
-        bottomBar = { MusicMiniPlayer(nav, Modifier.navigationBarsPadding()) }
+        // 迷你播放条只在音乐收藏显示（其他模块收藏不显示）
+        bottomBar = {
+            if (module == "music") {
+                MusicMiniPlayer(nav, Modifier.navigationBarsPadding())
+            }
+        }
     ) { pad ->
         if (items.isEmpty()) {
             Box(

@@ -381,9 +381,11 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
                 }
             )
         },
-        // v0.302：底部迷你播放条（音乐分区点歌即播；未播放时自隐藏为零高度）
+        // v0.303：迷你播放条只在音乐分区显示（其他分区不显示）
         bottomBar = {
-            com.shangyin.app.ui.music.MusicMiniPlayer(nav, Modifier.navigationBarsPadding())
+            if (section == "music") {
+                com.shangyin.app.ui.music.MusicMiniPlayer(nav, Modifier.navigationBarsPadding())
+            }
         }
     ) { pad ->
         LazyColumn(

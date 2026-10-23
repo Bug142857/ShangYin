@@ -40,16 +40,20 @@ object PsiteClient {
     /** 年龄验证 cookie（部分地区无此 cookie 会出验证页而不是视频列表） */
     const val COOKIE = "accessAgeDisclaimerPH=1; age_verified=1; accessPH=1"
 
-    /** 排序档位：code 直接作 o= 参数；"" = 站点首页默认（Recently Featured） */
+    /**
+     * 排序档位：code 直接作 o= 参数；"" = 站点首页默认（Recently Featured，即「最新」）；
+     * "recommended" 走站点 /recommended 路径（v0.303）
+     */
     val SORTS = listOf(
-        "首页" to "",
+        "推荐" to "recommended",
+        "最新" to "",
         "最热" to "ht",
-        "最多观看" to "mv",
-        "最高评分" to "tr"
+        "人气" to "mv",
+        "高分" to "tr"
     )
 
-    /** 默认排序：最热 */
-    const val DEFAULT_SORT = "ht"
+    /** 默认排序：推荐（/recommended） */
+    const val DEFAULT_SORT = "recommended"
 
     // ---------------- 数据模型 ----------------
 
@@ -163,6 +167,15 @@ object PsiteClient {
         // 实测搜索接口不接受 o= 参数（404 Page Not Found），搜索态忽略排序档位
         val path: String = if (query.isNotBlank()) {
             "$BASE/video/search?search=${URLEncoder.encode(query.trim(), "UTF-8")}&page=$p"
+        } else if (sortCode == "recommended") {
+            // v0.303：推荐 = 站点 /recommended 页
+            buildString {
+                append("$BASE/recommended?")
+                val q = ArrayList<String>()
+                if (catId > 0) q.add("c=$catId")
+                q.add("page=$p")
+                append(q.joinToString("&"))
+            }
         } else {
             buildString {
                 append("$BASE/video?")

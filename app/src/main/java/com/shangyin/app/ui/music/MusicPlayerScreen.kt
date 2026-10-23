@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -111,6 +112,17 @@ fun MusicPlayerScreen(nav: NavHostController) {
     // 下载状态：downloading 为真时顶部按钮显示进度并禁止重复点击
     var downloading by remember { mutableStateOf(false) }
     var downloadPercent by remember { mutableIntStateOf(0) }
+    // v0.303：已下载过的歌显示对号（下载后 / 删除后都重新扫一次下载目录）
+    var downloadScan by remember { mutableIntStateOf(0) }
+    var downloadedNames by remember { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(song?.key, downloadScan) {
+        if (song == null) return@LaunchedEffect
+        downloadedNames = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.shangyin.app.data.download.MediaFileStore.musicSummary(context)
+                .entries.map { it.name.substringBeforeLast('.') }.toSet()
+        }
+    }
+    val songDownloaded = song != null && downloadedNames.any { it.startsWith(song.name) }
     // 下载失败原因（原文展示，不静默）
     var downloadError by remember { mutableStateOf<String?>(null) }
     downloadError?.let { text ->
@@ -138,6 +150,7 @@ fun MusicPlayerScreen(nav: NavHostController) {
             runCatching { MusicDownloader.download(context, target) { downloadPercent = it } }
                 .onSuccess { path ->
                     Toast.makeText(context, "已保存到 $path", Toast.LENGTH_LONG).show()
+                    downloadScan++ // 重新扫目录，下载按钮换对号
                 }
                 .onFailure { e -> downloadError = e.message ?: "下载失败" }
             downloading = false
@@ -207,6 +220,12 @@ fun MusicPlayerScreen(nav: NavHostController) {
                         Spacer(Modifier.width(6.dp))
                         Text("$downloadPercent%", style = MaterialTheme.typography.labelMedium)
                     }
+                }
+            } else if (songDownloaded) {
+                IconButton(onClick = {
+                    Toast.makeText(context, "该歌曲已下载", Toast.LENGTH_SHORT).show()
+                }) {
+                    Icon(Icons.Rounded.CheckCircle, contentDescription = "已下载")
                 }
             } else {
                 IconButton(onClick = { pendingDownload = song }) {

@@ -113,10 +113,29 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         else "暂无下载文件"
     }
 
+    // 版本号（标题右侧小字，v0.303 恢复显示）
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull().orEmpty()
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("配置管理") },
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("配置管理")
+                        if (versionName.isNotBlank()) {
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                "v$versionName",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")

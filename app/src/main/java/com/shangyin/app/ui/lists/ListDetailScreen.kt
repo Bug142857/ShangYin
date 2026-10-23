@@ -369,14 +369,17 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         },
         // 音乐清单里点歌后，页面底部常驻迷你播放条（没在播时不渲染）
         // 本页补上系统导航栏内边距，避免被三键导航遮住（组件本身不动，其它页面另处理）
+        // 迷你播放条只在音乐清单显示（其他清单不显示）
         bottomBar = {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface)
-                    .navigationBarsPadding()
-            ) {
-                com.shangyin.app.ui.music.MusicMiniPlayer(nav)
+            if (isMusicList) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface)
+                        .navigationBarsPadding()
+                ) {
+                    com.shangyin.app.ui.music.MusicMiniPlayer(nav)
+                }
             }
         }
     ) { pad ->

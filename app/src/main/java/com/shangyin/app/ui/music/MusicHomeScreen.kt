@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -55,10 +56,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -249,12 +253,33 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
                     .clickable { nav.safeNavigate("musicPlayer") }
                     .padding(start = 12.dp, end = 4.dp, top = 4.dp, bottom = 4.dp)
             ) {
-                CoverImage(
-                    url = song.cover,
-                    modifier = Modifier.size(40.dp),
-                    corner = 6.dp,
-                    placeholderText = song.name
-                )
+                // v0.303：本地下载的音乐没有封面 URL，读文件内嵌封面（下载时写入），
+                // 保证播放条封面与收藏里看到的一致
+                val localPath = if (song.platform == MusicPlatform.LOCAL) song.raw["path"].orEmpty() else ""
+                val localCover by produceState<android.graphics.Bitmap?>(null, localPath) {
+                    value = if (localPath.isBlank()) null
+                    else kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.shangyin.app.data.download.MediaFileStore.loadCoverFromPath(context, localPath)
+                    }
+                }
+                val cover = localCover
+                if (cover != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = cover.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                    )
+                } else {
+                    CoverImage(
+                        url = song.cover,
+                        modifier = Modifier.size(40.dp),
+                        corner = 6.dp,
+                        placeholderText = song.name
+                    )
+                }
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(

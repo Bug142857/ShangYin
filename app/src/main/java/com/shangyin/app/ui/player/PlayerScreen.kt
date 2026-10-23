@@ -39,6 +39,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
@@ -159,6 +160,8 @@ fun PlayerScreen(nav: NavHostController) {
     // v0.254：播放页实时下载进度角标——用户点下载后留在播放页，眼睛不在这，
     // 「后台进度条没动」的感知一半来自这里没有可见反馈。订阅同一 StateFlow
     val dlTasks by com.shangyin.app.data.download.VideoDownloadManager.active.collectAsState()
+    // v0.303：已下载库（按直链判断，右上角下载按钮变成对号）
+    val dlLibrary by com.shangyin.app.data.download.VideoDownloadManager.library.collectAsState()
     var groupIndex by remember {
         mutableIntStateOf(PlayerSession.groupIndex.coerceIn(0, (groups.size - 1).coerceAtLeast(0)))
     }
@@ -973,13 +976,20 @@ fun PlayerScreen(nav: NavHostController) {
                             // 下载/角标/全屏之间留 16dp 呼吸间距（0.277 反馈挤，0.278 再加大）
                             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                                 // 下载当前视频（v0.225）：先确认再下载（用户反馈不要静默开下）
+                                // v0.303：已下载过的直链显示对号，删除后（库变化）自动恢复成下载图标
                                 if (!isLive) {
+                                    val curEpUrl = groups.getOrNull(groupIndex)?.episodes
+                                        ?.getOrNull(currentEp)?.url.orEmpty()
+                                    val isDownloaded = curEpUrl.isNotBlank() &&
+                                        dlLibrary.any { it.sourceUrl == curEpUrl }
                                     IconButton(
                                         onClick = {
                                             val ep = groups.getOrNull(groupIndex)?.episodes?.getOrNull(currentEp)
                                             val url = ep?.url
                                             if (url.isNullOrBlank()) {
                                                 Toast.makeText(context, "没有可下载的地址", Toast.LENGTH_SHORT).show()
+                                            } else if (isDownloaded) {
+                                                Toast.makeText(context, "该视频已下载", Toast.LENGTH_SHORT).show()
                                             } else if (com.shangyin.app.data.download.VideoDownloadManager.isDownloading(url)) {
                                                 Toast.makeText(context, "该视频已在下载列表", Toast.LENGTH_SHORT).show()
                                             } else {
@@ -995,8 +1005,8 @@ fun PlayerScreen(nav: NavHostController) {
                                             .background(Color.Black.copy(alpha = 0.4f), CircleShape)
                                     ) {
                                         Icon(
-                                            Icons.Rounded.Download,
-                                            contentDescription = "下载视频",
+                                            if (isDownloaded) Icons.Rounded.CheckCircle else Icons.Rounded.Download,
+                                            contentDescription = if (isDownloaded) "已下载" else "下载视频",
                                             tint = Color.White,
                                             modifier = Modifier.size(20.dp)
                                         )

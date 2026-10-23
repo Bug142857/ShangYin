@@ -182,6 +182,15 @@ object MediaFileStore {
         }
     }.getOrDefault(MusicMeta())
 
+    /** 本地音频内嵌封面（播放条/播放页用；[path] 支持 content:// 与文件路径），读不到返回 null */
+    fun loadCoverFromPath(context: Context, path: String): Bitmap? {
+        if (path.isBlank()) return null
+        return loadMusicMeta(
+            context,
+            Entry(name = path.substringAfterLast('/'), size = 0, modified = 0, uri = path)
+        ).cover
+    }
+
     /**
      * 书籍封面（下载管理用）：PDF 取首页渲染，EPUB 从压缩包里找 cover 图片，
      * 其余格式返回 null（UI 用文件名占位）。

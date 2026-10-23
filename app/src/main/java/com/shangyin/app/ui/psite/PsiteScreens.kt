@@ -88,7 +88,7 @@ import kotlinx.coroutines.launch
 
 /**
  * P站（里世界第十入口）：pornhub.com 原生解析，无 WebView。
- * 搜索框 + 排序 tabs（首页/最热/最多观看/最高评分）+ 分类筛选（可展开）+ 双列网格 + 页码条；
+ * 搜索框 + 排序 tabs（推荐/最新/最热/人气/高分，默认推荐）+ 分类筛选（可展开）+ 双列网格 + 页码条；
  * 卡片点击先解析 flashvars 直链（HLS）再进播放器；0.291 起卡片支持爱心收藏（无下载）。
  */
 /** 播放：解析直链后进播放器（PlayerSession）；resolving 期间 UI 显示转圈。
@@ -116,6 +116,8 @@ fun playVideo(
             PlayerSession.startIndex = 0
             PlayerSession.startPosMs = 0L
             PlayerSession.isLive = false
+            // v0.303：带上列表封面，下载管理里的视频封面与页面一致
+            PlayerSession.coverUrl = video.thumbnail.orEmpty()
             // phncdn 实测仅 UA 即可（无 Referer 校验）；带 Referer 更接近浏览器形态
             PlayerSession.streamHeaders = mapOf(
                 "User-Agent" to PsiteClient.UA,

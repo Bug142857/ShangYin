@@ -38,6 +38,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.ArrowDropUp
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
@@ -79,6 +80,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import coil.compose.AsyncImage
 import com.shangyin.app.data.download.VideoDownloadManager
@@ -114,6 +116,8 @@ fun playPost(nav: NavHostController, post: XPost) {
     PlayerSession.startIndex = 0
     PlayerSession.startPosMs = 0L
     PlayerSession.isLive = false
+    // v0.303：带上列表封面，下载管理里的视频封面与页面一致
+    PlayerSession.coverUrl = post.thumbnail.orEmpty()
     // twimg 直链无需 Referer；UA 对齐客户端标准头
     PlayerSession.streamHeaders = mapOf("User-Agent" to XSiteClient.UA)
     nav.safeNavigate("player")
@@ -750,6 +754,9 @@ fun XSiteDetailScreen(nav: NavHostController, urlCd: String) {
     var detail by remember { mutableStateOf<com.shangyin.app.data.xsite.XSiteClient.XDetail?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    // v0.303：已下载库（按直链判断，下载按钮变对号）
+    val dlLibrary by com.shangyin.app.data.download.VideoDownloadManager.library
+        .collectAsStateWithLifecycle()
 
     fun reload() {
         loading = true
@@ -800,10 +807,18 @@ fun XSiteDetailScreen(nav: NavHostController, urlCd: String) {
                             }
                         )
                     }
-                    // 下载
+                    // 下载（已下载过则显示对号）
                     if (detail != null) {
-                        IconButton(onClick = { downloadPost(context, detail!!.post) }) {
-                            Icon(Icons.Rounded.Download, contentDescription = "下载")
+                        val post = detail!!.post
+                        val downloaded = dlLibrary.any { it.sourceUrl == post.videoUrl }
+                        IconButton(onClick = {
+                            if (downloaded) Toast.makeText(context, "该视频已下载", Toast.LENGTH_SHORT).show()
+                            else downloadPost(context, post)
+                        }) {
+                            Icon(
+                                if (downloaded) Icons.Rounded.CheckCircle else Icons.Rounded.Download,
+                                contentDescription = if (downloaded) "已下载" else "下载"
+                            )
                         }
                     }
                     // 原推直达
