@@ -183,19 +183,31 @@ object WygamerClient {
         return out
     }
 
+    /** 列表分页结果：items + 尾页页码（0 = 页面没给分页信息） */
+    data class GameListPage(val items: List<GameItem>, val lastPage: Int = 0)
+
+    /** 解析列表 + 尾页（分页链接里的 /page/N 最大值） */
+    private fun parsePage(d: Document): GameListPage {
+        val items = parseList(d)
+        val last = d.select("a[href*=/page/]").mapNotNull { a ->
+            Regex("""/page/(\d+)""").find(a.attr("href"))?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }.maxOrNull() ?: 0
+        return GameListPage(items, last)
+    }
+
     /** 首页最新列表（page 从 1 开始） */
-    suspend fun home(page: Int): List<GameItem> =
-        parseList(doc(if (page <= 1) "$BASE/" else "$BASE/page/$page"))
+    suspend fun home(page: Int): GameListPage =
+        parsePage(doc(if (page <= 1) "$BASE/" else "$BASE/page/$page"))
 
     /** 关键词搜索 */
-    suspend fun search(keyword: String, page: Int): List<GameItem> {
+    suspend fun search(keyword: String, page: Int): GameListPage {
         val e = URLEncoder.encode(keyword, "UTF-8")
-        return parseList(doc(if (page <= 1) "$BASE/?s=$e" else "$BASE/page/$page?s=$e"))
+        return parsePage(doc(if (page <= 1) "$BASE/?s=$e" else "$BASE/page/$page?s=$e"))
     }
 
     /** 分类列表（category.url 为分类首页地址） */
-    suspend fun category(categoryUrl: String, page: Int): List<GameItem> =
-        parseList(doc(if (page <= 1) categoryUrl else "${categoryUrl.trimEnd('/')}/page/$page"))
+    suspend fun category(categoryUrl: String, page: Int): GameListPage =
+        parsePage(doc(if (page <= 1) categoryUrl else "${categoryUrl.trimEnd('/')}/page/$page"))
 
     /**
      * 分类表：用 WP REST（返回干净、带条数，按条数降序 = 热门分类在前）。

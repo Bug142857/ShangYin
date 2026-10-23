@@ -2,9 +2,12 @@ package com.shangyin.app.ui.search
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,18 +15,25 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.ArrowDropUp
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.vod.VodClient
+import com.shangyin.app.data.vod.VodCategory
 import com.shangyin.app.data.vod.VodItem
 import com.shangyin.app.data.vod.VodSource
 import com.shangyin.app.ui.common.AppPageBar
@@ -59,6 +70,8 @@ import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * 番号模块（番1~番4，v0.304 重做）：
@@ -67,6 +80,7 @@ import kotlinx.coroutines.launch
  */
 private class H1CacheState {
     var keyword: String = ""
+    var typeId: Int? = null
     var items: List<VodItem> = emptyList()
     var total: Int = 0
     var lastPage: Int = 0
@@ -76,7 +90,7 @@ private class H1CacheState {
 
 private val H1Caches = mutableMapOf<Int, H1CacheState>()
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int = 0) {
     val context = LocalContext.current
@@ -104,20 +118,31 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
     var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
     var openingId by remember { mutableStateOf<Long?>(null) }
+    // v0.305：分类筛选 + 各分类数量（展开下拉后探测）
+    var categories by remember { mutableStateOf<List<com.shangyin.app.data.vod.VodCategory>>(emptyList()) }
+    var selectedType by remember { mutableStateOf<Int?>(cache.typeId) }
+    var catCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+    var catExpanded by remember { mutableStateOf(false) }
+    var reqSeq by remember { mutableIntStateOf(0) } // 竞态防护：只认最后一次请求
 
     fun load(target: Int) {
         val s = src ?: return
-        if (loading) return
+        val myReq = ++reqSeq
+        val kw = keyword
+        val type = selectedType
         loading = true
         scope.launch {
-            val resp = VodClient.fetchList(s, keyword, target)
+            val resp = VodClient.fetchList(s, kw, target, type)
+            if (myReq != reqSeq) return@launch
             if (resp != null) {
                 items = resp.list
                 total = resp.total
                 lastPage = resp.pagecount
                 page = target
                 failed = false
-                cache.keyword = keyword
+                if (resp.categories.isNotEmpty()) categories = resp.categories
+                cache.keyword = kw
+                cache.typeId = type
                 cache.items = resp.list
                 cache.total = resp.total
                 cache.lastPage = resp.pagecount
@@ -130,10 +155,39 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
         }
     }
 
-    // 首次进入 / 关键词变化 → 拉第一页；返回本页时用缓存恢复，不重复请求
-    LaunchedEffect(src?.id, keyword) {
+    // 分类表兜底（很多源 ac=videolist 不带 class）
+    LaunchedEffect(src?.id) {
+        val s = src ?: return@LaunchedEffect
+        if (categories.isEmpty()) {
+            runCatching { VodClient.fetchCategories(s) }.getOrNull()?.let {
+                if (it.isNotEmpty()) categories = it
+            }
+        }
+    }
+
+    // 展开分类下拉时并发探测各分类数量（限并发 6，失败保持未知）
+    LaunchedEffect(catExpanded, categories) {
+        val s = src ?: return@LaunchedEffect
+        if (!catExpanded || categories.isEmpty()) return@LaunchedEffect
+        val missing = categories.filter { it.type_id !in catCounts }
+        if (missing.isEmpty()) return@LaunchedEffect
+        val sem = kotlinx.coroutines.sync.Semaphore(6)
+        kotlinx.coroutines.coroutineScope {
+            missing.forEach { cat ->
+                launch {
+                    sem.withPermit {
+                        runCatching { VodClient.fetchList(s, "", 1, cat.type_id)?.total }.getOrNull()
+                            ?.let { catCounts = catCounts + (cat.type_id to it) }
+                    }
+                }
+            }
+        }
+    }
+
+    // 首次进入 / 关键词 / 分类变化 → 拉第一页；返回本页时用缓存恢复，不重复请求
+    LaunchedEffect(src?.id, keyword, selectedType) {
         if (src == null) return@LaunchedEffect
-        if (cache.loaded && cache.keyword == keyword) return@LaunchedEffect
+        if (cache.loaded && cache.keyword == keyword && cache.typeId == selectedType) return@LaunchedEffect
         items = emptyList()
         total = 0
         lastPage = 0
@@ -223,6 +277,81 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
 
+            // 分类筛选（v0.305 恢复：收起=横滑一行；展开=换行 chips，带各自数量）
+            if (keyword.isBlank() && categories.isNotEmpty()) {
+                if (!catExpanded) {
+                    Row(
+                        Modifier.padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
+                            FilterChip(
+                                selected = selectedType == null,
+                                onClick = { selectedType = null },
+                                label = { Text("全部") },
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            categories.forEach { c ->
+                                FilterChip(
+                                    selected = selectedType == c.type_id,
+                                    onClick = { selectedType = c.type_id },
+                                    label = { Text(h1CatLabel(c, catCounts)) },
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                        }
+                        IconButton(onClick = { catExpanded = true }) {
+                            Icon(Icons.Rounded.ArrowDropDown, contentDescription = "展开分类")
+                        }
+                    }
+                } else {
+                    Column(
+                        Modifier
+                            .padding(horizontal = 12.dp, vertical = 2.dp)
+                            .heightIn(max = 280.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "全部分类",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            IconButton(onClick = { catExpanded = false }) {
+                                Icon(Icons.Rounded.ArrowDropUp, contentDescription = "收起分类")
+                            }
+                        }
+                        FlowRow(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedType == null,
+                                onClick = { selectedType = null; catExpanded = false },
+                                label = { Text("全部") }
+                            )
+                            categories.forEach { c ->
+                                FilterChip(
+                                    selected = selectedType == c.type_id,
+                                    onClick = { selectedType = c.type_id; catExpanded = false },
+                                    label = { Text(h1CatLabel(c, catCounts)) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             when {
                 loading && items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
@@ -265,17 +394,20 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                                 onClick = { play(item) }
                             )
                         }
+                        // 底部页码条（v0.305：样式与 X 站一致，跟着列表滚到最后才出现）
+                        item(key = "footer", span = { GridItemSpan(3) }) {
+                            AppPageBar(
+                                currentPage = page,
+                                lastPage = lastPage,
+                                loading = loading,
+                                onGo = { p -> if (!loading) load(p) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                                    .navigationBarsPadding()
+                            )
+                        }
                     }
-                    // 底部页码条（v0.304：与吃瓜/P站/X站一致）
-                    AppPageBar(
-                        currentPage = page,
-                        lastPage = lastPage,
-                        loading = loading,
-                        onGo = { p -> if (!loading) load(p) },
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                            .navigationBarsPadding()
-                    )
                 }
             }
         }
@@ -372,6 +504,10 @@ private fun H1GridCard(
         )
     }
 }
+
+/** 分类 chip 文案：`名称 (数量)`；数量未探测到就只显示名称 */
+private fun h1CatLabel(cat: VodCategory, counts: Map<Int, Int>): String =
+    cat.type_name + (counts[cat.type_id]?.let { " ($it)" } ?: "")
 
 /**
  * 时长展示：优先用源给的 vod_duration；没有时从备注里找「mm:ss / hh:mm:ss / N分钟」。

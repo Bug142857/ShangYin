@@ -146,6 +146,7 @@ private object PsiteCache {
     var category: Int = 0     // 0 = 全部
     var query: String = ""
     var page: Int = 1
+    var lastPage: Int = 0
     var items: List<PVideo> = emptyList()
     var scrollIndex: Int = 0
 }
@@ -165,6 +166,7 @@ fun PsiteHomeScreen(nav: NavHostController) {
     var input by remember { mutableStateOf(PsiteCache.query) } // 搜索框草稿
     var restoredRef by remember { mutableStateOf(PsiteCache.items.isNotEmpty()) }
     var items by remember { mutableStateOf(PsiteCache.items) }
+    var lastPage by remember { mutableIntStateOf(PsiteCache.lastPage) }
     var loading by remember { mutableStateOf(PsiteCache.items.isEmpty()) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshing by remember { mutableStateOf(false) }
@@ -184,16 +186,18 @@ fun PsiteHomeScreen(nav: NavHostController) {
         error = null
         scope.launch {
             try {
-                val list = PsiteClient.list(s, c, q, page)
+                val resp = PsiteClient.list(s, c, q, page)
                 if (myReq != reqSeq) return@launch
-                items = list
+                items = resp.items
+                lastPage = resp.lastPage
                 currentPage = page
                 gridState.scrollToItem(0)
                 PsiteCache.sort = s
                 PsiteCache.category = c
                 PsiteCache.query = q
                 PsiteCache.page = page
-                PsiteCache.items = list
+                PsiteCache.lastPage = resp.lastPage
+                PsiteCache.items = resp.items
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -432,13 +436,15 @@ fun PsiteHomeScreen(nav: NavHostController) {
                             error = null
                             val s = sort; val c = category; val q = query
                             runCatching { PsiteClient.list(s, c, q, 1) }
-                                .onSuccess { list ->
+                                .onSuccess { p ->
                                     if (myReq != reqSeq) return@onSuccess
-                                    items = list
+                                    items = p.items
+                                    lastPage = p.lastPage
                                     currentPage = 1
                                     gridState.scrollToItem(0)
                                     PsiteCache.page = 1
-                                    PsiteCache.items = list
+                                    PsiteCache.lastPage = p.lastPage
+                                    PsiteCache.items = p.items
                                 }
                                 .onFailure { e ->
                                     if (e is kotlinx.coroutines.CancellationException) throw e
@@ -467,10 +473,11 @@ fun PsiteHomeScreen(nav: NavHostController) {
                                 if (!resolving) playVideo(scope, nav, context, video) { resolving = it }
                             })
                         }
-                        // 底部页码条（跨双列；站点分页无总页数，用相邻窗口 + 跳页）
+                        // 底部页码条（跨双列；v0.305 解析出尾页，与 X 站/吃瓜一致）
                         item(key = "footer", span = { GridItemSpan(maxLineSpan) }) {
-                            PPageBar(
+                            com.shangyin.app.ui.common.AppPageBar(
                                 currentPage = currentPage,
+                                lastPage = lastPage,
                                 loading = loading,
                                 onGo = { loadNav(it) },
                                 modifier = Modifier

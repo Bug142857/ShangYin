@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -128,8 +129,9 @@ fun GameHomeScreen(nav: NavHostController) {
     var keyword by rememberSaveable { mutableStateOf("") }    // 非空=搜索模式
     var input by rememberSaveable { mutableStateOf("") }
     var items by remember { mutableStateOf<List<GameItem>>(emptyList()) }
-    // v0.304：页码条模式（站点不暴露总页数，末页未知）
+    // v0.304：页码条模式（v0.305：解析站点分页链接得到尾页）
     var curPage by remember { mutableStateOf(1) }
+    var lastPage by remember { mutableStateOf(0) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var categories by remember { mutableStateOf<List<GameCategory>>(emptyList()) }
@@ -148,13 +150,14 @@ fun GameHomeScreen(nav: NavHostController) {
                     catUrl.isNotBlank() -> WygamerClient.category(catUrl, target)
                     else -> WygamerClient.home(target)
                 }
-            }.onSuccess { list ->
-                if (list.isEmpty() && target > 1) {
+            }.onSuccess { p ->
+                if (p.items.isEmpty() && target > 1) {
                     // 越界：停在原页并提示
                     Toast.makeText(context, "已经是最后一页", Toast.LENGTH_SHORT).show()
                 } else {
                     curPage = target
-                    items = list.distinctBy { it.id }
+                    items = p.items.distinctBy { it.id }
+                    lastPage = p.lastPage
                     cacheJson = gameJson.encodeToString(GameHomeCache(catUrl, keyword, target, items))
                 }
             }.onFailure { e ->
@@ -185,6 +188,7 @@ fun GameHomeScreen(nav: NavHostController) {
         if (k != loadedKey) {
             loadedKey = k
             curPage = 1
+            lastPage = 0
             items = emptyList()
             loadPage(1)
         }
@@ -318,28 +322,29 @@ fun GameHomeScreen(nav: NavHostController) {
                 items.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("没有找到游戏", color = MaterialTheme.colorScheme.outline)
                 }
-                else -> Column(Modifier.fillMaxSize()) {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        contentPadding = PaddingValues(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        items(items.size, key = { items[it].id }) { i ->
-                            GameGridCard(items[i]) { nav.safeNavigate("gameDetail/${items[i].id}") }
-                        }
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    contentPadding = PaddingValues(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    items(items.size, key = { items[it].id }) { i ->
+                        GameGridCard(items[i]) { nav.safeNavigate("gameDetail/${items[i].id}") }
                     }
-                    // v0.304：底部页码条（站点不暴露总页数 → 末页未知模式，可跳页）
-                    com.shangyin.app.ui.common.AppPageBar(
-                        currentPage = curPage,
-                        lastPage = 0,
-                        loading = loading,
-                        onGo = { p -> if (!loading) loadPage(p) },
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                            .navigationBarsPadding()
-                    )
+                    // 底部页码条（跨双列；v0.305 样式与 X 站一致，跟着列表滚到底才出现）
+                    item(key = "footer", span = { GridItemSpan(maxLineSpan) }) {
+                        com.shangyin.app.ui.common.AppPageBar(
+                            currentPage = curPage,
+                            lastPage = lastPage,
+                            loading = loading,
+                            onGo = { p -> if (!loading) loadPage(p) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                                .navigationBarsPadding()
+                        )
+                    }
                 }
             }
         }

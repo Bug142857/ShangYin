@@ -151,6 +151,9 @@ object PsiteClient {
 
     // ---------------- 列表 ----------------
 
+    /** 列表结果 + 尾页（v0.305：页码条显示尾页用；0 = 没解析到） */
+    data class PListPage(val items: List<PVideo>, val lastPage: Int = 0)
+
     /**
      * 拉取视频列表。
      * @param sortCode SORTS 的 code（"" = 首页默认）
@@ -162,7 +165,7 @@ object PsiteClient {
         catId: Int,
         query: String,
         page: Int
-    ): List<PVideo> = withContext(Dispatchers.IO) {
+    ): PListPage = withContext(Dispatchers.IO) {
         val p = page.coerceAtLeast(1)
         // 实测搜索接口不接受 o= 参数（404 Page Not Found），搜索态忽略排序档位
         val path: String = if (query.isNotBlank()) {
@@ -186,19 +189,35 @@ object PsiteClient {
                 append(q.joinToString("&"))
             }
         }
-        parseList(httpGet(path))
+        val html = httpGet(path)
+        PListPage(parseList(html), lastPageOf(html))
     }
+
+    /** 从列表页 HTML 里找分页链接的最大页码（站点末页按钮带 page=N）；找不到返回 0 */
+    private fun lastPageOf(html: String): Int =
+        Regex("""[?&]page=(\d+)""").findAll(html)
+            .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+            .maxOrNull() ?: 0
 
     /**
      * 某分类的视频数量文案（v0.304：分类下拉显示数量）。
-     * 站点不提供数字接口，从分类页 HTML 里抓「1.2M Videos」这类计数；拿不到返回 null。
+     * 先抓页面上的「1.2M Videos」；抓不到就用「尾页 × 每页条数」估算（站点没有数字接口）。
      */
     suspend fun categoryCount(catId: Int): String? = withContext(Dispatchers.IO) {
-        val html = httpGet("$BASE/video?c=$catId") ?: return@withContext null
-        Regex("""([\d.,]+\s*[KMB]?)\+?\s*[Vv]ideos""").find(html)
-            ?.groupValues?.getOrNull(1)?.replace(" ", "")?.trim()
-            ?.takeIf { it.isNotBlank() }
+        runCatching {
+            val html = httpGet("$BASE/video?c=$catId")
+            val direct = Regex("""([\d.,]+\s*[KMB]?)\+?\s*[Vv]ideos""")
+                .find(html)?.groupValues?.getOrNull(1)?.replace(" ", "")?.trim()
+            if (!direct.isNullOrBlank()) return@runCatching direct
+            val last = lastPageOf(html)
+            val per = parseList(html).size
+            if (last > 0 && per > 0) formatCount(last * per) else null
+        }.getOrNull()
     }
+
+    /** 数量文案：1 万以上折成「x.x万」 */
+    private fun formatCount(n: Int): String =
+        if (n >= 10000) "%.1f万".format(n / 10000.0) else n.toString()
 
     /** 从列表页 HTML 解析视频条目（列表/搜索同构标记） */
     internal fun parseList(html: String): List<PVideo> {
