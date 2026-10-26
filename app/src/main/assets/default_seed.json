@@ -431,16 +431,14 @@
                            "testAt":  1789438238490
                        }
                    ],
-    "liveSources":  {
-                        "value":  [
-                                      {
-                                          "id":  "iptv4",
-                                          "name":  "IPv4 直播源",
-                                          "url":  "https://gh-proxy.com/raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.m3u"
-                                      }
-                                  ],
-                        "Count":  1
-                    },
+    "liveSources":  [
+                        {
+                            "id":  "iptv4",
+                            "name":  "IPv4 直播源",
+                            "url":  "https://gh-proxy.com/raw.githubusercontent.com/vbskycn/iptv/refs/heads/master/tv/iptv4.m3u",
+                            "enabled":  true
+                        }
+                    ],
     "lists":  [
                   {
                       "id":  1,

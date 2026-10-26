@@ -173,7 +173,9 @@ object SettingsStore {
         get() = sp.getLong(KEY_CACHE_CLEARED_VERSION, 0L)
         set(v) = sp.edit().putLong(KEY_CACHE_CLEARED_VERSION, v).apply()
 
-    private const val KEY_DEFAULT_SEED_DONE = "default_seed_v1"
+    // v0.312：v0.311 的资产里 liveSources 不是数组，导致电视源没播上；换个 key 让老用户重跑一次
+    // （播种只填"空着的"数据，已有数据不会被覆盖，所以重跑安全）
+    private const val KEY_DEFAULT_SEED_DONE = "default_seed_v2"
 
     /** 是否已完成「首次启动默认数据」播种（v0.311：影视源/电视源/表世界清单） */
     var defaultSeedDone: Boolean

@@ -60,6 +60,8 @@ object DefaultSeed {
             )
         }.filter { it.id.isNotBlank() && it.baseUrl.isNotBlank() }
         if (list.isNotEmpty()) SettingsStore.setVodSources(list)
+        // 资产里没有/格式坏了：退回代码内置默认，至少保证有源可用
+        else SettingsStore.ensureDefaultVodSourcesSeeded()
     }
 
     private fun seedLiveSources(root: JSONObject) {
@@ -74,6 +76,9 @@ object DefaultSeed {
             )
         }.filter { it.id.isNotBlank() && it.url.isNotBlank() }
         if (list.isNotEmpty()) SettingsStore.setLiveSources(list)
+        // v0.312 修复：资产里 liveSources 曾因生成脚本问题不是数组（optJSONArray 直接返回 null），
+        // 导致电视源一条都没播上；这里兜底用代码内置默认源。
+        else SettingsStore.ensureDefaultLiveSourcesSeeded()
     }
 
     /** 表世界清单：清单 + 条目 + 关联一次性灌入（保留原 id，维持父子层级） */
