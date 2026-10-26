@@ -4,7 +4,9 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -44,6 +46,14 @@ fun dragReorderModifier(
         w.dp.toPx()
     }
 
+    // v0.308 修复：pointerInput 只以 itemId 为 key，内部闭包会一直停留在**首次组合**时捕获的那份
+    // 回调 → 表现为「点第一次有效、第二次没反应」「删的是旧数据」，必须返回重进才恢复。
+    // 这里统一通过 rememberUpdatedState 取最新回调。
+    val currentOnTap by rememberUpdatedState(onTap)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+    val currentOnReorder by rememberUpdatedState(onReorder)
+    val currentOnDragStateChange by rememberUpdatedState(onDragStateChange)
+
     return Modifier.pointerInput(itemId) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)
@@ -70,7 +80,7 @@ fun dragReorderModifier(
                 } else if (state == 1) {
                     if (abs(dy) > viewConfiguration.touchSlop / 2 || abs(dx) > viewConfiguration.touchSlop / 2) {
                         state = 2
-                        onDragStateChange(itemId)
+                        currentOnDragStateChange(itemId)
                         totalY = 0f
                         totalX = 0f
                         c.consume()
@@ -90,7 +100,7 @@ fun dragReorderModifier(
                         if (idx >= 0) {
                             val target = idx + dir * cols
                             if (target in currentIdsState.value.indices) {
-                                scope.launch { onReorder(idx, target) }
+                                scope.launch { currentOnReorder(idx, target) }
                                 totalY -= dir * itemHeightPx
                             } else {
                                 totalY = 0f
@@ -104,7 +114,7 @@ fun dragReorderModifier(
                         if (idx >= 0) {
                             val target = idx + dir
                             if (target in currentIdsState.value.indices && idx / cols == target / cols) {
-                                scope.launch { onReorder(idx, target) }
+                                scope.launch { currentOnReorder(idx, target) }
                                 totalX -= dir * itemWidthPx
                             } else {
                                 totalX = 0f
@@ -116,9 +126,9 @@ fun dragReorderModifier(
 
             lpJob.cancel()
             when (state) {
-                0 -> onTap()           // 快速抬起 → 点击
-                1 -> onLongPress()     // 长按不动 → 删除确认
-                2 -> onDragStateChange(null) // 拖拽结束
+                0 -> currentOnTap()           // 快速抬起 → 点击
+                1 -> currentOnLongPress()     // 长按不动 → 删除确认
+                2 -> currentOnDragStateChange(null) // 拖拽结束
                 // -1: 移动取消（滚动），不触发任何操作
             }
         }

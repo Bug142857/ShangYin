@@ -174,7 +174,13 @@ private fun DraggableModuleGrid(
                                 currentIdsState = idsState,
                                 onDragStateChange = { },
                                 onReorder = { from, to -> onReorder(from, to) },
-                                onTap = { SettingsStore.setInnerModuleEnabled(m.key, !on) },
+                                // 直接读实时开关状态再取反：避免闭包里捕获到旧值导致"第二次点击无效"
+                                onTap = {
+                                    SettingsStore.setInnerModuleEnabled(
+                                        m.key,
+                                        m.key in SettingsStore.disabledInnerModules.value
+                                    )
+                                },
                                 onLongPress = { },
                                 itemHeightDp = 100
                             )

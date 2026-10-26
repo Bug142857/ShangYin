@@ -68,15 +68,15 @@ import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
-import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
 /**
- * 番号模块（番1~番4，v0.304 重做）：
+ * 番号模块（番1~番4，v0.304 重做，v0.308 改固定源）：
  * 打开即为「搜索框 + 该片源全部影片网格 + 底部页码条」，不再按源分组横滑。
- * 第 N 个模块对应外网目录里第 N 个启用中的片源；封面显示时长（源提供时）。
+ * 番1~番4 **固定绑定** [H1_FIXED_SOURCES] 里的四个站，不再依赖"片源管理 → 外网目录"的顺序
+ * （用户 2026-10-23 指定），所以片源配置怎么删改都不影响番号模块。
  */
 private class H1CacheState {
     var keyword: String = ""
@@ -90,6 +90,25 @@ private class H1CacheState {
 
 private val H1Caches = mutableMapOf<Int, H1CacheState>()
 
+/** 番1~番4 固定绑定的片源（用户 2026-10-23 指定，与片源管理里的配置完全解耦） */
+private val H1_FIXED_SOURCES = listOf(
+    "hsckzy.vip" to "https://hsckzy.vip/api.php/provide/vod",
+    "91md.me" to "https://91md.me/api.php/provide/vod",
+    "naixxzy.com" to "https://Naixxzy.com/api.php/provide/vod",
+    "jingpinx.com" to "https://www.jingpinx.com/api.php/provide/vod"
+)
+
+private fun h1FixedSource(idx: Int): VodSource? {
+    val (name, url) = H1_FIXED_SOURCES.getOrNull(idx - 1) ?: return null
+    return VodSource(
+        id = "h1_fixed_$idx",
+        name = name,
+        baseUrl = url,
+        enabled = true,
+        region = "proxy"
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int = 0) {
@@ -101,12 +120,8 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
         runCatching { java.net.URLDecoder.decode(kwEncoded, "UTF-8") }.getOrDefault(kwEncoded)
     }
 
-    // 第 N 个启用中的外网片源
-    val src: VodSource? = remember(idx) {
-        SettingsStore.getVodSources()
-            .filter { it.enabled && it.region == "proxy" }
-            .getOrNull(idx - 1)
-    }
+    // 番1~番4 = 固定的四个片源（v0.308，用户指定；不再读片源管理里的外网目录）
+    val src: VodSource? = remember(idx) { h1FixedSource(idx) }
     val cache = remember(idx) { H1Caches.getOrPut(idx) { H1CacheState() } }
 
     var input by remember { mutableStateOf(cache.keyword.ifBlank { initialKw.trim() }) }
@@ -247,15 +262,13 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Text("番$idx 还没有对应片源", style = MaterialTheme.typography.titleMedium)
+                Text("番$idx 没有对应片源", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "番1~番4 依次对应外网目录里第 1~4 个启用中的片源；到片源管理里添加/启用片源后即可使用。",
+                    "番1~番4 固定对应 4 个片源站点，只有番1~番4 四个入口。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(Modifier.height(16.dp))
-                Button(onClick = { nav.safeNavigate("vodSources") }) { Text("去片源管理") }
             }
             return@Scaffold
         }
