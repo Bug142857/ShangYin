@@ -195,6 +195,12 @@
   ① **P站页码条回到「末页未知」模式**（用户：页数太多不显示页数，只显示当前±2页、左右箭头可无限翻）：`PsiteClient.list()` 改回返回 `List<PVideo>`（撤掉 v0.306 的 `PListPage`），UI 传 `AppPageBar(lastPage = 0)`。`lastPageOf()` 保留（P站分类数量估算还在用）。
   ② **番号隐藏空分类**：`visibleCats = categories.filter { (catCounts[it.type_id] ?: 1) > 0 }`，探测到 0 的分类从横滑/下拉里消失；未探测到的先按有资源显示（与 SourceBrowseScreen 同一套规则）。
   ③ 发版记录：commit `ea690aa` / tag `v0.307` / **Release `421648993`** / 资产 `LaoZhengFenXiang-0.307.apk`（20,317,731 字节，SHA256 `AF6A27C5462A9F4CC620F6DB251B97149246BEE17C81CB4511D0D2C6FB407F16`）；桌面已更新为 `老郑分享-0.307.apk`。
+- **v0.311（默认数据内置，2026-10-26）**：用户提供备份 `老郑分享_20261026_110104.json`，要求「app 的默认数据用这个 json 里的影视源、电视源以及表世界的清单」，并「账号管理说明文字里把哔咔删掉」。
+  ① **说明文字**：`SettingsScreen` 账号管理卡片 hint `"豆瓣·哔咔·无忧·Zlib"` → `"豆瓣·无忧·Zlib"`。
+  ② **默认数据资产化**：新建 `app/src/main/assets/default_seed.json`（1.0MB，由用户备份裁剪：39 个影视源、1 个电视源、63 个表世界清单、457 个条目、457 条关联；**不含**里世界收藏/登录态/下载记录）。
+  ③ **播种逻辑**：新增 `data/DefaultSeed.kt` —— `App.onCreate` 里 IO 协程调用 `seedIfNeeded()`：影视源为空→写、电视源为空→写、库中无任何清单且无条目→一次性写清单+条目+关联（`Repo.hasAnyCollection()` / `Repo.seedCollectionData()`，保留原 id 维持父子层级与排序）；完成后置 `SettingsStore.defaultSeedDone`（`default_seed_v1`，已加入 `NON_BACKUP_KEYS`）。**只对"对应数据为空"生效，老用户已有数据一律不覆盖**；资产缺失时退回原 `ensureDefaultVodSourcesSeeded/ensureDefaultLiveSourcesSeeded`（旧常量仍保留作兜底，不再是主路径）。
+  ④ 注意：已安装用户想看到这套默认数据需清应用数据/重装；覆盖升级不会覆盖现有数据。
+  ⑤ 发版记录：commit `25f52f0` / tag `v0.311` / **Release `423822383`** / 资产 `LaoZhengFenXiang-0.311.apk`（20,586,753 字节）；桌面已更新为 `老郑分享-0.311.apk`。
 - **v0.310（哔咔内置账号 + 注册入口，2026-10-26）**：用户要求「哔咔登录按方案2改，把这项在登录管理里隐藏，账号 dblz123007 / 密码 123qweasd 默认存在 app 里，新用户直接用；账号管理里其他项后面加注册按钮」。
   ① **登录区分网络与账密**：`BikaClient` 新增 `BikaNetworkException`（连不上/超时/被墙/空响应/解析失败统一转成它）+ `autoSignInResult(): Boolean?`（true=成功；false=账密缺失或被拒；null=网络问题）。`withAuth()` 在 401 后用三态决定：成功→重放请求；false→清 token 抛「登录已失效」；**null→保留 token**、抛「网络不通…」，下次请求自动重试。`sessionOk()` 同样 null 时不清 token。⚠️ 旧实现把网络失败当账密失败 → 清 token → 本子页卡在"未登录"要手动登，这是用户问题的根因。
   ② **内置账号**：`SettingsStore.ensureDefaultBikaAccountSeeded()`（`DEFAULT_BIKA_ACCOUNT="dblz123007"` / `DEFAULT_BIKA_PASSWORD="123qweasd"`），`App.onCreate` 里调用；只在本地无账密时写入，不覆盖用户自填。**凭据是明文硬编码在源码里的（仓库公开），存在被滥用/封号风险，用户知情并要求如此**。
