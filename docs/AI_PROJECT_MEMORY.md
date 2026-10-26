@@ -195,6 +195,10 @@
   ① **P站页码条回到「末页未知」模式**（用户：页数太多不显示页数，只显示当前±2页、左右箭头可无限翻）：`PsiteClient.list()` 改回返回 `List<PVideo>`（撤掉 v0.306 的 `PListPage`），UI 传 `AppPageBar(lastPage = 0)`。`lastPageOf()` 保留（P站分类数量估算还在用）。
   ② **番号隐藏空分类**：`visibleCats = categories.filter { (catCounts[it.type_id] ?: 1) > 0 }`，探测到 0 的分类从横滑/下拉里消失；未探测到的先按有资源显示（与 SourceBrowseScreen 同一套规则）。
   ③ 发版记录：commit `ea690aa` / tag `v0.307` / **Release `421648993`** / 资产 `LaoZhengFenXiang-0.307.apk`（20,317,731 字节，SHA256 `AF6A27C5462A9F4CC620F6DB251B97149246BEE17C81CB4511D0D2C6FB407F16`）；桌面已更新为 `老郑分享-0.307.apk`。
+- **v0.309（模块开关 + 番号固定片源，2026-10-23）**：
+  ① **模块管理点图标第二次点击无效**（用户：需返回再进才可以）。根因：`dragReorderModifier` 里 `pointerInput(itemId)` 只以 `itemId` 为 key，lambda 捕获的是**首次组合**时的 `onTap/onLongPress/onReorder`，state 更新后不会重建 → 第二次点击仍用旧的 `!on`（=关），看起来"没反应"；**同类隐患影响所有用该手势的页面**（列表长按删除删到旧数据等）。修复：`DragReorder.kt` 内统一 `rememberUpdatedState` 包四个回调（`currentOnTap/currentOnLongPress/currentOnReorder/currentOnDragStateChange`），并在 `ModuleManageScreen` 让 onTap 直接读 `SettingsStore.disabledInnerModules.value` 取反，双重保险。⚠️ 通用教训：**`pointerInput(key)` 内使用的回调必须走 rememberUpdatedState**，否则只有重进页面才恢复。
+  ② **番1~番4 改为固定片源**（用户指定，不再按"外网目录第 N 个启用源"）：`H1SearchScreen` 新增 `H1_FIXED_SOURCES`（hsckzy.vip / 91md.me / Naixxzy.com / jingpinx.com 的 `/api.php/provide/vod`）与 `h1FixedSource(idx)`，构造 `VodSource(id="h1_fixed_$idx", region="proxy")`；空态文案同步改为"固定对应 4 个片源"，去掉「去片源管理」按钮。
+  ③ 发版记录：commit `79de758` / tag `v0.309` / **Release `423791186`** / 资产 `LaoZhengFenXiang-0.309.apk`（20,317,731 字节）；桌面已更新为 `老郑分享-0.309.apk`。
 - **v0.308（备份全量 + 缓存修复，2026-10-23）**：用户连问「缓存机制都没问题吧 看过的页面图片啥的不用再打开重新加载吧 / 数据备份够全吗 除了播放位置记忆啥的其他的包括以后新增的都要有数据备份导入导出或上传」，补充「倒是不用自动备份 数据导出和上传这我手动就行」。
   ① **备份改为全量键（不再维护白名单）**：`SettingsStore.exportConfig()` 从「遍历 `ConfigBackup.KEYS`」改为「遍历 `sp.all`」，`isBackupKey(key)` = 排除 `last_cloud_sync`、`cache_cleared_version` 与 `vod_progress_*`（播放位置记忆，用户明确不备份）。值编码加类型前缀 `@b:`/`@s:`/`@i:`/`@l:`/`@f:`（String 原样），导入按前缀还原类型 → **以后新增任何键/任何类型自动进出备份**；旧备份无前缀仍兼容（`BOOLEAN_BACKUP_KEYS` + `disabled_inner_modules` 特判保留）。`ConfigBackup` 的公共目录自动备份/补缺恢复同步改为全量键（该机制早就存在，用户说"不用自动备份"，故**未新增也未删除**，只统一范围）。
   ② **`regionManual` 修复**：`ExportJson` 片源序列化补该字段（以前导入后自动测试归组会覆盖用户手选目录）。
