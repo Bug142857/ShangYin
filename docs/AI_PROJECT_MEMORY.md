@@ -199,7 +199,7 @@
   ① **根因**：v0.311 生成 `assets/default_seed.json` 时，`liveSources` 被 PowerShell 5.1 序列化成了**对象** `{ "value":[...], "Count":1 }`（`($config.live_sources_json | ConvertFrom-Json)` 单元素数组被管道展开），`root.optJSONArray("liveSources")` 直接返回 null → 电视源一条都没写。（同类坑：PS 5.1 里单元素数组经 `|` 会散开，写 JSON 要用 `[object[]]@(...)` 包一层。）
   ② **修复**：资产里 `liveSources` 重新生成为真正的数组（文件内 5 个数组字段已用正则逐个核对）；`DefaultSeed.seedVodSources/seedLiveSources` 在解析结果为空时**兜底调用** `ensureDefaultVodSourcesSeeded()/ensureDefaultLiveSourcesSeeded()`，以后资产坏掉也不会静默丢源。
   ③ **让 v0.311 老用户也修好**：`KEY_DEFAULT_SEED_DONE` 从 `default_seed_v1` 改成 `default_seed_v2`，升级后会重跑一次播种（只填空数据，已有数据不动）。
-  ④ 发版：本地 commit `9217e52` / tag `v0.312`；**推送与 Release 因网络中断未完成**（github.com:443 连接被重置，本机 7890/7899/10809 等常用代理端口均未监听）——待网络恢复后需补 `git push origin main`、`git push origin v0.312`、建 Release 并上传 `LaoZhengFenXiang-0.312.apk`。桌面已放 `老郑分享-0.312.apk`（20,586,717 字节，已核对 APK 内 assets 的 liveSources 是数组）。
+  ④ 发版：commit `9217e52`（记忆同步 `3d670d7`）/ tag `v0.312` / **Release `423920833`** / 资产 `LaoZhengFenXiang-0.312.apk`（20,586,717 字节）；桌面已更新为 `老郑分享-0.312.apk`。⚠️ 本次发版途中遇到**网络中断**（先 `Connection was reset`，后 DNS 解析失败，本机 7890/7899/10809 等代理端口均未监听），代码与 tag 先落本地，用户恢复网络后才补 push 与建 Release —— 以后遇到同类失败要如实说明「已本地提交、未推送」，恢复后一次性补齐。
 - **v0.311（默认数据内置，2026-10-26）**：用户提供备份 `老郑分享_20261026_110104.json`，要求「app 的默认数据用这个 json 里的影视源、电视源以及表世界的清单」，并「账号管理说明文字里把哔咔删掉」。
   ① **说明文字**：`SettingsScreen` 账号管理卡片 hint `"豆瓣·哔咔·无忧·Zlib"` → `"豆瓣·无忧·Zlib"`。
   ② **默认数据资产化**：新建 `app/src/main/assets/default_seed.json`（1.0MB，由用户备份裁剪：39 个影视源、1 个电视源、63 个表世界清单、457 个条目、457 条关联；**不含**里世界收藏/登录态/下载记录）。
