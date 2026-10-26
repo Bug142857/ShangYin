@@ -201,9 +201,14 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
     // 下载确认：点击后先弹窗问一次是否下载（用户要求所有下载操作都要确认）；空列表 = 单本（下载本篇）
     var pendingDownload by remember { mutableStateOf<List<BikaChapter>?>(null) }
 
-    /** 登录失效已由 BikaClient.withAuth 自动重新注册，二次失败提示返回 */
-    fun handleAuthError() {
-        Toast.makeText(context, "哔咔账号异常，请重新进入", Toast.LENGTH_LONG).show()
+    /** 登录失效已由 BikaClient.withAuth 自动重登；二次失败时区分「网络不通」与「账号异常」 */
+    fun handleAuthError(e: Throwable) {
+        if (e.message.orEmpty().contains("网络")) {
+            // v0.310：网络问题不清 token，留在本页让用户重试即可
+            Toast.makeText(context, "网络不通，请检查外网环境后重试", Toast.LENGTH_LONG).show()
+            return
+        }
+        Toast.makeText(context, "内置哔咔账号异常，请稍后重试", Toast.LENGTH_LONG).show()
         nav.safePopBackStack()
     }
 
@@ -225,7 +230,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     persistCache()
                 }
                 .onFailure {
-                    if (it is BikaClient.BikaAuthException) handleAuthError()
+                    if (it is BikaClient.BikaAuthException) handleAuthError(it)
                     else detailError = it.message ?: "加载失败"
                 }
         }
@@ -236,7 +241,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                     BikaUiCache.chapters[id] = it
                     persistCache()
                 }
-                .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError() }
+                .onFailure { if (it is BikaClient.BikaAuthException) handleAuthError(it) }
             chaptersLoading = false
         }
     }
@@ -261,7 +266,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                         if (it is BikaClient.BikaAuthException) "哔咔账号异常，请重新进入" else "获取图片失败：${it.message ?: "网络错误"}",
                         Toast.LENGTH_SHORT
                     ).show()
-                    if (it is BikaClient.BikaAuthException) handleAuthError()
+                    if (it is BikaClient.BikaAuthException) handleAuthError(it)
                 }
             loadingEp = null
         }
@@ -333,7 +338,7 @@ fun BikaComicDetailScreen(nav: NavHostController, id: String) {
                         if (e is BikaClient.BikaAuthException) "哔咔账号异常，请重新进入" else "获取图片失败：${e.message ?: "网络错误"}",
                         Toast.LENGTH_SHORT
                     ).show()
-                    if (e is BikaClient.BikaAuthException) handleAuthError()
+                    if (e is BikaClient.BikaAuthException) handleAuthError(e)
                     gridIdx = -1
                 }
         }

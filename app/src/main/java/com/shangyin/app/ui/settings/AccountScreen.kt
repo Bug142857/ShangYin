@@ -1,6 +1,7 @@
 package com.shangyin.app.ui.settings
 
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -48,6 +49,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.shangyin.app.data.bika.BikaClient
@@ -64,8 +66,9 @@ private suspend fun checkSession(block: suspend () -> Boolean?): Boolean? =
     runCatching { withTimeoutOrNull(25_000L) { block() } }.getOrNull()
 
 /**
- * 账号管理：豆瓣登录、哔咔登录、
- * 无忧游戏库登录、Z-Library 登录（线路域名在登录页内切换，登录成功后自动写回设置）。
+ * 账号管理：豆瓣登录、无忧游戏库登录、Z-Library 登录
+ *（v0.310 起**哔咔登录项已隐藏**：App 内置默认哔咔账号，本子页打开时自动静默登录）。
+ * 每个账号卡片下方带「去注册」入口，点开走系统浏览器。
  * 云端同步入口已挪到 设置 → 数据管理。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -99,11 +102,7 @@ fun AccountScreen(nav: NavHostController) {
         }
     }
 
-    // 哔咔登录状态
-    var bikaLoginKey by remember { mutableStateOf(0) }
-    val isBikaLoggedIn = remember(bikaLoginKey) { SettingsStore.bikaToken.isNotBlank() }
-    var showBikaLogin by remember { mutableStateOf(false) }
-    var showBikaLogout by remember { mutableStateOf(false) }
+    // 哔咔：v0.310 起不再在账号管理里展示（内置默认账号 + 本子页静默登录）
 
     // 无忧游戏库登录状态
     var wygamerLoginKey by remember { mutableStateOf(0) }
@@ -123,20 +122,11 @@ fun AccountScreen(nav: NavHostController) {
     val isZlibLoggedIn = remember(zlibLoginKey) { com.shangyin.app.data.zlib.ZlibClient.isLoggedIn }
     var showZlibLogout by remember { mutableStateOf(false) }
 
-    // 其余三个账号同样做「服务端登录态校验」：null = 未确认，false = 已失效（本地却显示已登录）
-    var bikaSessionOk by remember(bikaLoginKey) { mutableStateOf<Boolean?>(null) }
+    // 其余账号同样做「服务端登录态校验」：null = 未确认，false = 已失效（本地却显示已登录）
     var wygamerSessionOk by remember(wygamerLoginKey) { mutableStateOf<Boolean?>(null) }
     var zlibSessionOk by remember(zlibLoginKey) { mutableStateOf<Boolean?>(null) }
-    var bikaChecked by remember(bikaLoginKey) { mutableStateOf(false) }
     var wygamerChecked by remember(wygamerLoginKey) { mutableStateOf(false) }
     var zlibChecked by remember(zlibLoginKey) { mutableStateOf(false) }
-    LaunchedEffect(bikaLoginKey) {
-        bikaChecked = false
-        if (SettingsStore.bikaToken.isNotBlank()) {
-            bikaSessionOk = checkSession { com.shangyin.app.data.bika.BikaClient.sessionOk() }
-        }
-        bikaChecked = true
-    }
     LaunchedEffect(wygamerLoginKey) {
         wygamerChecked = false
         if (SettingsStore.isWygamerLoggedIn) {
@@ -202,29 +192,9 @@ fun AccountScreen(nav: NavHostController) {
                     else doubanLauncher.launch(Intent(context, DoubanLoginActivity::class.java))
                 }
             )
+            RegisterHint("https://www.douban.com/accounts/register")
 
-            // 哔咔登录
-            SettingCard(
-                icon = {
-                    Icon(
-                        Icons.Rounded.Person, contentDescription = null,
-                        tint = if (isBikaLoggedIn && bikaSessionOk != false) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline
-                    )
-                },
-                title = "哔咔登录",
-                subtitle = when {
-                    !isBikaLoggedIn -> "未登录，登录后可在里世界浏览本子"
-                    !bikaChecked -> "已登录，正在检测登录状态…"
-                    bikaSessionOk == false -> "登录已失效！点这里重新登录（否则本子页会一直报错）"
-                    bikaSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
-                    else -> "已登录，可浏览本子漫画"
-                },
-                onClick = {
-                    if (isBikaLoggedIn && bikaSessionOk == true) showBikaLogout = true
-                    else showBikaLogin = true
-                }
-            )
+            // v0.310：哔咔登录项已隐藏 —— 内置默认账号 + 本子页静默登录，用户无需手动操作
 
             // 无忧游戏库登录
             SettingCard(
@@ -248,6 +218,7 @@ fun AccountScreen(nav: NavHostController) {
                     else wygamerLauncher.launch(Intent(context, WygamerLoginActivity::class.java))
                 }
             )
+            RegisterHint("https://www.wygamer.com/user-sign-2?tab=signup")
 
             // Z-Library 登录
             SettingCard(
@@ -271,6 +242,7 @@ fun AccountScreen(nav: NavHostController) {
                     else zlibLauncher.launch(Intent(context, ZlibLoginActivity::class.java))
                 }
             )
+            RegisterHint("https://z-library.sk/registration")
         }
     }
 
@@ -295,38 +267,7 @@ fun AccountScreen(nav: NavHostController) {
         )
     }
 
-    // 哔咔登录对话框
-    if (showBikaLogin) {
-        BikaLoginDialog(
-            onDismiss = { showBikaLogin = false },
-            onLoggedIn = {
-                showBikaLogin = false
-                bikaLoginKey++
-                Toast.makeText(context, "哔咔登录成功", Toast.LENGTH_SHORT).show()
-            }
-        )
-    }
-
-    // 哔咔登出确认
-    if (showBikaLogout) {
-        AlertDialog(
-            onDismissRequest = { showBikaLogout = false },
-            title = { Text("退出哔咔登录") },
-            text = { Text("退出后无法浏览本子漫画（里世界 → 本子），确认退出？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        SettingsStore.clearBikaToken()
-                        SettingsStore.clearBikaCredentials()
-                        bikaLoginKey++
-                        showBikaLogout = false
-                        Toast.makeText(context, "已退出哔咔登录", Toast.LENGTH_SHORT).show()
-                    }
-                ) { Text("退出", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { showBikaLogout = false }) { Text("取消") } }
-        )
-    }
+    // v0.310：哔咔登录/登出对话框不再挂载（登录项已隐藏）
 
     // 无忧游戏库登出确认
     if (showWygamerLogout) {
@@ -399,6 +340,35 @@ private fun SettingCard(
                 tint = MaterialTheme.colorScheme.outline
             )
         }
+    }
+}
+
+/** 注册入口（v0.310）：点「去注册」用系统浏览器打开该站点注册页 */
+@Composable
+private fun RegisterHint(url: String) {
+    val context = LocalContext.current
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp, top = 2.dp)
+    ) {
+        Text(
+            "还没有账号？",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            "去注册",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier
+                .clickable {
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+                }
+                .padding(horizontal = 4.dp)
+        )
     }
 }
 

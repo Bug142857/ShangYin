@@ -386,6 +386,21 @@ object SettingsStore {
         sp.edit().remove(KEY_BIKA_ACCOUNT).remove(KEY_BIKA_PASSWORD).apply()
     }
 
+    /** 内置哔咔账号（v0.310：新用户开箱即用，账号管理里已隐藏哔咔登录项） */
+    private const val DEFAULT_BIKA_ACCOUNT = "dblz123007"
+    private const val DEFAULT_BIKA_PASSWORD = "123qweasd"
+
+    /**
+     * 补种内置哔咔账密（启动时调用）。
+     * 只在本地没有账密时写入，不覆盖用户自己填过的；token 仍由 BikaClient 静默登录取。
+     */
+    fun ensureDefaultBikaAccountSeeded() {
+        if (bikaAccount.isBlank() || bikaPassword.isBlank()) {
+            bikaAccount = DEFAULT_BIKA_ACCOUNT
+            bikaPassword = DEFAULT_BIKA_PASSWORD
+        }
+    }
+
     // ---------- 无忧游戏库（www.wygamer.com） ----------
 
     private const val KEY_WYGAMER_COOKIE = "wygamer_cookie"

@@ -90,6 +90,13 @@ object BikaClient {
     /** 登录失效（token 过期，需重新登录） */
     class BikaAuthException(msg: String) : Exception(msg)
 
+    /**
+     * 与账密无关的网络失败（v0.310）：连不上 / 超时 / 被墙 / 响应异常。
+     * 单独成类是为了让 [autoSignInResult] 能区分「账密被拒」和「网络不通」——
+     * 后者绝不能清 token、也不能谎报登录失效。
+     */
+    class BikaNetworkException(msg: String) : Exception(msg)
+
     // ---------- 签名与请求 ----------
 
     private fun hmacSha256(msg: String): String {
@@ -157,12 +164,12 @@ object BikaClient {
             }
         }
         if (text == null) {
-            throw Exception("连接哔咔失败，可能需要外网环境：${lastNetErr?.message ?: lastNetErr?.javaClass?.simpleName ?: "网络异常"}")
+            throw BikaNetworkException("连接哔咔失败，可能需要外网环境：${lastNetErr?.message ?: lastNetErr?.javaClass?.simpleName ?: "网络异常"}")
         }
         activeHost = okHost
-        if (text!!.isBlank()) throw Exception("空响应")
+        if (text!!.isBlank()) throw BikaNetworkException("空响应（站点暂时不可用，可能需要外网环境）")
         val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrElse {
-            throw Exception("响应解析失败")
+            throw BikaNetworkException("响应解析失败（可能被劫持/需要外网环境）")
         }
         val code = root["code"]?.jsonPrimitive?.intOrNull ?: 0
         if (code == 401) throw BikaAuthException("哔咔登录已失效")
@@ -201,47 +208,69 @@ object BikaClient {
 
     /**
      * 带 token 的调用包装（所有需要登录的接口都走这里，所以静默重登只需这一处）。
-     * 本地没有 token（或 token 过期）时，先用已保存的账密静默重登一次并继续，用户无感；
-     * 重登失败（没存账密 / 账密也失效 / 网络不通）才清 token 并抛出，由界面引导重新登录。
+     * 本地没有 token（或 token 过期）时，先用已保存的账密静默重登一次并继续，用户无感。
+     *
+     * v0.310：区分「账密失效」与「网络不通」——
+     * 网络失败时**不清 token**、也不谎报「登录已失效」，等网络恢复下一次请求自动续上；
+     * 只有账密确实被拒才清 token 并引导重新登录。
      */
     suspend fun <T> withAuth(block: suspend (String) -> T): T {
         // 本地 token 为空时也先试一次静默重登：可能上次重登失败清过 token，但账密还在
         var token = SettingsStore.bikaToken
         if (token.isBlank()) {
-            if (autoSignIn()) token = SettingsStore.bikaToken
-            if (token.isBlank()) throw BikaAuthException("未登录哔咔账号")
+            val r = autoSignInResult()
+            token = SettingsStore.bikaToken
+            if (token.isBlank()) {
+                throw BikaAuthException(
+                    if (r == null) "网络不通，暂时无法登录哔咔（本子需要外网环境）"
+                    else "未登录哔咔账号"
+                )
+            }
         }
         return try {
             block(token)
         } catch (e: BikaAuthException) {
-            val fresh = if (autoSignIn()) SettingsStore.bikaToken else ""
-            if (fresh.isBlank()) {
-                SettingsStore.clearBikaToken()
-                throw BikaAuthException("哔咔登录已失效")
-            }
-            try {
-                block(fresh)
-            } catch (e2: BikaAuthException) {
-                SettingsStore.clearBikaToken()
-                throw BikaAuthException("哔咔登录已失效")
+            when (autoSignInResult()) {
+                true -> try {
+                    block(SettingsStore.bikaToken)
+                } catch (e2: BikaAuthException) {
+                    SettingsStore.clearBikaToken()
+                    throw BikaAuthException("哔咔登录已失效")
+                }
+                false -> {
+                    SettingsStore.clearBikaToken()
+                    throw BikaAuthException("哔咔登录已失效")
+                }
+                // 网络原因导致重登失败：token 保留，下次请求再试，不打扰用户
+                null -> throw BikaAuthException("网络不通，暂时无法验证哔咔登录（本子需要外网环境）")
             }
         }
     }
 
     /**
-     * 用已保存的哔咔账密静默重登：成功写入新 token 返回 true，否则返回 false。
-     * 未保存账密、网络失败、账密已失效等一律按失败处理（不抛异常）。
+     * 用已保存的哔咔账密静默重登。
+     * @return true=成功；false=账密缺失或被服务端拒绝；null=网络/被墙等无法判断（此时**不该**清 token）
      */
-    suspend fun autoSignIn(): Boolean {
+    suspend fun autoSignInResult(): Boolean? {
         val user = SettingsStore.bikaAccount
         val pass = SettingsStore.bikaPassword
         if (user.isBlank() || pass.isBlank()) return false
-        return runCatching {
+        return try {
             val token = signIn(user, pass)
             SettingsStore.bikaToken = token
-            token.isNotBlank()
-        }.getOrDefault(false)
+            true
+        } catch (e: BikaNetworkException) {
+            // 连不上/超时/被墙 —— 与账密无关，保留 token，下次再试
+            null
+        } catch (e: java.io.IOException) {
+            null
+        } catch (e: Exception) {
+            false
+        }
     }
+
+    /** 兼容旧调用：只关心"是否成功"的地方用它（网络失败也返回 false，但不清 token） */
+    suspend fun autoSignIn(): Boolean = autoSignInResult() == true
 
     /** 登录，返回 JWT token */
     suspend fun signIn(email: String, password: String): String = withContext(Dispatchers.IO) {
@@ -264,18 +293,22 @@ object BikaClient {
             fetchCategories(token)
             true
         } catch (e: BikaAuthException) {
-            if (!autoSignIn()) {
-                SettingsStore.clearBikaToken()
-                return false
-            }
-            try {
-                fetchCategories(SettingsStore.bikaToken)
-                true
-            } catch (e2: BikaAuthException) {
-                SettingsStore.clearBikaToken()
-                false
-            } catch (e2: Exception) {
-                null
+            // v0.310：网络原因导致重登失败时返回 null（无法判断），不清 token
+            when (autoSignInResult()) {
+                true -> try {
+                    fetchCategories(SettingsStore.bikaToken)
+                    true
+                } catch (e2: BikaAuthException) {
+                    SettingsStore.clearBikaToken()
+                    false
+                } catch (e2: Exception) {
+                    null
+                }
+                false -> {
+                    SettingsStore.clearBikaToken()
+                    false
+                }
+                null -> null
             }
         } catch (e: Exception) {
             null

@@ -40,6 +40,8 @@ class App : Application(), ImageLoaderFactory {
         })
         Repo.init(this)
         SettingsStore.init(this)
+        // v0.310：内置哔咔账号（账号管理里已隐藏哔咔登录项，新装用户开箱即用）
+        runCatching { SettingsStore.ensureDefaultBikaAccountSeeded() }
         com.shangyin.app.data.InnerFavorites.init(this)
         // 记录 WebView 的真实默认 UA：登录页与接口请求必须用同一个 UA（Cookie 与 UA 绑定），
         // 且不能伪造——伪造的桌面 UA 会与 WebView 自动发出的 Client Hints（sec-ch-ua-platform: Android）

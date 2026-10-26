@@ -105,14 +105,34 @@ object BikaUiCache {
  * - 一级：搜索栏 + 最近更新入口 + 分类封面网格
  * - 二级：某分类/最近更新/搜索的漫画列表（行式卡片：封面 + [N P]标题 + 作者 + 标签 + 喜欢/观看）
  * - 排序在列表页顶栏
- * 需登录哔咔账号（设置 → 账号管理 → 哔咔登录）。
+ *
+ * v0.310：登录改为全自动 —— 本地有账密（含内置默认账号）就先静默登录，
+ * 只有网络不通/账密被拒才停在提示页，且不再引导去账号管理（哔咔登录项已隐藏）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun H2SearchScreen(nav: NavHostController) {
-    val loggedIn = SettingsStore.bikaToken.isNotBlank()
+    var loggedIn by remember { mutableStateOf(SettingsStore.bikaToken.isNotBlank()) }
+    var bootstrapping by remember { mutableStateOf(!loggedIn) }
+    var loginHint by remember { mutableStateOf<String?>(null) }
+    var retryKey by remember { mutableIntStateOf(0) }
 
-    // 未登录：引导去设置登录
+    // 静默登录（启动或点重试时执行一次）：成功直接进本子，失败给出可分辨的原因
+    LaunchedEffect(retryKey) {
+        if (SettingsStore.bikaToken.isNotBlank()) {
+            loggedIn = true
+            bootstrapping = false
+            return@LaunchedEffect
+        }
+        when (BikaClient.autoSignInResult()) {
+            true -> loggedIn = SettingsStore.bikaToken.isNotBlank()
+            false -> loginHint = "账号登录失败，请稍后重试（内置账号可能被服务端限制）"
+            null -> loginHint = "网络不通，本子需要外网环境，请检查网络后重试"
+        }
+        bootstrapping = false
+    }
+
+    // 登录没成功：显示进度或原因 + 重试（不再跳账号管理）
     if (!loggedIn) {
         Scaffold(
             topBar = {
@@ -131,10 +151,28 @@ fun H2SearchScreen(nav: NavHostController) {
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.padding(pad).fillMaxSize().padding(32.dp)
             ) {
-                EmptyView("未登录哔咔账号")
-                Spacer(Modifier.height(20.dp))
-                TextButton(onClick = { nav.safeNavigate("account") }) {
-                    Text("去 设置 → 账号管理 → 哔咔登录")
+                if (bootstrapping) {
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "正在准备账号…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    EmptyView("暂时打不开本子")
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        loginHint ?: "账号登录失败，请重试",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    TextButton(onClick = {
+                        loginHint = null
+                        bootstrapping = true
+                        retryKey++
+                    }) { Text("重试") }
                 }
             }
         }
@@ -393,9 +431,13 @@ private fun ComicListPage(
                 verticalArrangement = Arrangement.Center,
                 modifier = Modifier.padding(pad).fillMaxSize()
             ) {
-                val msg = if (error == "未登录哔咔账号" || error == "哔咔登录已失效") {
-                    "哔咔登录已失效，请到 设置 → 账号管理 重新登录"
-                } else "加载失败：$error"
+                // v0.310：登录已内置且自动完成，这里只区分「网络原因」和「内容加载失败」，不再引导去账号管理
+                val err = error.orEmpty()
+                val msg = when {
+                    err.contains("网络") || err.contains("连接哔咔") || err.contains("外网") -> err
+                    err == "未登录哔咔账号" || err == "哔咔登录已失效" -> "内置账号登录失败，请稍后重试"
+                    else -> "加载失败：$err"
+                }
                 EmptyView(msg)
                 Row {
                     TextButton(onClick = { load(1) }) { Text("重试") }
