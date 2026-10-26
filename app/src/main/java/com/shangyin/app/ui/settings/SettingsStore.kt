@@ -173,6 +173,13 @@ object SettingsStore {
         get() = sp.getLong(KEY_CACHE_CLEARED_VERSION, 0L)
         set(v) = sp.edit().putLong(KEY_CACHE_CLEARED_VERSION, v).apply()
 
+    private const val KEY_DEFAULT_SEED_DONE = "default_seed_v1"
+
+    /** 是否已完成「首次启动默认数据」播种（v0.311：影视源/电视源/表世界清单） */
+    var defaultSeedDone: Boolean
+        get() = sp.getBoolean(KEY_DEFAULT_SEED_DONE, false)
+        set(v) = sp.edit().putBoolean(KEY_DEFAULT_SEED_DONE, v).apply()
+
     private const val KEY_CHAPTER_SORT_DESC = "chapter_sort_desc"
 
     /** 漫画/本子章节列表倒序排列（全局记忆，跨重启保留） */
@@ -224,7 +231,8 @@ object SettingsStore {
     private const val TAG_FLOAT = "@f:"
 
     /** 不参与备份的键：纯内部状态 / 设备私有 */
-    private val NON_BACKUP_KEYS = setOf(KEY_LAST_CLOUD_SYNC, KEY_CACHE_CLEARED_VERSION)
+    private val NON_BACKUP_KEYS =
+        setOf(KEY_LAST_CLOUD_SYNC, KEY_CACHE_CLEARED_VERSION, KEY_DEFAULT_SEED_DONE)
 
     /**
      * 该 SP 键是否参与备份（配置快照 / 云同步 / 公共目录自动备份共用）。

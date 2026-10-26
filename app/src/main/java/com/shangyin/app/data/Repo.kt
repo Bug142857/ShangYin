@@ -423,6 +423,25 @@ object Repo {
         }
     }
 
+    // ---------- 首次启动的默认数据（DefaultSeed） ----------
+
+    /** 库里是否已有任何清单/条目：有就说明是老用户，默认数据不再写入 */
+    suspend fun hasAnyCollection(): Boolean =
+        listDao.getAllListsSync().isNotEmpty() || itemDao.getAllSync().isNotEmpty()
+
+    /** 一次性写入默认的清单 + 条目 + 关联（保留原 id，维持父子层级） */
+    suspend fun seedCollectionData(
+        items: List<CollectionItemEntity>,
+        lists: List<ItemListEntity>,
+        rels: List<ListItemEntity>
+    ) {
+        db.withTransaction {
+            itemDao.insertAll(items)
+            listDao.insertAllLists(lists)
+            listDao.insertAllListItems(rels)
+        }
+    }
+
     // ---------- 导入导出 ----------
 
     /** 导出全部数据（含片源配置、里世界爱心收藏、配置快照：登录态/设置项/电视源/下载记录） */

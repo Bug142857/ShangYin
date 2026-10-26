@@ -55,10 +55,10 @@ class App : Application(), ImageLoaderFactory {
         // `__diamwall` 会让整站死循环**（实测真浏览器复现 ERR_TOO_MANY_REDIRECTS），
         // 启动时清一次让服务端重新下发（登录票据 remix_* 不受影响）
         runCatching { com.shangyin.app.data.zlib.ZlibClient.clearTransientCookies() }
-        // 首次使用播种内置默认采集源（在线观影）
-        SettingsStore.ensureDefaultVodSourcesSeeded()
-        // 首次使用播种内置默认电视源（里世界 → 电视）
-        SettingsStore.ensureDefaultLiveSourcesSeeded()
+        // 首次启动播种默认数据（v0.311）：影视源 / 电视源 / 表世界清单，来自 assets/default_seed.json
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            runCatching { com.shangyin.app.data.DefaultSeed.seedIfNeeded(this@App) }
+        }
         // 一次性数据迁移：收藏分类「直播」→「电视」
         // （幂等：UPDATE 匹配不到就是 0 行，重复执行无害）
         kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {

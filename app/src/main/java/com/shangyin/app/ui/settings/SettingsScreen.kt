@@ -162,7 +162,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
             SettingsCard(
                 icon = Icons.Rounded.Person,
                 title = "账号管理",
-                hint = "豆瓣·哔咔·无忧·Zlib",
+                hint = "豆瓣·无忧·Zlib",
                 onClick = { nav.safeNavigate("account") }
             )
             SettingsCard(
