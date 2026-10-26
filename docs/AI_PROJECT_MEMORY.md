@@ -30,7 +30,7 @@
 - No link import feature
 - Movie detail navigation must use saveFromDoubanFast (store basic data immediately, background fetch full details)
 - Game search must use HTML parsing from www.douban.com/search?cat=3114 (no Cookie required)
-- App icon must be solid color background with white '郑' character (PNG format in mipmap directories, no adaptive vector icons)
+- App icon = 深蓝渐变圆角方块 + 发光的「郑」字（用户 2026-10-26 提供的新 artwork，原图见桌面 logo.jpg）；仍是 5 个 mipmap 目录里的裸 PNG（`ic_launcher` + `ic_launcher_round`，48/72/96/144/192），不用 adaptive icon；换图只覆盖这 10 个文件
 - App must use bottom tab navigation with two primary sections: '表世界' and '里世界'
 - Settings must be accessible via a single top-right button in all screens
 - Login functions (豆瓣, 哔咔) must be consolidated in the settings menu under '账号管理'
@@ -53,7 +53,7 @@
 - 豆瓣 qnmob*.doubanio.com 旧图床域已下线，所有该域的图片请求需自动重写到 img2.doubanio.com
 
 ## Engineering Conventions
-- **版本号规则（2026-09-22 用户指定，取代「读提交次数」，也取代最早的 `2.23.NN`）**：**每个发版轮次 `versionName` = 上一版 +1**（不补零），**从 `0.190` 起**（`0.190` → `0.191` → `0.192`…）。⚠️ **不再读 `git rev-list --count HEAD`**：老规则会因为"每轮固定产生 2 个提交（功能提交 + 记忆同步提交）"而每次 +2（用户 2026-09-22 指出 `0.185 → 0.187` 正是 +2，要求以后 +1）。APK 文件名 = `老郑分享-0.<N>.apk`，GitHub 资产名 = `LaoZhengFenXiang-0.<N>.apk`（必须 ASCII），tag = `v0.<N>`。⚠️ **versionCode 固定取 `1000 + N`**（`0.190` → `1190`；必须保持单调递增，否则系统拒绝覆盖安装）。**版本沿革**：最后一个"提交次数"版本是 `v0.183`（versionCode 1183，Release 392804722，仍在仓库里）；`v0.185`/`v0.187` 的改动与 tag/Release 已按用户要求**全部撤销**（2026-09-22，`git revert` 5 个提交），**版本号从 `0.190` 重新起算**；仓库 `app/build.gradle.kts` 当前为 `0.300 / 1300`（v0.300 发版后；上一版是 `0.299 / 1299`）。
+- **版本号规则（2026-09-22 用户指定，取代「读提交次数」，也取代最早的 `2.23.NN`）**：**每个发版轮次 `versionName` = 上一版 +1**（不补零），**从 `0.190` 起**（`0.190` → `0.191` → `0.192`…）。⚠️ **不再读 `git rev-list --count HEAD`**：老规则会因为"每轮固定产生 2 个提交（功能提交 + 记忆同步提交）"而每次 +2（用户 2026-09-22 指出 `0.185 → 0.187` 正是 +2，要求以后 +1）。APK 文件名 = `老郑分享-0.<N>.apk`，GitHub 资产名 = `LaoZhengFenXiang-0.<N>.apk`（必须 ASCII），tag = `v0.<N>`。⚠️ **versionCode 固定取 `1000 + N`**（`0.190` → `1190`；必须保持单调递增，否则系统拒绝覆盖安装）。**版本沿革**：最后一个"提交次数"版本是 `v0.183`（versionCode 1183，Release 392804722，仍在仓库里）；`v0.185`/`v0.187` 的改动与 tag/Release 已按用户要求**全部撤销**（2026-09-22，`git revert` 5 个提交），**版本号从 `0.190` 重新起算**；仓库 `app/build.gradle.kts` 当前为 `0.313 / 1313`（v0.313 发版后；上一版是 `0.312 / 1312`）。
 - **项目记忆同步（v2.21.2 起，用户要求"换电脑/换账号也不丢上下文"；2026-10-16 用户再次强调并升级为**每轮必做**）**：
   ⚠️⚠️ **记忆文件有「两份」，每轮改动收尾时两份都必须更新，并且都要 push——不许只更一份、更不许只留在本地**：
   ① 仓库 `docs/AI_PROJECT_MEMORY.md`（随 commit 进 git，供换电脑/换 AI 账号后恢复上下文）；
@@ -195,6 +195,11 @@
   ① **P站页码条回到「末页未知」模式**（用户：页数太多不显示页数，只显示当前±2页、左右箭头可无限翻）：`PsiteClient.list()` 改回返回 `List<PVideo>`（撤掉 v0.306 的 `PListPage`），UI 传 `AppPageBar(lastPage = 0)`。`lastPageOf()` 保留（P站分类数量估算还在用）。
   ② **番号隐藏空分类**：`visibleCats = categories.filter { (catCounts[it.type_id] ?: 1) > 0 }`，探测到 0 的分类从横滑/下拉里消失；未探测到的先按有资源显示（与 SourceBrowseScreen 同一套规则）。
   ③ 发版记录：commit `ea690aa` / tag `v0.307` / **Release `421648993`** / 资产 `LaoZhengFenXiang-0.307.apk`（20,317,731 字节，SHA256 `AF6A27C5462A9F4CC620F6DB251B97149246BEE17C81CB4511D0D2C6FB407F16`）；桌面已更新为 `老郑分享-0.307.apk`。
+- **v0.313（新 App 图标，2026-10-26）**：用户发来一张「郑」字 logo（桌面 `logo.jpg`，1312×1312，白底 + 右下角「清言 AI生成」水印），要求「处理成可以做 app 图标的」。
+  ① **处理链路**（本机无 Python，用 PowerShell + System.Drawing）：按亮度 <220 求图形 bbox `(65,62,1181,1181)`（水印落在白边外，裁切即去掉）→ 从四边泛洪（RGB 三通道全 ≥245 视为白）把外部白底 alpha 置 0 → 方形版保留原圆角描边与高光；圆形版先把图形放大 **1.12×** 再套 4× 超采样圆形 alpha（不放大时圆边会露出一圈方形描边亮边）。
+  ② **输出**：5 密度 × 2 文件（48/72/96/144/192 的 `ic_launcher.png` / `ic_launcher_round.png`，32 位 PNG 带 alpha）；Manifest 未改，仍是裸 PNG（项目惯例不用 adaptive icon）。
+  ③ **⚠️ 本轮踩坑（PS 5.1 编码）**：用 `powershell -File` 跑**含中文的 .ps1**（Write 工具写出的 UTF-8 无 BOM）会被按 ANSI 读 → 中文变乱码：Release 描述写成乱码、`-InFile` 的中文 APK 路径直接 `PathNotFound`。**对策：脚本里只留 ASCII；中文放 UTF-8 文件用 `[Text.Encoding]::UTF8` 读；上传前把 APK 复制到 ASCII 临时路径；API 请求体用 `UTF8.GetBytes` 显式编码，写坏了用 `PATCH /releases/{id}` 修描述。**
+  ④ **发版**：commit `ac686f1` / tag `v0.313` / **Release `424014626`** / 资产 `LaoZhengFenXiang-0.313.apk`（20,749,301 字节，SHA256 `19ADDB007766B0681E883BA7AFFED2B87754477396AD0FB633BF9C969D8D6013`）；桌面已更新为 `老郑分享-0.313.apk`。旧图标备份在 `C:\Users\62496\AppData\Local\Temp\sy_logo\backup`（临时目录，非长期保存）。
 - **v0.312（修电视源未播种，2026-10-26）**：用户反馈「电视源好像没加上啊」。
   ① **根因**：v0.311 生成 `assets/default_seed.json` 时，`liveSources` 被 PowerShell 5.1 序列化成了**对象** `{ "value":[...], "Count":1 }`（`($config.live_sources_json | ConvertFrom-Json)` 单元素数组被管道展开），`root.optJSONArray("liveSources")` 直接返回 null → 电视源一条都没写。（同类坑：PS 5.1 里单元素数组经 `|` 会散开，写 JSON 要用 `[object[]]@(...)` 包一层。）
   ② **修复**：资产里 `liveSources` 重新生成为真正的数组（文件内 5 个数组字段已用正则逐个核对）；`DefaultSeed.seedVodSources/seedLiveSources` 在解析结果为空时**兜底调用** `ensureDefaultVodSourcesSeeded()/ensureDefaultLiveSourcesSeeded()`，以后资产坏掉也不会静默丢源。
