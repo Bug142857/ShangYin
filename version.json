@@ -1,7 +1,7 @@
 {
-  "versionName": "0.319",
+  "versionName": "0.320",
   "sizeBytes": 20782681,
-  "sha256": "29785cba93c833ac064ba4116fd43596f0739fd15deb58bd97af99b90cc7cacf",
-  "changelog": "0.319：息屏下载保活 + 配置页间距调整\n\n- 下载期间启动前台服务并持有 CPU / Wi-Fi 唤醒锁，息屏或切后台继续下载（版本更新、视频、漫画、本子、音乐、图书）\n- 全部下载任务结束后前台服务自动停止，不长期占用电池\n- 配置管理卡片恢复两行文字与适中留白：不用上下滑动，同时尽量填满屏幕",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.319/LaoZhengFenXiang-0.319.apk"
+  "sha256": "93a5aa30444e119fa1189951f10cc258ae2231b151de94b2056adb3911e6da81",
+  "changelog": "0.320：更新下载线路优选\n\n- 点下载后先并发测速 GitHub 直连与镜像（各拉取 256KB 样例），自动选择最快线路再下载\n- 下载进度下方显示当前实际使用的线路，某条线路失败会自动换下一条\n- 测速最多 4 秒，避免在选择线路上等待过久",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.320/LaoZhengFenXiang-0.320.apk"
 }

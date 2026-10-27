@@ -4,11 +4,15 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.shangyin.app.data.download.DownloadKeepAlive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -77,6 +81,18 @@ object UpdateChecker {
         .readTimeout(10, TimeUnit.SECONDS)
         .callTimeout(10, TimeUnit.SECONDS)
         .build()
+
+    /**
+     * 下载线路测速客户端（v0.320）：每个候选线路拉取 256KB 样例，
+     * 4 秒内测不出速度就视为该线路不可用。并发测速，避免逐条等待。
+     */
+    private val probeClient = client.newBuilder()
+        .connectTimeout(4, TimeUnit.SECONDS)
+        .readTimeout(4, TimeUnit.SECONDS)
+        .callTimeout(4, TimeUnit.SECONDS)
+        .build()
+
+    private const val PROBE_BYTES = 256 * 1024L
 
     /** 待安装的新版本 */
     data class UpdateInfo(
@@ -224,8 +240,71 @@ object UpdateChecker {
         )
     }
 
+    /** 候选下载线路（直连 + 镜像）；顺序即默认回退顺序 */
+    private fun channelsFor(info: UpdateInfo): List<String> = buildList {
+        add(info.apkUrl)
+        // 只给 GitHub 原始地址套镜像前缀（清单里若已写镜像直链则不再二次拼接）
+        if (info.apkUrl.startsWith("https://github.com/")) {
+            MIRROR_PREFIXES.forEach { add(it + info.apkUrl) }
+        }
+    }.distinct()
+
     /**
-     * 下载安装包到 cacheDir/updates：直连失败自动逐个镜像重试。
+     * 下载线路优选（v0.320）：并发测速后按速度从高到低返回全部候选线路。
+     * 测速失败/超时的线路排到最后（仍保留，作为兜底回退）；
+     * 全部失败时返回原顺序，由 [download] 正常逐条尝试。
+     */
+    suspend fun rankChannels(info: UpdateInfo): List<String> = withContext(Dispatchers.IO) {
+        val channels = channelsFor(info)
+        if (channels.size <= 1) return@withContext channels
+        val scored = coroutineScope {
+            channels.map { url ->
+                async {
+                    url to runCatching { probeSpeed(url) }.getOrDefault(-1L)
+                }
+            }.awaitAll()
+        }
+        scored.sortedWith(compareByDescending<Pair<String, Long>> { it.second }).map { it.first }
+    }
+
+    /** 拉取一小段做测速，返回 bytes/秒；失败返回 -1 */
+    private fun probeSpeed(url: String): Long {
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", UA)
+            .header("Range", "bytes=0-${PROBE_BYTES - 1}")
+            .build()
+        // 从发起请求开始计时（含 DNS/TLS/重定向），更接近用户实际感受到的起速
+        val started = SystemClock.elapsedRealtime()
+        return probeClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return -1L
+            if (resp.header("Content-Type").orEmpty().contains("text/html", true)) return -1L
+            val body = resp.body ?: return -1L
+            val input = body.byteStream()
+            val buf = ByteArray(32 * 1024)
+            var read = 0L
+            while (read < PROBE_BYTES) {
+                val n = input.read(buf)
+                if (n < 0) break
+                read += n
+            }
+            val elapsed = (SystemClock.elapsedRealtime() - started).coerceAtLeast(1L)
+            // 少于 32KB 说明不是正常安装包（错误页/限流），视为不可用
+            if (read < 32 * 1024) -1L else read * 1000 / elapsed
+        }
+    }
+
+    /** 线路展示名（用于下载进度里显示当前实际使用的线路） */
+    private fun channelLabel(url: String): String = when {
+        url.startsWith("https://github.com/") -> "GitHub 直连"
+        url.startsWith("https://gh-proxy.com/") -> "gh-proxy.com"
+        url.startsWith("https://ghproxy.net/") -> "ghproxy.net"
+        else -> url.substringAfter("://").substringBefore("/")
+    }
+
+    /**
+     * 下载安装包到 cacheDir/updates：优先使用 [rankChannels] 优选后的线路顺序，
+     * 某条线路失败时自动尝试下一条；[onChannel] 回传当前线路名供界面展示。
      * 每次尝试都会重新校验 SHA-256（有摘要时），校验不过视为该通道失败。
      * 支持协程取消（取消时中止底层 HTTP 请求，抛出 CancellationException）。
      */
@@ -233,6 +312,8 @@ object UpdateChecker {
         context: Context,
         info: UpdateInfo,
         onProgress: (downloaded: Long, total: Long) -> Unit,
+        preferredChannels: List<String>? = null,
+        onChannel: (String) -> Unit = {},
     ): File {
         // 前台服务 + 唤醒锁：息屏/切后台时继续下载（v0.319）
         DownloadKeepAlive.begin(context)
@@ -242,16 +323,11 @@ object UpdateChecker {
             dir.listFiles()?.forEach { it.delete() }
             val target = File(dir, "update-${info.versionName}.apk")
 
-            val channels = buildList {
-                add(info.apkUrl)
-                // 只给 GitHub 原始地址套镜像前缀（清单里若已写镜像直链则不再二次拼接）
-                if (info.apkUrl.startsWith("https://github.com/")) {
-                    MIRROR_PREFIXES.forEach { add(it + info.apkUrl) }
-                }
-            }
+            val channels = preferredChannels?.takeIf { it.isNotEmpty() } ?: channelsFor(info)
             var lastError: Exception? = null
             for (url in channels) {
                 try {
+                    onChannel(channelLabel(url))
                     onProgress(0L, info.sizeBytes)
                     downloadOnce(url, target, info.sizeBytes, onProgress)
                     if (info.sha256 != null && !sha256(target).equals(info.sha256, ignoreCase = true)) {

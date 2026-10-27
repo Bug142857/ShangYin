@@ -29,6 +29,7 @@ import com.shangyin.app.data.download.ComicDownloadStore
 import com.shangyin.app.data.update.UpdateChecker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -41,7 +42,14 @@ private sealed class UpdateState {
     data object UpToDate : UpdateState()
     data class Failed(val message: String) : UpdateState()
     data class Available(val info: UpdateChecker.UpdateInfo) : UpdateState()
-    data class Downloading(val info: UpdateChecker.UpdateInfo, val done: Long, val total: Long) : UpdateState()
+    /** 优选下载线路（并发测速中） */
+    data class Probing(val info: UpdateChecker.UpdateInfo) : UpdateState()
+    data class Downloading(
+        val info: UpdateChecker.UpdateInfo,
+        val done: Long,
+        val total: Long,
+        val route: String = ""
+    ) : UpdateState()
     data class Downloaded(val info: UpdateChecker.UpdateInfo, val file: File) : UpdateState()
 }
 
@@ -64,23 +72,38 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
 
     fun startDownload(info: UpdateChecker.UpdateInfo) {
         downloadJob = scope.launch {
-            state = UpdateState.Downloading(info, 0L, info.sizeBytes)
+            state = UpdateState.Probing(info)
             // 下载回调运行在 OkHttp 线程：进度必须切回主线程更新 Compose 状态，
             // 否则状态写了也不会触发重组（表现为「进度条不动，但实际已在下载」）。
             var lastUiAt = 0L
+            var currentRoute = ""
             try {
-                val file = UpdateChecker.download(context, info) { done, total ->
-                    val now = System.currentTimeMillis()
-                    if (done >= total || now - lastUiAt >= 200) {
-                        lastUiAt = now
-                        scope.launch {
-                            // 下载完成后可能还有滞后的进度回调，别把「下载完成」覆盖回下载中
-                            if (state is UpdateState.Downloading) {
-                                state = UpdateState.Downloading(info, done, total)
+                // 先并发测速，选出最快线路再下整包（全部失败会回退原顺序）
+                val ranked = UpdateChecker.rankChannels(info)
+                ensureActive()
+                state = UpdateState.Downloading(info, 0L, info.sizeBytes)
+                val file = UpdateChecker.download(
+                    context = context,
+                    info = info,
+                    onProgress = { done, total ->
+                        val now = System.currentTimeMillis()
+                        if (done >= total || now - lastUiAt >= 200) {
+                            lastUiAt = now
+                            scope.launch {
+                                // 下载完成后可能还有滞后的进度回调，别把「下载完成」覆盖回下载中
+                                if (state is UpdateState.Downloading) {
+                                    state = UpdateState.Downloading(info, done, total, currentRoute)
+                                }
                             }
                         }
+                    },
+                    preferredChannels = ranked,
+                    onChannel = { route ->
+                        currentRoute = route
+                        val s = state
+                        if (s is UpdateState.Downloading) state = s.copy(route = route)
                     }
-                }
+                )
                 state = UpdateState.Downloaded(info, file)
             } catch (e: CancellationException) {
                 state = UpdateState.Available(info)
@@ -96,7 +119,9 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
     val currentVersion = remember { UpdateChecker.localVersionName(context) }
 
     AlertDialog(
-        onDismissRequest = { if (state !is UpdateState.Downloading) onDismiss() },
+        onDismissRequest = {
+            if (state !is UpdateState.Downloading && state !is UpdateState.Probing) onDismiss()
+        },
         title = {
             Text(
                 when (val s = state) {
@@ -104,6 +129,7 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
                     UpdateState.UpToDate -> "已是最新版本"
                     is UpdateState.Failed -> "更新失败"
                     is UpdateState.Available -> "发现新版本 v${s.info.versionName}"
+                    is UpdateState.Probing -> "正在选择下载线路"
                     is UpdateState.Downloading -> "正在下载 v${s.info.versionName}"
                     is UpdateState.Downloaded -> "下载完成"
                 }
@@ -143,6 +169,16 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
                         )
                     }
                 }
+                is UpdateState.Probing -> {
+                    Column {
+                        Text(
+                            "正在测试 GitHub 直连与镜像速度，自动选择最快线路…",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
+                }
                 is UpdateState.Downloading -> {
                     val fraction = if (s.total > 0) (s.done.toFloat() / s.total).coerceIn(0f, 1f) else 0f
                     Column {
@@ -151,6 +187,14 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
                                 "${ComicDownloadStore.formatSize(s.done)} / ${ComicDownloadStore.formatSize(s.total)}",
                             style = MaterialTheme.typography.bodyMedium
                         )
+                        if (s.route.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "线路：${s.route}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                         LinearProgressIndicator(
                             progress = { fraction },
@@ -173,6 +217,12 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
                     TextButton(onClick = { startCheck() }) { Text("重试") }
                 }
                 is UpdateState.Available -> TextButton(onClick = { startDownload(s.info) }) { Text("立即更新") }
+                is UpdateState.Probing -> TextButton(onClick = {
+                    // 先回到「发现新版本」，避免测速阻塞取消后界面卡在测速中
+                    state = UpdateState.Available(s.info)
+                    downloadJob?.cancel()
+                    downloadJob = null
+                }) { Text("取消") }
                 is UpdateState.Downloading -> TextButton(onClick = {
                     downloadJob?.cancel()
                     downloadJob = null
