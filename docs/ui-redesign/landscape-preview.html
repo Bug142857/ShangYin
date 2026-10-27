@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>老郑分享 · 横屏 / 车机预览</title>
+<style>
+  :root {
+    --page-bg: #07080c;
+    --page-fg: #e9edf7;
+    --page-muted: #8d94a6;
+    --toolbar: rgba(16, 18, 25, .88);
+    --toolbar-line: rgba(255,255,255,.10);
+    --chip: rgba(255,255,255,.07);
+    --chip-active: #6f9dff;
+    --chip-active-fg: #061022;
+    --bezel: #171a22;
+    --bezel-edge: #2b3040;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--page-bg); color: var(--page-fg); }
+  body {
+    font-family: "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, sans-serif;
+    background:
+      radial-gradient(900px 500px at 15% -10%, rgba(80,120,255,.18), transparent 60%),
+      radial-gradient(700px 420px at 100% 0%, rgba(0,190,170,.10), transparent 55%),
+      linear-gradient(180deg, #0a0b11 0%, #07080c 60%);
+  }
+
+  .toolbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 14px 22px;
+    background: var(--toolbar); backdrop-filter: blur(18px);
+    border-bottom: 1px solid var(--toolbar-line);
+  }
+  .brand { display: flex; align-items: center; gap: 12px; min-width: 280px; }
+  .logo {
+    width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center;
+    background: linear-gradient(145deg, #2f5bc7, #14275e); color: #fff;
+    font-weight: 800; font-size: 18px; box-shadow: 0 8px 24px rgba(40,90,220,.28);
+  }
+  .brand h1 { margin: 0; font-size: 15px; letter-spacing: .2px; }
+  .brand p { margin: 3px 0 0; font-size: 11px; color: var(--page-muted); }
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-left: auto; }
+  .tabs { display: flex; gap: 4px; padding: 4px; border-radius: 11px; background: var(--chip); }
+  .tabs button {
+    border: 0; background: transparent; color: var(--page-muted); font: inherit; font-size: 12px;
+    padding: 7px 11px; border-radius: 8px; cursor: pointer; white-space: nowrap;
+  }
+  .tabs button:hover { color: var(--page-fg); background: rgba(255,255,255,.06); }
+  .tabs button.active { background: var(--chip-active); color: var(--chip-active-fg); font-weight: 700; }
+  .select-wrap { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--page-muted); }
+  select, .ghost-btn {
+    border: 1px solid var(--toolbar-line); background: var(--chip); color: var(--page-fg);
+    border-radius: 997px; padding: 7px 12px; font: inherit; font-size: 12px; cursor: pointer; outline: none;
+  }
+  select { appearance: none; padding-right: 26px; background-image: linear-gradient(45deg, transparent 50%, #9aa3b8 50%), linear-gradient(135deg, #9aa3b8 50%, transparent 50%); background-position: calc(100% - 14px) 52%, calc(100% - 10px) 52%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; }
+  .ghost-btn:hover { background: rgba(255,255,255,.12); }
+  .meta-line {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 24px 0; font-size: 11px; color: var(--page-muted);
+  }
+  .meta-line b { color: #b9c4da; font-weight: 600; }
+  .dot { width: 4px; height: 4px; border-radius: 50%; background: #4a5266; }
+
+  .stage { padding: 16px 24px 34px; display: flex; flex-direction: column; align-items: center; }
+  .frame-wrap { position: relative; margin: 0 auto; }
+  .frame {
+    position: absolute; top: 0; left: 0; width: 1280px; height: 720px;
+    transform-origin: top left;
+    border-radius: 22px; padding: 8px; background: linear-gradient(180deg, var(--bezel-edge), var(--bezel));
+    box-shadow: 0 30px 90px rgba(0,0,0,.62), 0 0 0 1px rgba(255,255,255,.06), inset 0 0 0 1px rgba(0,0,0,.5);
+  }
+  .screen {
+    --app-bg: #101116; --app-surface: #181a20; --app-surface2: #22252d; --app-surface3: #2a2e38;
+    --app-text: #e9ecf4; --app-muted: #9aa1b1; --app-primary: #9dc0ff; --app-primary-strong: #5b8def;
+    --app-line: rgba(255,255,255,.09); --app-danger: #ff6b81;
+    position: relative; width: 100%; height: 100%; overflow: hidden; border-radius: 15px;
+    background: var(--app-bg); color: var(--app-text);
+    display: flex; flex-direction: column;
+    font-size: 14px; line-height: 1.35;
+    transition: background .18s ease, color .18s ease;
+  }
+  .frame.light .screen {
+    --app-bg: #f5f7fc; --app-surface: #ffffff; --app-surface2: #e9eef8; --app-surface3: #dde5f4;
+    --app-text: #1b1e28; --app-muted: #687083; --app-primary: #3e63c9; --app-primary-strong: #3155b8;
+    --app-line: rgba(20,30,60,.09); --app-danger: #d92b4b;
+  }
+  .statusbar {
+    height: 24px; flex: none; display: flex; align-items: center; padding: 0 16px;
+    font-size: 11px; color: var(--app-muted); letter-spacing: .2px;
+  }
+  .statusbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .statusbar svg { width: 13px; height: 13px; }
+  .appbar {
+    height: 54px; flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 0 16px; background: var(--app-surface); border-bottom: 1px solid var(--app-line);
+  }
+  .appbar .title { font-size: 19px; font-weight: 800; letter-spacing: .2px; }
+  .appbar .sub { font-size: 10px; color: var(--app-muted); margin-top: 1px; }
+  .appbar .grow { flex: 1; }
+  .iconbtn {
+    width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center;
+    color: var(--app-text); background: transparent; border: 0; cursor: pointer;
+  }
+  .iconbtn:hover { background: var(--app-surface2); }
+  .iconbtn svg { width: 22px; height: 22px; }
+
+  .scroll { flex: 1; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--app-surface3) transparent; }
+  .scroll::-webkit-scrollbar { width: 7px; height: 7px; }
+  .scroll::-webkit-scrollbar-thumb { background: var(--app-surface3); border-radius: 99px; }
+
+  /* ---------------- 首页 ---------------- */
+  .home { padding: 10px 16px 16px; }
+  .mod-grid { display: grid; grid-template-columns: repeat(var(--mod-cols, 7), minmax(0, 1fr)); gap: 10px 10px; }
+  .mod {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 6px; padding: 8px 2px; border-radius: 16px; min-height: 92px;
+  }
+  .mod:hover { background: rgba(255,255,255,.035); }
+  .frame.light .mod:hover { background: rgba(20,40,80,.04); }
+  .mod .box {
+    width: 60px; height: 60px; border-radius: 20px; display: grid; place-items: center;
+    background: var(--app-surface2); color: var(--app-primary);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+  }
+  .mod .box svg { width: 28px; height: 28px; }
+  .mod .name { font-size: 12px; color: var(--app-text); }
+  .divider { display: flex; align-items: center; gap: 12px; margin: 14px 4px 12px; color: var(--app-muted); font-size: 10px; }
+  .divider::before, .divider::after { content: ""; height: 1px; background: var(--app-line); flex: 1; }
+
+  /* ---------------- 设置 ---------------- */
+  .settings { padding: 10px 16px 16px; }
+  .settings-grid { display: grid; gap: 7px 14px; grid-template-columns: 1fr; }
+  .settings-grid.two { grid-template-columns: 1fr 1fr; }
+  .s-card {
+    display: flex; align-items: center; gap: 13px; min-height: 50px;
+    padding: 8px 14px; border-radius: 12px; background: var(--app-surface2);
+  }
+  .s-card .ic { width: 22px; height: 22px; flex: none; color: var(--app-primary); display: grid; place-items: center; }
+  .s-card .ic svg { width: 21px; height: 21px; }
+  .s-card .txt { flex: 1; min-width: 0; }
+  .s-card .t { font-size: 13px; font-weight: 600; }
+  .s-card .h { font-size: 10.5px; color: var(--app-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .s-card .chev { color: var(--app-muted); flex: none; display: grid; place-items: center; }
+  .s-card .chev svg { width: 17px; height: 17px; }
+
+  /* ---------------- 收藏 ---------------- */
+  .page { padding: 8px 16px 16px; }
+  .lead { font-size: 11px; color: var(--app-muted); margin: 2px 2px 10px; }
+  .fav-grid { display: grid; grid-template-columns: repeat(var(--fav-cols, 5), minmax(0, 1fr)); gap: 10px; }
+  .fav {
+    display: flex; align-items: center; gap: 11px; padding: 10px 13px;
+    border-radius: 12px; background: var(--app-surface2); min-height: 54px;
+  }
+  .fav .ic { width: 24px; height: 24px; color: var(--app-primary); display: grid; place-items: center; flex: none; }
+  .fav .ic svg { width: 23px; height: 23px; }
+  .fav .txt { flex: 1; min-width: 0; }
+  .fav .t { font-size: 12.5px; font-weight: 600; }
+  .fav .h { font-size: 10px; color: var(--app-muted); margin-top: 1px; white-space: nowrap; }
+  .fav .chev { color: var(--app-muted); }
+  .fav .chev svg { width: 16px; height: 16px; }
+
+  /* ---------------- 下载 ---------------- */
+  .dl-grid { display: grid; grid-template-columns: repeat(var(--dl-cols, 2), minmax(0, 1fr)); gap: 12px; }
+  .dl {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border-radius: 12px; background: var(--app-surface2); min-height: 62px;
+  }
+  .dl .ic { width: 24px; height: 24px; color: var(--app-primary); display: grid; place-items: center; flex: none; }
+  .dl .ic svg { width: 23px; height: 23px; }
+  .dl .txt { flex: 1; min-width: 0; }
+  .dl .t { font-size: 13px; font-weight: 600; }
+  .dl .h { font-size: 10.5px; color: var(--app-muted); margin-top: 2px; }
+  .dirbtn {
+    border: 1px solid var(--app-line); color: var(--app-primary); background: transparent;
+    border-radius: 99px; padding: 5px 9px; font-size: 9.5px; white-space: nowrap; display: flex; align-items: center; gap: 4px;
+  }
+  .dirbtn svg { width: 12px; height: 12px; }
+
+  /* ---------------- 番号海报 ---------------- */
+  .searchbar {
+    display: flex; align-items: center; gap: 9px; margin: 6px 16px 8px;
+    padding: 9px 13px; border-radius: 99px; background: var(--app-surface2); color: var(--app-muted); font-size: 12px;
+  }
+  .searchbar svg { width: 16px; height: 16px; }
+  .chips { display: flex; gap: 7px; padding: 0 16px 9px; overflow: hidden; }
+  .chip {
+    font-size: 10.5px; padding: 5px 11px; border-radius: 99px;
+    border: 1px solid var(--app-line); color: var(--app-muted); white-space: nowrap;
+  }
+  .chip.on { background: var(--app-primary-strong); border-color: var(--app-primary-strong); color: #fff; }
+  .poster-grid { display: grid; grid-template-columns: repeat(var(--poster-cols, 7), minmax(0, 1fr)); gap: 12px 10px; padding: 0 16px 16px; }
+  .poster { min-width: 0; }
+  .poster .art {
+    width: 100%; aspect-ratio: 3 / 4; border-radius: 9px; position: relative; overflow: hidden;
+    display: grid; place-items: center; color: rgba(255,255,255,.9);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+  }
+  .poster .art svg { width: 28px; height: 28px; opacity: .55; }
+  .poster .art .badge {
+    position: absolute; left: 6px; bottom: 6px; font-size: 9px; color: #fff;
+    background: rgba(0,0,0,.55); padding: 2px 5px; border-radius: 4px;
+  }
+  .poster .art .heart { position: absolute; right: 6px; top: 6px; color: #ff6b8a; }
+  .poster .art .heart svg { width: 16px; height: 16px; opacity: .95; }
+  .poster .name { font-size: 10.5px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .poster .meta { font-size: 9.5px; color: var(--app-muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---------------- 音乐 ---------------- */
+  .music-screen {
+    flex: 1; display: flex; flex-direction: column; min-height: 0;
+    background:
+      radial-gradient(700px 300px at 50% 0%, rgba(90,130,255,.22), transparent 70%),
+      radial-gradient(500px 260px at 10% 100%, rgba(0,190,170,.10), transparent 70%),
+      var(--app-bg);
+    padding: 0 26px 12px;
+  }
+  .music-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .lyrics { flex: 1; overflow: hidden; display: flex; flex-direction: column; justify-content: center; gap: 12px; text-align: center; padding: 6px 0; }
+  .lyric { font-size: 13px; color: var(--app-muted); opacity: .6; }
+  .lyric.on { color: var(--app-primary); font-size: 15px; font-weight: 700; opacity: 1; }
+  .music-title { text-align: center; font-size: 19px; font-weight: 800; }
+  .music-sub { text-align: center; font-size: 11px; color: var(--app-muted); margin-top: 2px; }
+  .progress { display: flex; align-items: center; gap: 10px; margin-top: 8px; font-size: 10px; color: var(--app-muted); }
+  .track { flex: 1; height: 4px; border-radius: 99px; background: var(--app-surface3); position: relative; }
+  .track::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 32%; border-radius: 99px; background: var(--app-primary-strong); }
+  .track::after { content: ""; position: absolute; left: 32%; top: 50%; width: 12px; height: 12px; border-radius: 50%; background: var(--app-primary); transform: translate(-50%, -50%); box-shadow: 0 0 0 3px rgba(120,160,255,.15); }
+  .player-controls { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 8px; }
+  .ctrl { width: 42px; height: 42px; border-radius: 50%; display: grid; place-items: center; color: var(--app-text); }
+  .ctrl svg { width: 24px; height: 24px; }
+  .ctrl.dim { color: var(--app-muted); }
+  .ctrl.play { width: 60px; height: 60px; background: var(--app-primary-strong); color: #fff; box-shadow: 0 8px 22px rgba(60,110,230,.35); }
+  .ctrl.play svg { width: 30px; height: 30px; }
+  .ctrl.heart { color: #ff6b8a; }
+  .mode-hint { text-align: center; font-size: 10px; color: var(--app-primary); margin-top: 5px; height: 14px; }
+
+  .stage-note { max-width: 980px; margin: 16px auto 0; color: var(--page-muted); font-size: 11px; text-align: center; line-height: 1.7; }
+  .stage-note b { color: #c5d0e6; font-weight: 600; }
+  .stage-note a { color: #8fb4ff; text-decoration: none; }
+  .stage-note code { background: rgba(255,255,255,.06); padding: 2px 6px; border-radius: 5px; color: #c9d3e6; }
+
+  @media (max-width: 760px) {
+    .toolbar { padding: 12px 14px; gap: 10px; }
+    .brand { min-width: 0; }
+    .brand p { display: none; }
+    .controls { margin-left: 0; width: 100%; }
+    .tabs { overflow: auto; width: 100%; }
+    .meta-line { padding: 8px 14px 0; }
+    .stage { padding: 10px 8px 24px; }
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18v2H3zM3 11h18v2H3zM3 16h18v2H3z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20z"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9.29 6.71a1 1 0 0 0 0 1.41L13.17 12l-3.88 3.88a1 1 0 1 0 1.42 1.41l4.58-4.58a1 1 0 0 0 0-1.41L10.71 6.7a1 1 0 0 0-1.42 0z"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M3 5h2v2H3zm0 6h2v2H3zm0 6h2v2H3zM7 5h14v2H7zm0 6h14v2H7zm0 6h14v2H7z"/></symbol>
+    <symbol id="i-play-circle" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-2 14.5v-9l7 4.5-7 4.5z"/></symbol>
+    <symbol id="i-music" viewBox="0 0 24 24"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h5V3h-7z"/></symbol>
+    <symbol id="i-gamepad" viewBox="0 0 24 24"><path d="M7.5 7A5.5 5.5 0 0 0 2 12.5v1A4.5 4.5 0 0 0 6.5 18c1.2 0 2.3-.47 3.12-1.24L11.2 15.5h1.6l1.58 1.26A4.5 4.5 0 0 0 22 13.5v-1A5.5 5.5 0 0 0 16.5 7h-9zM8 10h2v2h2v2h-2v2H8v-2H6v-2h2v-2zm8 1.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3zm2.5 3.5a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4z"/></symbol>
+    <symbol id="i-tv" viewBox="0 0 24 24"><path d="M21 6h-7.6l3.3-3.3-1.4-1.4L12 4.2 8.7 1.3 7.3 2.7 10.6 6H3a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2zm0 13H3V8h18v11z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-2 12H6v-2h12v2zm0-3H6V9h12v2zm0-3H6V6h12v2z"/></symbol>
+    <symbol id="i-book" viewBox="0 0 24 24"><path d="M18 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></symbol>
+    <symbol id="i-comic" viewBox="0 0 24 24"><path d="M21 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h16l4 3V5a2 2 0 0 0-2-2zm-4 11H7v-2h10v2zm0-4H7V8h10v2z"/></symbol>
+    <symbol id="i-movie" viewBox="0 0 24 24"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V4h-4z"/></symbol>
+    <symbol id="i-cancel" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zM6.5 12A1.5 1.5 0 1 1 8 10.5 1.5 1.5 0 0 1 6.5 12zm3-4A1.5 1.5 0 1 1 11 6.5 1.5 1.5 0 0 1 9.5 8zm5 0A1.5 1.5 0 1 1 16 6.5 1.5 1.5 0 0 1 14.5 8zm3 4A1.5 1.5 0 1 1 19 10.5 1.5 1.5 0 0 1 17.5 12z"/></symbol>
+    <symbol id="i-person" viewBox="0 0 24 24"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></symbol>
+    <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M19.35 10.04A7.5 7.5 0 0 0 5.35 8.04 6 6 0 0 0 6 20h13a5 5 0 0 0 .35-9.96z"/></symbol>
+    <symbol id="i-tune" viewBox="0 0 24 24"><path d="M3 17v2h6v-2zm0-6v2h10v-2zm0-6v2h14V5zm14 14v-2h4v-2h-4v-2h-2v6zm-6-4v2h10v-2zm6-6v2h4V9z"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7zM5 18v2h14v-2z"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M19 3l-1.7 3.8L13 8.5l4.3 1.7L19 14l1.7-3.8L25 8.5l-4.3-1.7zM9 9l-2.4 5.3L1 16.7l5.6 2.4L9 24l2.4-4.9 5.6-2.4-5.6-2.4z"/></symbol>
+    <symbol id="i-update" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-2h2zm0-4h-2V7h2z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8z"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></symbol>
+    <symbol id="i-prev" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></symbol>
+    <symbol id="i-next" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zM16 6v12h2V6z"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19zM9.5 14A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></symbol>
+    <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2 8.8l20 0-10 12z"/></symbol>
+    <symbol id="i-battery" viewBox="0 0 24 24"><path d="M4 6h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2zm18 4h2v4h-2z"/></symbol>
+  </defs>
+</svg>
+
+<header class="toolbar">
+  <div class="brand">
+    <div class="logo">郑</div>
+    <div>
+      <h1>老郑分享 · 横屏 / 车机预览</h1>
+      <p>HTML 布局模拟 · 实际效果以安装包为准</p>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="tabs" id="tabs">
+      <button data-screen="home" class="active">首页</button>
+      <button data-screen="settings">配置管理</button>
+      <button data-screen="favorites">收藏管理</button>
+      <button data-screen="downloads">下载管理</button>
+      <button data-screen="posters">番号</button>
+      <button data-screen="music">音乐播放</button>
+    </div>
+    <label class="select-wrap">逻辑宽度
+      <select id="widthSel">
+        <option value="600">600dp</option>
+        <option value="700">700dp</option>
+        <option value="960">960dp</option>
+        <option value="1280" selected>1280dp</option>
+        <option value="1600">1600dp</option>
+        <option value="1920">1920dp</option>
+      </select>
+    </label>
+    <button class="ghost-btn" id="themeBtn">切换浅色</button>
+    <button class="ghost-btn" id="fsBtn">全屏</button>
+  </div>
+</header>
+
+<div class="meta-line" id="metaLine"></div>
+
+<main class="stage">
+  <div class="frame-wrap" id="frameWrap">
+    <div class="frame" id="frame">
+      <div class="screen" id="screen"></div>
+    </div>
+  </div>
+  <div class="stage-note">
+    画布固定 16:9；上面的「逻辑宽度」用于模拟车机上报的屏幕宽度（只影响列数与是否双栏）。<br />
+    这是布局预览，不是真实截图；图标、字体、间距以 APK 实际渲染为准。<br />
+    实际安装包：<a href="https://github.com/Bug142857/ShangYin/releases/tag/v0.323" target="_blank" rel="noreferrer">GitHub Release v0.323</a>
+    · 构建产物 <code>app/build/outputs/apk/release/老郑分享-0.323.apk</code>
+  </div>
+</main>
+
+<script>
+  const topModules = [
+    { name: '清单', icon: 'i-list' },
+    { name: '观影', icon: 'i-play-circle' },
+    { name: '音乐', icon: 'i-music' },
+    { name: '游戏', icon: 'i-gamepad' },
+    { name: '电视', icon: 'i-tv' },
+    { name: '吃瓜', icon: 'i-chat' }
+  ];
+  const bottomModules = [
+    { name: '图书', icon: 'i-book' },
+    { name: '漫画', icon: 'i-comic' },
+    { name: '本子', icon: 'i-book' },
+    { name: '番1', icon: 'i-movie' },
+    { name: '番2', icon: 'i-movie' },
+    { name: '番3', icon: 'i-movie' },
+    { name: '番4', icon: 'i-movie' },
+    { name: 'P站', icon: 'i-play-circle' },
+    { name: 'X站', icon: 'i-cancel' }
+  ];
+  const settings = [
+    { t: '主题管理', h: '跟随系统 · 动态色', i: 'i-palette' },
+    { t: '账号管理', h: '豆瓣·无忧·Zlib', i: 'i-person' },
+    { t: '数据管理', h: '云端同步·导出/导入备份', i: 'i-cloud' },
+    { t: '片源管理', h: '电视源&影视源（观影/番号）', i: 'i-tv' },
+    { t: '清单管理', h: '共 3 个清单', i: 'i-list' },
+    { t: '模块管理', h: '模块入口编辑', i: 'i-tune' },
+    { t: '收藏管理', h: '共 73 条收藏 · 按模块整理', i: 'i-heart' },
+    { t: '下载管理', h: '已下载 54 个文件 · 5.1 GB', i: 'i-download' },
+    { t: '清理缓存', h: '当前缓存：126 MB', i: 'i-sparkle' },
+    { t: '版本更新', h: '当前 v0.323 · 点击检查更新', i: 'i-update' }
+  ];
+  const favorites = [
+    { t: '观影', n: 3, i: 'i-play-circle' },
+    { t: '音乐', n: 12, i: 'i-music' },
+    { t: '游戏', n: 5, i: 'i-gamepad' },
+    { t: '电视', n: 8, i: 'i-tv' },
+    { t: '吃瓜', n: 2, i: 'i-chat' },
+    { t: '图书', n: 1, i: 'i-book' },
+    { t: '漫画', n: 9, i: 'i-comic' },
+    { t: '本子', n: 4, i: 'i-book' },
+    { t: '番号', n: 16, i: 'i-movie' },
+    { t: 'P站', n: 7, i: 'i-play-circle' },
+    { t: 'X站', n: 6, i: 'i-cancel' }
+  ];
+  const downloads = [
+    { t: '视频', h: '12 个 · 3.2 GB', i: 'i-play' },
+    { t: '漫画', h: '8 部 · 1.1 GB', i: 'i-folder' },
+    { t: '本子', h: '3 本 · 420 MB', i: 'i-folder' },
+    { t: '音乐', h: '26 个 · 210 MB', i: 'i-folder' },
+    { t: '书籍', h: '5 个 · 180 MB', i: 'i-folder' }
+  ];
+  const posterTitles = [
+    ['示例影片 01', '2026 · 科幻'], ['示例影片 02', '2025 · 剧情'],
+    ['示例影片 03', '2026 · 悬疑'], ['示例影片 04', '2024 · 犯罪'],
+    ['示例影片 05', '2026 · 动作'], ['示例影片 06', '2025 · 喜剧'],
+    ['示例影片 07', '2026 · 动画'], ['示例影片 08', '2024 · 历史'],
+    ['示例影片 09', '2026 · 爱情'], ['示例影片 10', '2025 · 冒险'],
+    ['示例影片 11', '2026 · 纪录'], ['示例影片 12', '2024 · 家庭'],
+    ['示例影片 13', '2026 · 奇幻'], ['示例影片 14', '2025 · 战争']
+  ];
+  const posterGradients = [
+    'linear-gradient(145deg,#263b76,#7b4bd6)',
+    'linear-gradient(145deg,#0e5c63,#2fb7a5)',
+    'linear-gradient(145deg,#6d243e,#d0647f)',
+    'linear-gradient(145deg,#4b3a1d,#c89a3a)',
+    'linear-gradient(145deg,#103a63,#3d8fd1)',
+    'linear-gradient(145deg,#4c1e63,#a95bd1)',
+    'linear-gradient(145deg,#194c3a,#44a56f)',
+    'linear-gradient(145deg,#5b2727,#c25b4e)'
+  ];
+
+  let screenName = 'home';
+  let logicalWidth = 1280;
+  let light = false;
+
+  const screenEl = document.getElementById('screen');
+  const frame = document.getElementById('frame');
+  const frameWrap = document.getElementById('frameWrap');
+  const metaLine = document.getElementById('metaLine');
+
+  function gridCols(portrait, w) {
+    if (w >= 1600) return portrait <= 2 ? 6 : 8;
+    if (w >= 1200) return portrait <= 2 ? 5 : 7;
+    if (w >= 900) return portrait <= 2 ? 4 : 6;
+    if (w >= 700) return portrait <= 2 ? 3 : 5;
+    if (w >= 600) return portrait <= 2 ? 3 : 4;
+    return portrait;
+  }
+  function moduleCols(w) {
+    if (w >= 1600) return 8;
+    if (w >= 1200) return 7;
+    if (w >= 900) return 6;
+    if (w >= 700) return 5;
+    if (w >= 600) return 4;
+    return 3;
+  }
+  function icon(id, cls = '') {
+    return `<svg class="${cls}" viewBox="0 0 24 24" fill="currentColor"><use href="#${id}"/></svg>`;
+  }
+  function appbar(title, sub = '', back = false, actions = '') {
+    return `<div class="appbar">
+      ${back ? `<button class="iconbtn">${icon('i-back')}</button>` : ''}
+      <div>
+        <div class="title">${title}</div>
+        ${sub ? `<div class="sub">${sub}</div>` : ''}
+      </div>
+      <div class="grow"></div>
+      ${actions}
+    </div>`;
+  }
+  function statusbar() {
+    return `<div class="statusbar">
+      <span>10:24</span>
+      <div class="right">
+        ${icon('i-wifi')}${icon('i-battery')}
+        <span>100%</span>
+      </div>
+    </div>`;
+  }
+
+  function homeScreen() {
+    const cols = moduleCols(logicalWidth);
+    const tile = m => `<div class="mod"><div class="box">${icon(m.icon)}</div><div class="name">${m.name}</div></div>`;
+    return `${statusbar()}
+      ${appbar('老郑分享', '', false, `<button class="iconbtn">${icon('i-menu')}</button>`)}
+      <div class="scroll home">
+        <div class="mod-grid" style="--mod-cols:${cols}">
+          ${topModules.map(tile).join('')}
+        </div>
+        <div class="divider">以下模块需要外网环境</div>
+        <div class="mod-grid" style="--mod-cols:${cols}">
+          ${bottomModules.map(tile).join('')}
+        </div>
+      </div>`;
+  }
+
+  function settingsScreen() {
+    const two = logicalWidth >= 600;
+    const card = e => `<div class="s-card">
+        <div class="ic">${icon(e.i)}</div>
+        <div class="txt"><div class="t">${e.t}</div><div class="h">${e.h}</div></div>
+        <div class="chev">${icon('i-chev')}</div>
+      </div>`;
+    const left = settings.slice(0, 5).map(card).join('');
+    const right = settings.slice(5).map(card).join('');
+    return `${statusbar()}
+      ${appbar('配置管理', '', true)}
+      <div class="scroll settings">
+        ${two
+          ? `<div class="settings-grid two"><div>${left}</div><div>${right}</div></div>`
+          : `<div class="settings-grid">${settings.map(card).join('')}</div>`}
+      </div>`;
+  }
+
+  function favoritesScreen() {
+    const cols = gridCols(1, logicalWidth);
+    const total = favorites.reduce((a, b) => a + b.n, 0);
+    return `${statusbar()}
+      ${appbar('收藏管理', '', true)}
+      <div class="scroll page">
+        <div class="lead">共 ${total} 条收藏 · 按模块整理</div>
+        <div class="fav-grid" style="--fav-cols:${cols}">
+          ${favorites.map(f => `<div class="fav">
+            <div class="ic">${icon(f.i)}</div>
+            <div class="txt"><div class="t">${f.t}</div><div class="h">${f.n} 条收藏</div></div>
+            <div class="chev">${icon('i-chev')}</div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  function downloadsScreen() {
+    const cols = logicalWidth >= 600 ? 2 : 1;
+    return `${statusbar()}
+      ${appbar('下载管理', '', true)}
+      <div class="scroll page">
+        <div class="dl-grid" style="--dl-cols:${cols}">
+          ${downloads.map(d => `<div class="dl">
+            <div class="ic">${icon(d.i)}</div>
+            <div class="txt"><div class="t">${d.t}</div><div class="h">${d.h}</div></div>
+            <div class="dirbtn">${icon('i-folder')}打开系统目录</div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  function postersScreen() {
+    const cols = gridCols(3, logicalWidth);
+    return `${statusbar()}
+      ${appbar('番1', '示例片源 · 共 128 部', true, `<button class="iconbtn">${icon('i-heart')}</button>`)}
+      <div class="searchbar">${icon('i-search')}在示例片源里搜索</div>
+      <div class="chips">
+        <div class="chip on">全部</div><div class="chip">电影</div><div class="chip">剧集</div>
+        <div class="chip">动漫</div><div class="chip">综艺</div>
+      </div>
+      <div class="scroll">
+        <div class="poster-grid" style="--poster-cols:${cols}">
+          ${posterTitles.map((p, i) => `<div class="poster">
+            <div class="art" style="background:${posterGradients[i % posterGradients.length]}">
+              ${icon('i-play-circle')}
+              <span class="badge">HD</span>
+              <span class="heart">${icon('i-heart')}</span>
+            </div>
+            <div class="name">${p[0]}</div>
+            <div class="meta">${p[1]}</div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+  }
+
+  function musicScreen() {
+    const lyrics = ['这一路上走走停停', '顺着少年漂流的痕迹', '迈出车站的前一刻', '竟有些犹豫', '不禁笑这近乡情怯', '仍无可避免'];
+    const active = 2;
+    return `${statusbar()}
+      ${appbar('正在播放', '', true, `<button class="iconbtn">${icon('i-download')}</button>`)}
+      <div class="music-screen">
+        <div class="music-body">
+          <div class="lyrics">
+            ${lyrics.map((l, i) => `<div class="lyric ${i === active ? 'on' : ''}">${l}</div>`).join('')}
+          </div>
+          <div class="music-title">示例歌曲</div>
+          <div class="music-sub">示例歌手 · 示例专辑</div>
+          <div class="progress">
+            <span>01:23</span>
+            <div class="track"></div>
+            <span>05:12</span>
+          </div>
+          <div class="player-controls">
+            <div class="ctrl dim">${icon('i-repeat')}</div>
+            <div class="ctrl">${icon('i-prev')}</div>
+            <div class="ctrl play">${icon('i-pause')}</div>
+            <div class="ctrl">${icon('i-next')}</div>
+            <div class="ctrl heart">${icon('i-heart')}</div>
+          </div>
+          <div class="mode-hint">顺序播放</div>
+        </div>
+      </div>`;
+  }
+
+  const screens = {
+    home: homeScreen,
+    settings: settingsScreen,
+    favorites: favoritesScreen,
+    downloads: downloadsScreen,
+    posters: postersScreen,
+    music: musicScreen
+  };
+
+  function render() {
+    screenEl.innerHTML = screens[screenName]();
+    frame.classList.toggle('light', light);
+    const mCols = moduleCols(logicalWidth);
+    const sTwo = logicalWidth >= 600 ? '双栏' : '单栏';
+    const fCols = gridCols(1, logicalWidth);
+    const pCols = gridCols(3, logicalWidth);
+    const dCols = logicalWidth >= 600 ? 2 : 1;
+    metaLine.innerHTML = `<b>${logicalWidth}dp 逻辑宽度</b><span class="dot"></span>
+      首页模块 ${mCols} 列<span class="dot"></span>设置 ${sTwo}<span class="dot"></span>
+      收藏 ${fCols} 列<span class="dot"></span>下载 ${dCols} 列<span class="dot"></span>
+      海报 ${pCols} 列`;
+    fit();
+  }
+
+  function fit() {
+    const baseW = 1280, baseH = 720;
+    const stage = document.querySelector('.stage');
+    const top = stage.getBoundingClientRect().top;
+    const availW = Math.max(320, stage.clientWidth - 16);
+    const availH = Math.max(240, window.innerHeight - top - 110);
+    const scale = Math.min(availW / baseW, availH / baseH, 1);
+    frame.style.transform = `scale(${scale})`;
+    frameWrap.style.width = `${baseW * scale}px`;
+    frameWrap.style.height = `${baseH * scale}px`;
+  }
+
+  document.getElementById('tabs').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-screen]');
+    if (!btn) return;
+    screenName = btn.dataset.screen;
+    document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b === btn));
+    render();
+  });
+
+  document.getElementById('widthSel').addEventListener('change', (e) => {
+    logicalWidth = Number(e.target.value);
+    render();
+  });
+
+  document.getElementById('themeBtn').addEventListener('click', (e) => {
+    light = !light;
+    e.target.textContent = light ? '切换深色' : '切换浅色';
+    render();
+  });
+
+  document.getElementById('fsBtn').addEventListener('click', () => {
+    const el = document.documentElement;
+    if (!document.fullscreenElement) {
+      (el.requestFullscreen ? el.requestFullscreen() : Promise.reject()).catch(() => {});
+    } else {
+      document.exitFullscreen();
+    }
+  });
+
+  window.addEventListener('resize', fit);
+  render();
+</script>
+</body>
+</html>

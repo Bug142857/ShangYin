@@ -1,7 +1,7 @@
 {
-  "versionName": "0.322",
+  "versionName": "0.323",
   "sizeBytes": 20782681,
-  "sha256": "b56babaa831c707bf5f29bc97d78f9f6c0bff6a7752f63ee19af18e014f91443",
-  "changelog": "0.322：横屏 / 车机适配\n\n- 首页模块宫格、模块管理按屏幕宽度自动增加列数\n- 设置页在宽屏（车机 / 平板）改为双栏，10 个入口一屏展示\n- 收藏管理、下载文件夹、已下载视频支持宽屏多列\n- 豆瓣 / 番号 / 本子 / 漫画 / 图书 / 游戏 / X站 / P站 / 演职员 / 剧照等网格按宽度自动增加列数\n- 音乐播放器控制按钮在宽屏居中排列，避免过度分散",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.322/LaoZhengFenXiang-0.322.apk"
+  "sha256": "275579034f1ac39cddc25b8ef68cad55ebb82acae6f50dd0c536c7630b8bbdd9",
+  "changelog": "0.323：横屏方案复核 + 预览页修正\n\n- 横屏 / 车机布局与 docs/ui-redesign/landscape-preview.html 预览完全一致：首页模块列数、配置双栏、收藏/下载分列、番号海报网格、播放器 5 按钮居中\n- 新增横屏预览页（可切换首页/配置/收藏/下载/番号/音乐播放，模拟 600~1920dp 逻辑宽度）\n- 修正预览页中播放器按钮组因样式类名冲突被推到右侧的问题（APK 内一直是对称居中）\n- 除预览页外，APP 功能与 0.322 相同",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.323/LaoZhengFenXiang-0.323.apk"
 }
