@@ -24,6 +24,7 @@ import androidx.compose.material.icons.rounded.ListAlt
 import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -78,6 +79,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     val accentKey by SettingsStore.accentFlow.collectAsStateWithLifecycle()
 
     var showClearCache by remember { mutableStateOf(false) }
+    var showUpdate by remember { mutableStateOf(false) }
 
     var cacheSize by remember { mutableStateOf("计算中…") }
     LaunchedEffect(Unit) {
@@ -201,6 +203,12 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 hint = "当前缓存：$cacheSize",
                 onClick = { showClearCache = true }
             )
+            SettingsCard(
+                icon = Icons.Rounded.SystemUpdate,
+                title = "版本更新",
+                hint = if (versionName.isNotBlank()) "当前 v$versionName · 点击检查更新" else "点击检查更新",
+                onClick = { showUpdate = true }
+            )
             Spacer(Modifier.height(12.dp))
         }
     }
@@ -223,6 +231,11 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
             },
             dismissButton = { TextButton(onClick = { showClearCache = false }) { Text("取消") } }
         )
+    }
+
+    // 版本更新（仅手动触发）
+    if (showUpdate) {
+        UpdateDialog(context = context, onDismiss = { showUpdate = false })
     }
 }
 

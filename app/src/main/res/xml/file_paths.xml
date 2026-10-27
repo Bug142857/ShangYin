@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="share" path="share/" />
+    <!-- 应用内升级：下载到缓存目录的 APK 通过 FileProvider 交给系统安装器 -->
+    <cache-path name="updates" path="updates/" />
     <!-- 下载管理：书籍/视频在私有目录（Android 8/9）时用 FileProvider 打开 -->
     <external-files-path name="books" path="书籍/" />
     <external-files-path name="videos" path="视频/" />

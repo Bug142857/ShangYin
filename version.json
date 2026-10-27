@@ -1,0 +1,7 @@
+{
+  "versionName": "0.314",
+  "sizeBytes": 20749753,
+  "sha256": "7f6e1885d90c24885c0295702de81cf5f83da30ce0e3f526401511bc5ecc8519",
+  "changelog": "0.314：App 图标的「郑」字放大 10%\n\n- 只放大中心图形（郑字 + 光晕）并向四周羽化过渡，外部描边/高光/圆角保持不变\n- 方形与圆形两版同步更新，输出 48/72/96/144/192 五档 PNG",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.314/LaoZhengFenXiang-0.314.apk"
+}
