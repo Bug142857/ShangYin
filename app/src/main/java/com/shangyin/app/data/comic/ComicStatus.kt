@@ -55,6 +55,11 @@ object ComicStatusStore {
     private const val TTL_MS = 6 * 60 * 60 * 1000L
     private val json = Json { ignoreUnknownKeys = true }
 
+    /** 清空内存缓存（清理缓存 / 导入新数据后调用，避免展示另一份数据的旧状态） */
+    fun clearMemory() {
+        mem.clear()
+    }
+
     /** 站点侧数据快照（Komiic 额外带有序章节 id，用来把进度 id 映射成位置） */
     @Serializable
     private data class Snapshot(

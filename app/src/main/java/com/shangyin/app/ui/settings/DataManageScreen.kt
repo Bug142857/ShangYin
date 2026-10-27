@@ -48,7 +48,9 @@ import com.shangyin.app.data.buildExportJson
 import com.shangyin.app.data.parseExportJson
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -84,16 +86,19 @@ fun DataManageScreen(nav: NavHostController) {
                     tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 )
             } catch (_: Exception) {}
-            val json = pendingExportJson ?: return@let
+            val json = pendingExportJson ?: run {
+                Toast.makeText(context, "导出数据已失效，请重新点「导出数据」", Toast.LENGTH_LONG).show()
+                return@let
+            }
             val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
             val fileName = "老郑分享_$ts.json"
             runCatching {
                 val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, tree)
                 val newFile = docFile?.createFile("application/json", fileName)
-                if (newFile == null) throw Exception("无法创建文件")
-                context.contentResolver.openOutputStream(newFile.uri)?.use { os ->
-                    os.write(json.toByteArray())
-                }
+                    ?: throw Exception("无法创建文件")
+                val os = context.contentResolver.openOutputStream(newFile.uri)
+                    ?: throw Exception("无法写入文件")
+                os.use { it.write(json.toByteArray()) }
                 Toast.makeText(context, "已导出到 $fileName", Toast.LENGTH_SHORT).show()
             }.onFailure { e ->
                 Toast.makeText(context, "导出失败：${e.message}", Toast.LENGTH_LONG).show()
@@ -122,7 +127,7 @@ fun DataManageScreen(nav: NavHostController) {
                 .padding(16.dp)
         ) {
             Text(
-                "备份包含：收藏条目（含评分/笔记）、清单及子清单层级、清单归属排序、片源配置（含目录归属与测试结果）、里世界爱心收藏（吃瓜/X站/P站/番号/本子/漫画/电视）、配置快照（各站登录态、主题/昵称等设置、电视源、下载任务记录）。",
+                "备份包含：收藏条目（含评分/笔记）、清单及子清单层级、清单归属排序、片源配置（含目录归属与测试结果）、里世界爱心收藏（吃瓜/X站/P站/番号/本子/漫画/电视/音乐/观影）、漫画/本子阅读进度（上次看到）、配置快照（各站登录态、主题/昵称等设置、电视源、下载任务记录）。本机已下载的视频 / 音乐 / 漫画 / 书籍文件不在 JSON 内。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -172,8 +177,9 @@ fun DataManageScreen(nav: NavHostController) {
                     modifier = Modifier.fillMaxWidth().clickable {
                         scope.launch {
                             runCatching {
-                                val data = Repo.exportAll()
-                                buildExportJson(data)
+                                withContext(Dispatchers.IO) {
+                                    buildExportJson(Repo.exportAll())
+                                }
                             }.onSuccess { json ->
                                 pendingExportJson = json
                                 exportDirPicker.launch(null)
@@ -245,15 +251,19 @@ fun DataManageScreen(nav: NavHostController) {
         AlertDialog(
             onDismissRequest = { pendingImportUri = null },
             title = { Text("确认导入") },
-            text = { Text("导入会清空当前所有数据后替换，确定继续？") },
+            text = { Text("导入会用备份替换当前收藏与清单；备份里包含的爱心收藏、阅读进度与配置也会覆盖（老备份没有的字段保留本机现有值）。确定继续？") },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
                         runCatching {
-                            val json = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { br -> br.readText() }
-                                ?: return@runCatching
-                            val data = parseExportJson(json)
-                            Repo.importAll(data)
+                            withContext(Dispatchers.IO) {
+                                val json = context.contentResolver.openInputStream(uri)
+                                    ?.bufferedReader()
+                                    ?.use { br -> br.readText() }
+                                    ?: throw Exception("无法读取备份文件")
+                                val data = parseExportJson(json)
+                                Repo.importAll(data)
+                            }
                             Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
                         }.onFailure { e ->
                             Toast.makeText(context, "导入失败：${e.message}", Toast.LENGTH_LONG).show()

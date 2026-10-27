@@ -43,6 +43,8 @@ class App : Application(), ImageLoaderFactory {
         // v0.310：内置哔咔账号（账号管理里已隐藏哔咔登录项，新装用户开箱即用）
         runCatching { SettingsStore.ensureDefaultBikaAccountSeeded() }
         com.shangyin.app.data.InnerFavorites.init(this)
+        // 阅读进度（上次看到）单独存 SharedPreferences：启动时加载，导出/云同步才能拿到完整数据
+        com.shangyin.app.data.ReadProgressStore.ensure(this)
         // 记录 WebView 的真实默认 UA：登录页与接口请求必须用同一个 UA（Cookie 与 UA 绑定），
         // 且不能伪造——伪造的桌面 UA 会与 WebView 自动发出的 Client Hints（sec-ch-ua-platform: Android）
         // 互相矛盾，反爬系统会判定为机器人，表现为「浏览器能打开、App 里一直转圈/过不了验证」。
@@ -329,6 +331,11 @@ class App : Application(), ImageLoaderFactory {
             runCatching { deleteRecursive(File(ctx.cacheDir, "image_cache")) }
             // v0.235：吃瓜 WebView 解密管线的明文缓存（MelonWebFetcher 自建层）
             runCatching { deleteRecursive(com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(ctx)) }
+            // v0.321：漫画/本子详情+章节磁盘缓存、已下载的更新安装包、分享临时文件
+            runCatching { com.shangyin.app.data.ComicCacheStore.clear(ctx) }
+            runCatching { com.shangyin.app.data.comic.ComicStatusStore.clearMemory() }
+            runCatching { deleteRecursive(File(ctx.cacheDir, "updates")) }
+            runCatching { deleteRecursive(File(ctx.cacheDir, "share")) }
             // v0.308 修复：原来调 newImageLoader() —— 那是工厂方法，每次都会**新建**一个
             // ImageLoader，清的是新实例里空的内存缓存，对正在使用的单例毫无作用。
             // 改用 Coil 全局单例（ImageLoaderFactory 首次创建后复用同一个）。
@@ -337,12 +344,15 @@ class App : Application(), ImageLoaderFactory {
             runCatching { com.shangyin.app.data.DetailCache.clear() }
         }
 
-        /** 查询当前缓存总大小（字节）—— v0.308 起含吃瓜解密明文缓存，与清理范围保持一致 */
+        /** 查询当前缓存总大小（字节）—— 与 clearAllCaches 的范围保持一致 */
         fun cacheSizeBytes(ctx: Context): Long {
             val http = dirSize(File(ctx.cacheDir, "http"))
             val img = dirSize(File(ctx.cacheDir, "image_cache"))
             val melon = dirSize(com.shangyin.app.data.melon.MelonWebFetcher.cacheDir(ctx))
-            return http + img + melon
+            val comic = com.shangyin.app.data.ComicCacheStore.size(ctx)
+            val updates = dirSize(File(ctx.cacheDir, "updates"))
+            val share = dirSize(File(ctx.cacheDir, "share"))
+            return http + img + melon + comic + updates + share
         }
 
         private fun deleteRecursive(f: File) {

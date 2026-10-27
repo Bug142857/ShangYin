@@ -50,4 +50,18 @@ object ReadProgressStore {
         ensure(context)
         return _map.value["$source/$id"]
     }
+
+    /**
+     * 全量替换阅读进度（数据导入 / 云同步恢复用，v0.321）。
+     * 会先清空本机旧进度，避免导入后残留不属于当前备份的「上次看到」。
+     */
+    fun replaceAll(context: Context, progress: Map<String, String>) {
+        ensure(context)
+        synchronized(this) { _map.value = progress }
+        val sp = context.applicationContext
+            .getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        val editor = sp.edit().clear()
+        progress.forEach { (k, v) -> if (v.isNotBlank()) editor.putString(k, v) }
+        editor.apply()
+    }
 }

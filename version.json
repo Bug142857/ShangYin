@@ -1,7 +1,7 @@
 {
-  "versionName": "0.320",
+  "versionName": "0.321",
   "sizeBytes": 20782681,
-  "sha256": "93a5aa30444e119fa1189951f10cc258ae2231b151de94b2056adb3911e6da81",
-  "changelog": "0.320：更新下载线路优选\n\n- 点下载后先并发测速 GitHub 直连与镜像（各拉取 256KB 样例），自动选择最快线路再下载\n- 下载进度下方显示当前实际使用的线路，某条线路失败会自动换下一条\n- 测速最多 4 秒，避免在选择线路上等待过久",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.320/LaoZhengFenXiang-0.320.apk"
+  "sha256": "cfe158c5e9549b4648c9e4a0a65a295925a611676e68918677ee90329471e97b",
+  "changelog": "0.321：缓存与备份完整性修复\n\n- 数据导出 / 云同步纳入漫画、本子阅读进度（上次看到）\n- 导入空片源 / 空收藏现在会正确清空；兼容老备份里 config 中的片源；误选普通 JSON 会被拒绝\n- 导入后清理详情 / 章节 / 漫画状态缓存，避免旧数据串台\n- 清理缓存补上漫画 / 本子详情缓存、已下载的更新安装包、分享临时文件，并计入缓存大小\n- 云端恢复的自动备份最多保留最近 10 份；缓存统计与清理改到后台线程",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.321/LaoZhengFenXiang-0.321.apk"
 }

@@ -313,7 +313,8 @@ object SettingsStore {
         var count = 0
         val editor = sp.edit()
         for ((key, raw) in data) {
-            if (raw.isBlank()) continue
+            // 补缺模式跳过空值；全量恢复模式保留空值（备份里明确为空 = 恢复后也应清空）
+            if (raw.isBlank() && !overwrite) continue
             if (!overwrite && sp.contains(key)) continue
             when {
                 // ---- v0.308 带类型前缀的新备份：直接按原类型写回 ----

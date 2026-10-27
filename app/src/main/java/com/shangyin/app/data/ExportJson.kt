@@ -104,16 +104,21 @@ fun buildExportJson(data: ExportData): String {
     }
     root.put("innerFavs", favArr)
 
+    // 阅读进度（上次看到）：单独的 SharedPreferences，v0.321 起纳入备份
+    root.put("readProgress", JSONObject(data.readProgress))
+
     // 配置快照（登录态/主题/昵称/电视源/模块开关/下载记录等），旧客户端导入时自动忽略此字段
-    if (data.config.isNotEmpty()) {
-        root.put("config", JSONObject(data.config))
-    }
+    root.put("config", JSONObject(data.config))
 
     return root.toString(2)
 }
 
 fun parseExportJson(json: String): ExportData {
     val root = JSONObject(json)
+    // 防止误选普通 JSON 文件：本 App 的备份一定含这三张表（即使是空表）
+    require(root.has("items") && root.has("lists") && root.has("listItems")) {
+        "不是有效的备份文件（缺少 items / lists / listItems）"
+    }
 
     val items = root.optJSONArray("items")?.let { arr ->
         (0 until arr.length()).map { i ->
@@ -220,5 +225,28 @@ fun parseExportJson(json: String): ExportData {
         m
     } ?: emptyMap()
 
-    return ExportData(items, lists, rels, vodSources, innerFavs, config)
+    // 阅读进度：旧备份文件无此字段时为空 Map
+    val readProgress = root.optJSONObject("readProgress")?.let { o ->
+        val m = mutableMapOf<String, String>()
+        for (key in o.keys()) {
+            val v = o.optString(key, "")
+            if (v.isNotBlank()) m[key] = v
+        }
+        m
+    } ?: emptyMap()
+
+    return ExportData(
+        items = items,
+        lists = lists,
+        listItems = rels,
+        vodSources = vodSources,
+        innerFavs = innerFavs,
+        config = config,
+        readProgress = readProgress,
+        // 「字段是否存在」决定导入时空字段是清空还是保留本机旧数据
+        hasVodSources = root.has("vodSources"),
+        hasInnerFavs = root.has("innerFavs"),
+        hasConfig = root.has("config"),
+        hasReadProgress = root.has("readProgress")
+    )
 }

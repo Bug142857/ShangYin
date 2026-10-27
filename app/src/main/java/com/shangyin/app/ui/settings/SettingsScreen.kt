@@ -84,14 +84,17 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
 
     var cacheSize by remember { mutableStateOf("计算中…") }
     LaunchedEffect(Unit) {
-        cacheSize = runCatching {
-            val bytes = com.shangyin.app.App.cacheSizeBytes(context)
-            when {
-                bytes > 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
-                bytes > 1024 -> "${bytes / 1024} KB"
-                else -> "$bytes B"
-            }
-        }.getOrDefault("未知")
+        // 目录遍历可能较大，放 IO 线程，避免打开设置页时卡顿
+        cacheSize = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = com.shangyin.app.App.cacheSizeBytes(context)
+                when {
+                    bytes > 1024 * 1024 -> "${bytes / (1024 * 1024)} MB"
+                    bytes > 1024 -> "${bytes / 1024} KB"
+                    else -> "$bytes B"
+                }
+            }.getOrDefault("未知")
+        }
     }
 
     // 清单总数（清单管理标题后直接展示）
@@ -217,11 +220,13 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         AlertDialog(
             onDismissRequest = { showClearCache = false },
             title = { Text("清理缓存") },
-            text = { Text("将清除所有图片缓存和网络请求缓存。下次打开 App 或浏览豆瓣内容时会重新下载，不影响已保存的收藏数据。") },
+            text = { Text("将清除图片缓存、网络请求缓存、漫画/本子详情缓存、已下载的更新安装包与分享临时文件。下次使用时会重新下载，不影响收藏、清单、阅读进度等已保存数据。") },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
-                        com.shangyin.app.App.clearAllCaches(context)
+                        withContext(Dispatchers.IO) {
+                            com.shangyin.app.App.clearAllCaches(context)
+                        }
                         cacheSize = "0 B"
                         Toast.makeText(context, "缓存已清理", Toast.LENGTH_SHORT).show()
                         showClearCache = false

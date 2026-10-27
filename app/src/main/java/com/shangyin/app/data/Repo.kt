@@ -19,11 +19,13 @@ import java.util.UUID
 object Repo {
 
     private lateinit var db: AppDatabase
+    private lateinit var appContext: Context
     private val itemDao get() = db.itemDao()
     private val listDao get() = db.listDao()
 
     fun init(context: Context) {
-        db = AppDatabase.build(context.applicationContext)
+        appContext = context.applicationContext
+        db = AppDatabase.build(appContext)
     }
 
     // ---------- 条目 ----------
@@ -444,15 +446,24 @@ object Repo {
 
     // ---------- 导入导出 ----------
 
-    /** 导出全部数据（含片源配置、里世界爱心收藏、配置快照：登录态/设置项/电视源/下载记录） */
-    suspend fun exportAll(): ExportData = ExportData(
-        items = itemDao.getAllSync(),
-        lists = listDao.getAllListsSync(),
-        listItems = listDao.getAllListItemsSync(),
-        vodSources = SettingsStore.getVodSources(),
-        innerFavs = InnerFavorites.favs.value,
-        config = com.shangyin.app.ui.settings.SettingsStore.exportConfig()
-    )
+    /** 导出全部数据（含片源配置、里世界爱心收藏、阅读进度、配置快照：登录态/设置项/电视源/下载记录） */
+    suspend fun exportAll(): ExportData {
+        // 阅读进度单独存 SP，确保已从磁盘加载后再导出
+        ReadProgressStore.ensure(appContext)
+        return ExportData(
+            items = itemDao.getAllSync(),
+            lists = listDao.getAllListsSync(),
+            listItems = listDao.getAllListItemsSync(),
+            vodSources = SettingsStore.getVodSources(),
+            innerFavs = InnerFavorites.favs.value,
+            config = com.shangyin.app.ui.settings.SettingsStore.exportConfig(),
+            readProgress = ReadProgressStore.all.value,
+            hasVodSources = true,
+            hasInnerFavs = true,
+            hasConfig = true,
+            hasReadProgress = true
+        )
+    }
 
     /**
      * 一次性数据迁移：收藏分类「直播」→「电视」。
@@ -464,7 +475,7 @@ object Repo {
         itemDao.renameCategory("直播", "电视")
     }
 
-    /** 导入全部数据（清空后全量替换；备份带片源/配置快照时同步替换） */
+    /** 导入全部数据（清空后全量替换；备份带片源/配置快照/阅读进度时同步替换） */
     suspend fun importAll(data: ExportData) {
         db.withTransaction {
             itemDao.deleteAll()
@@ -473,21 +484,30 @@ object Repo {
             listDao.insertAllLists(data.lists)
             listDao.insertAllListItems(data.listItems)
         }
-        // 片源配置在 SP，不参与 DB 事务；旧备份无此字段时保留现有配置
-        if (data.vodSources.isNotEmpty()) {
+        // 片源配置在 SP：字段存在即替换（空列表也代表用户主动清空）；旧备份无此字段时保留现有配置
+        if (data.hasVodSources) {
             SettingsStore.setVodSources(data.vodSources)
         }
-        // 里世界爱心收藏同样在 SP；旧备份无此字段时保留现有收藏
-        if (data.innerFavs.isNotEmpty()) {
+        // 里世界爱心收藏：同上，字段存在即替换（允许导入空收藏）
+        if (data.hasInnerFavs) {
             InnerFavorites.replaceAll(data.innerFavs)
         }
-        // 配置快照（登录态/设置项/电视源/下载记录）：旧备份无此字段时保留现有配置；
-        // vod_sources_json 由上面的结构化 vodSources 字段负责，跳过避免双写
-        if (data.config.isNotEmpty()) {
-            com.shangyin.app.ui.settings.SettingsStore.importSnapshot(
-                data.config.filterKeys { it != "vod_sources_json" }
-            )
+        // 阅读进度（上次看到）：之前完全没进备份，v0.321 补上
+        if (data.hasReadProgress) {
+            ReadProgressStore.replaceAll(appContext, data.readProgress)
         }
+        // 配置快照（登录态/设置项/电视源/下载记录）：旧备份无此字段时保留现有配置。
+        // 新备份有结构化 vodSources 时跳过 vod_sources_json 避免双写；
+        // 老备份没有结构化字段时，保留 config 里的 vod_sources_json 以便恢复片源。
+        if (data.hasConfig) {
+            val cfg = data.config.toMutableMap()
+            if (data.hasVodSources) cfg.remove("vod_sources_json")
+            com.shangyin.app.ui.settings.SettingsStore.importSnapshot(cfg)
+        }
+        // 导入的是另一份数据：清掉按 id 命中的详情/章节旧缓存与漫画状态内存缓存
+        DetailCache.clear()
+        ComicCacheStore.clear(appContext)
+        com.shangyin.app.data.comic.ComicStatusStore.clearMemory()
     }
 }
 
@@ -499,5 +519,13 @@ data class ExportData(
     val vodSources: List<com.shangyin.app.data.vod.VodSource> = emptyList(),
     val innerFavs: List<InnerFav> = emptyList(),
     /** 配置快照（登录态/设置项/电视源/下载记录等，key 与 SP key 一致）；旧备份无此字段 */
-    val config: Map<String, String> = emptyMap()
+    val config: Map<String, String> = emptyMap(),
+    /** 阅读进度（key=source/id → 章节 key）；旧备份无此字段 */
+    val readProgress: Map<String, String> = emptyMap(),
+    // 以下标记用于区分「备份里就是空」与「老备份没有这个字段」：
+    // 老备份（无字段）导入时保留本机现有数据；新备份（字段存在但为空）导入时按空清空。
+    val hasVodSources: Boolean = false,
+    val hasInnerFavs: Boolean = false,
+    val hasConfig: Boolean = false,
+    val hasReadProgress: Boolean = false
 )

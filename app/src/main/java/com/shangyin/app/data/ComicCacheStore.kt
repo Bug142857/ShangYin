@@ -29,4 +29,21 @@ object ComicCacheStore {
             f.writeText(json)
         }
     }
+
+    /** 缓存目录（清理缓存 / 统计大小时用） */
+    fun dir(context: Context): File = File(context.filesDir, DIR)
+
+    /** 清空全部详情/章节缓存（收藏与清单数据不受影响） */
+    fun clear(context: Context) {
+        runCatching { dir(context).deleteRecursively() }
+    }
+
+    /** 当前缓存占用字节数 */
+    fun size(context: Context): Long {
+        val d = dir(context)
+        if (!d.exists()) return 0L
+        return runCatching {
+            d.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
+        }.getOrDefault(0L)
+    }
 }

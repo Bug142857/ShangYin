@@ -188,7 +188,7 @@ fun CloudSyncScreen(nav: NavHostController) {
                 }
 
                 Text(
-                    "说明：上传会把云端旧备份覆盖；恢复会用云端数据替换本机数据（恢复前自动在本机留一份备份）。换手机/多设备时用它搬数据。",
+                    "说明：上传会把云端旧备份覆盖；恢复会用云端数据替换本机数据（收藏、清单、爱心收藏、阅读进度、配置；恢复前自动在本机留一份备份；旧备份没有的字段保留本机现有值）。换手机/多设备时用它搬数据。已下载的视频 / 音乐 / 漫画 / 书籍文件不在云端备份内。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -210,7 +210,7 @@ fun CloudSyncScreen(nav: NavHostController) {
         AlertDialog(
             onDismissRequest = { showUploadConfirm = false },
             title = { Text("上传备份") },
-            text = { Text("将把本机全部收藏数据上传，并覆盖云端旧备份。继续？") },
+            text = { Text("将把本机收藏、清单、爱心收藏、阅读进度与配置上传，并覆盖云端旧备份。继续？") },
             confirmButton = {
                 TextButton(onClick = {
                     showUploadConfirm = false
@@ -249,7 +249,7 @@ fun CloudSyncScreen(nav: NavHostController) {
         AlertDialog(
             onDismissRequest = { showRestoreConfirm = false },
             title = { Text("从云端恢复") },
-            text = { Text("将用云端备份替换本机全部数据（恢复前会先在本机自动留一份备份）。继续？") },
+            text = { Text("将用云端备份替换本机收藏、清单、爱心收藏、阅读进度与配置（恢复前会先在本机自动留一份备份）。继续？") },
             confirmButton = {
                 TextButton(onClick = {
                     showRestoreConfirm = false
@@ -266,6 +266,7 @@ fun CloudSyncScreen(nav: NavHostController) {
                                 val backupJson = buildExportJson(Repo.exportAll())
                                 val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
                                 File(context.filesDir, "auto_backup_$ts.json").writeText(backupJson)
+                                pruneAutoBackups(context)
 
                                 Repo.importAll(parseExportJson(json))
                             }
@@ -304,6 +305,20 @@ fun CloudSyncScreen(nav: NavHostController) {
 
 /** 坚果云官网（含注册入口） */
 private const val HOME_URL = "https://www.jianguoyun.com/"
+
+/** 恢复前自动备份最多保留份数（避免 filesDir 越积越多） */
+private const val AUTO_BACKUP_KEEP = 10
+
+/** 只保留最近 N 份 auto_backup_*.json */
+private fun pruneAutoBackups(context: android.content.Context) {
+    runCatching {
+        context.filesDir
+            .listFiles { f -> f.isFile && f.name.startsWith("auto_backup_") && f.name.endsWith(".json") }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(AUTO_BACKUP_KEEP)
+            ?.forEach { it.delete() }
+    }
+}
 
 /** 坚果云应用密码官方教程 */
 private const val HELP_URL = "https://help.jianguoyun.com/?p=2064"
