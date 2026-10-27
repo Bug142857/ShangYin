@@ -52,15 +52,16 @@ data class FavModuleEntry(
 )
 
 val FAV_MODULE_ENTRIES: List<FavModuleEntry> = listOf(
-    FavModuleEntry("music", "音乐", Icons.Rounded.MusicNote),
+    // 顺序与主页模块宫格保持一致（v0.317：音乐与游戏换位）
     FavModuleEntry("watch", "观影", Icons.Rounded.LiveTv),
-    FavModuleEntry("h1", "番号", Icons.Rounded.Movie),
-    FavModuleEntry("h2", "本子", Icons.Rounded.Book),
-    FavModuleEntry("comic", "漫画", Icons.AutoMirrored.Rounded.Chat),
-    FavModuleEntry("book", "图书", Icons.Rounded.MenuBook),
+    FavModuleEntry("music", "音乐", Icons.Rounded.MusicNote),
     FavModuleEntry("game", "游戏", Icons.Rounded.SportsEsports),
     FavModuleEntry("tv", "电视", Icons.Rounded.Tv),
     FavModuleEntry("melon", "吃瓜", Icons.Rounded.EmojiEmotions),
-    FavModuleEntry("xsite", "X站", Icons.Rounded.Cancel),
+    FavModuleEntry("book", "图书", Icons.Rounded.MenuBook),
+    FavModuleEntry("comic", "漫画", Icons.AutoMirrored.Rounded.Chat),
+    FavModuleEntry("h2", "本子", Icons.Rounded.Book),
+    FavModuleEntry("h1", "番号", Icons.Rounded.Movie),
     FavModuleEntry("psite", "P站", Icons.Rounded.PlayCircle),
+    FavModuleEntry("xsite", "X站", Icons.Rounded.Cancel),
 )

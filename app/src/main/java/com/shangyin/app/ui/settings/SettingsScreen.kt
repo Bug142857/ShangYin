@@ -181,7 +181,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
             SettingsCard(
                 icon = Icons.Rounded.Tune,
                 title = "模块管理",
-                hint = "里世界模块入口开关",
+                hint = "模块入口编辑",
                 onClick = { nav.safeNavigate("moduleManage") }
             )
             SettingsCard(

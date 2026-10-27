@@ -65,9 +65,21 @@ fun UpdateDialog(context: Context, onDismiss: () -> Unit) {
     fun startDownload(info: UpdateChecker.UpdateInfo) {
         downloadJob = scope.launch {
             state = UpdateState.Downloading(info, 0L, info.sizeBytes)
+            // 下载回调运行在 OkHttp 线程：进度必须切回主线程更新 Compose 状态，
+            // 否则状态写了也不会触发重组（表现为「进度条不动，但实际已在下载」）。
+            var lastUiAt = 0L
             try {
                 val file = UpdateChecker.download(context, info) { done, total ->
-                    state = UpdateState.Downloading(info, done, total)
+                    val now = System.currentTimeMillis()
+                    if (done >= total || now - lastUiAt >= 200) {
+                        lastUiAt = now
+                        scope.launch {
+                            // 下载完成后可能还有滞后的进度回调，别把「下载完成」覆盖回下载中
+                            if (state is UpdateState.Downloading) {
+                                state = UpdateState.Downloading(info, done, total)
+                            }
+                        }
+                    }
                 }
                 state = UpdateState.Downloaded(info, file)
             } catch (e: CancellationException) {

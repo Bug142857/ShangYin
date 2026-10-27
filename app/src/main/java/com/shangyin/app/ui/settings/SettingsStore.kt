@@ -33,10 +33,19 @@ object SettingsStore {
         disabledInnerModules.value =
             sp.getStringSet(KEY_DISABLED_INNER_MODULES, emptySet())?.toSet() ?: emptySet()
         // v0.304：恢复模块顺序 / 主题色（首次启动用默认值，不写盘）
-        innerModuleOrderTop.value = normalizeOrder(
+        var topOrder = normalizeOrder(
             sp.getString(KEY_INNER_ORDER_TOP, "").orEmpty().split(',').filter { it.isNotBlank() },
             DEFAULT_INNER_ORDER_TOP
         )
+        // v0.317：音乐与游戏换位（老用户已保存的顺序也执行一次，只迁移一次）
+        if (!sp.getBoolean(KEY_ORDER_317_SWAP, false)) {
+            topOrder = swapMusicAndGame(topOrder)
+            sp.edit()
+                .putString(KEY_INNER_ORDER_TOP, topOrder.joinToString(","))
+                .putBoolean(KEY_ORDER_317_SWAP, true)
+                .apply()
+        }
+        innerModuleOrderTop.value = topOrder
         innerModuleOrderBottom.value = normalizeOrder(
             sp.getString(KEY_INNER_ORDER_BOTTOM, "").orEmpty().split(',').filter { it.isNotBlank() },
             DEFAULT_INNER_ORDER_BOTTOM
@@ -50,13 +59,14 @@ object SettingsStore {
     private const val KEY_DISABLED_INNER_MODULES = "disabled_inner_modules"
     private const val KEY_INNER_ORDER_TOP = "inner_module_order_top"
     private const val KEY_INNER_ORDER_BOTTOM = "inner_module_order_bottom"
+    private const val KEY_ORDER_317_SWAP = "inner_order_317_swapped"
     private const val KEY_ACCENT = "theme_accent"
 
     /** 被关闭的里世界模块 key 集合（StateFlow：设置页改完主页立即生效） */
     val disabledInnerModules = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
 
-    /** 里世界首页上区（本地）模块默认顺序（v0.316：清单/观影排在游戏前面） */
-    val DEFAULT_INNER_ORDER_TOP = listOf("lists", "watch", "game", "music", "tv", "melon")
+    /** 里世界首页上区（本地）模块默认顺序（v0.316：清单/观影在前；v0.317：音乐与游戏换位） */
+    val DEFAULT_INNER_ORDER_TOP = listOf("lists", "watch", "music", "game", "tv", "melon")
 
     /** 里世界首页下区（需要外网）模块默认顺序（v0.304：本子移到漫画与番号之间） */
     val DEFAULT_INNER_ORDER_BOTTOM = listOf(
@@ -95,6 +105,19 @@ object SettingsStore {
             keep.addAll(missing)
         }
         return keep
+    }
+
+    /** v0.317：已保存顺序里「游戏」在「音乐」前面时交换两者位置（新用户默认顺序本身就是音乐在前） */
+    private fun swapMusicAndGame(order: List<String>): List<String> {
+        val gameIdx = order.indexOf("game")
+        val musicIdx = order.indexOf("music")
+        if (gameIdx < 0 || musicIdx < 0 || gameIdx > musicIdx) return order
+        val out = order.toMutableList()
+        out.removeAt(musicIdx)
+        out.removeAt(gameIdx)
+        out.add(gameIdx, "music")
+        out.add(musicIdx, "game")
+        return out
     }
 
     /** 主题强调色：dynamic（系统动态色）/ green / purple / blue / cyan / orange / pink */
@@ -245,7 +268,7 @@ object SettingsStore {
 
     /** 不参与备份的键：纯内部状态 / 设备私有 */
     private val NON_BACKUP_KEYS =
-        setOf(KEY_LAST_CLOUD_SYNC, KEY_CACHE_CLEARED_VERSION, KEY_DEFAULT_SEED_DONE)
+        setOf(KEY_LAST_CLOUD_SYNC, KEY_CACHE_CLEARED_VERSION, KEY_DEFAULT_SEED_DONE, KEY_ORDER_317_SWAP)
 
     /**
      * 该 SP 键是否参与备份（配置快照 / 云同步 / 公共目录自动备份共用）。

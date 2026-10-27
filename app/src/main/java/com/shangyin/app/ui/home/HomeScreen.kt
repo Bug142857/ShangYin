@@ -100,12 +100,12 @@ fun HomeScreen(nav: NavHostController) {
             Spacer(Modifier.height(4.dp))
             GridModuleRows(topEntries) { e -> nav.safeNavigate(e.route) }
             if (bottomEntries.isNotEmpty()) {
-                // 中间分隔：细线 + 小字说明（细线 weight 平分剩余宽度，保证文字始终可见）
+                // 中间分隔：细线 + 小字说明（v0.317：上下留白加大，两部分不再显得紧凑）
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 6.dp)
+                        .padding(horizontal = 20.dp, vertical = 14.dp)
                 ) {
                     HorizontalDivider(
                         thickness = 0.75.dp,

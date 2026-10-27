@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -54,6 +55,7 @@ import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.settings.SettingsStore
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -76,6 +78,8 @@ fun VodSearchSheet(
     var pendingCount by remember { mutableIntStateOf(0) }
     var totalCount by remember { mutableIntStateOf(0) }
     var noSources by remember { mutableStateOf(false) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    var searchSeq by remember { mutableIntStateOf(0) }
 
     // 搜索结果行
     class ResRow(val src: VodSource, val item: VodItem, val score: Int)
@@ -97,32 +101,50 @@ fun VodSearchSheet(
         totalCount = srcs.size
         pendingCount = srcs.size
         searching = true
-        scope.launch {
-            coroutineScope {
-                srcs.forEach { src ->
-                    launch {
-                        val raw = VodClient.searchSource(src, kw)
-                        val scored = raw
-                            .map { it to VodClient.matchScore(it.vod_name, kw, it.vod_year, year) }
-                            .filter { it.second >= 2 }
-                            .sortedByDescending { it.second }
-                        // 行 key = 源id_影片id：同一源内站点可能重复返回同一部 → 去重防重复 key 崩列表
-                        results.addAll(
-                            scored.distinctBy { it.first.vod_id }
-                                .map { ResRow(src, it.first, it.second) }
-                        )
-                        pendingCount--
+        val mySeq = ++searchSeq
+        searchJob = scope.launch {
+            try {
+                coroutineScope {
+                    srcs.forEach { src ->
+                        launch {
+                            runCatching { VodClient.searchSource(src, kw) }
+                                .onSuccess { raw ->
+                                    if (mySeq != searchSeq) return@onSuccess
+                                    val scored = raw
+                                        .map { it to VodClient.matchScore(it.vod_name, kw, it.vod_year, year) }
+                                        .filter { it.second >= 2 }
+                                        .sortedByDescending { it.second }
+                                    // 行 key = 源id_影片id：同一源内站点可能重复返回同一部 → 去重防重复 key 崩列表
+                                    results.addAll(
+                                        scored.distinctBy { it.first.vod_id }
+                                            .map { ResRow(src, it.first, it.second) }
+                                    )
+                                }
+                            if (mySeq == searchSeq) pendingCount--
+                        }
                     }
                 }
+                if (mySeq == searchSeq) {
+                    // 全部完成：按匹配分+片名稳定排序
+                    val sorted = results.sortedWith(
+                        compareByDescending<ResRow> { it.score }.thenBy { it.item.vod_name }
+                    )
+                    results.clear()
+                    results.addAll(sorted)
+                }
+            } finally {
+                if (mySeq == searchSeq) searching = false
             }
-            // 全部完成：按匹配分+片名稳定排序
-            val sorted = results.sortedWith(
-                compareByDescending<ResRow> { it.score }.thenBy { it.item.vod_name }
-            )
-            results.clear()
-            results.addAll(sorted)
-            searching = false
         }
+    }
+
+    /** 停止搜索：保留已搜到的结果，未完成源的结果直接丢弃 */
+    fun stopSearch() {
+        searchSeq++
+        searchJob?.cancel()
+        searchJob = null
+        searching = false
+        pendingCount = 0
     }
 
     LaunchedEffect(itemId) { doSearch(title) }
@@ -179,39 +201,41 @@ fun VodSearchSheet(
             )
             Spacer(Modifier.height(8.dp))
 
-            // 状态行
-            when {
-                noSources -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "国内可访问目录还没有片源，先去设置里添加或测试归组",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(onClick = {
-                            onDismiss()
-                            nav.safeNavigate("vodSources")
-                        }) { Text("去配置") }
-                    }
-                }
-                searching -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LinearProgressIndicator(Modifier.weight(1f))
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "${totalCount - pendingCount}/$totalCount 个源",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-                else -> {
+            // 状态行：「共 XX 条结果」常驻，搜索中实时增长；最右侧是停止搜索
+            if (noSources) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "共 ${results.size} 条结果",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        "国内可访问目录还没有片源，先去设置里添加或测试归组",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
                     )
+                    TextButton(onClick = {
+                        onDismiss()
+                        nav.safeNavigate("vodSources")
+                    }) { Text("去配置") }
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        if (searching) {
+                            "共 ${results.size} 条结果 · ${totalCount - pendingCount}/$totalCount 个源"
+                        } else {
+                            "共 ${results.size} 条结果"
+                        },
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (searching) {
+                        TextButton(onClick = { stopSearch() }) { Text("停止搜索") }
+                    }
+                }
+                if (searching) {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -247,6 +271,10 @@ fun VodSearchSheet(
                         }
                         HorizontalDivider()
                     }
+                }
+            } else if (results.isEmpty() && searching) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
             } else if (results.isEmpty() && !searching && !noSources) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {

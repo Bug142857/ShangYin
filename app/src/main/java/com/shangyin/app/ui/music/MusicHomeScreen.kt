@@ -36,6 +36,7 @@ import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -303,6 +304,9 @@ fun MusicMiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
                             .size(18.dp),
                         strokeWidth = 2.dp
                     )
+                }
+                IconButton(onClick = { MusicPlayback.previous() }) {
+                    Icon(Icons.Rounded.SkipPrevious, contentDescription = "上一首")
                 }
                 IconButton(onClick = { MusicPlayback.toggle(context) }) {
                     Icon(

@@ -62,6 +62,8 @@ import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
 import com.shangyin.app.ui.settings.SettingsStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -82,6 +84,9 @@ private class WatchSessionState {
     var noSources by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
     val results = mutableStateListOf<WatchRes>()
+    /** 当前搜索任务与序号（停止搜索 / 丢弃过期结果） */
+    var searchJob: Job? = null
+    var searchSeq = 0
 }
 
 private object WatchSession {
@@ -118,32 +123,56 @@ fun WatchHomeScreen(nav: NavHostController) {
         st.total = srcs.size
         st.pending = srcs.size
         st.searching = true
-        scope.launch {
-            coroutineScope {
-                srcs.forEach { src ->
-                    launch {
-                        runCatching { VodClient.searchSource(src, kw) }
-                            .onSuccess { list ->
-                                val scored = list
-                                    .map { it to VodClient.matchScore(it.vod_name, kw, it.vod_year, "") }
-                                    .sortedByDescending { it.second }
-                                st.results.addAll(scored.distinctBy { it.first.vod_id }.map { WatchRes(src, it.first, it.second) })
-                            }
-                            .onFailure { e ->
-                                // 单个源失败不影响其它源；全部失败时在下面统一提示
-                                if (st.error == null) st.error = e.message
-                            }
-                        st.pending--
+        val mySeq = ++st.searchSeq
+        st.searchJob = scope.launch {
+            try {
+                coroutineScope {
+                    srcs.forEach { src ->
+                        launch {
+                            runCatching { VodClient.searchSource(src, kw) }
+                                .onSuccess { list ->
+                                    // 已停止 / 已开始新搜索 → 丢弃这次结果
+                                    if (mySeq != st.searchSeq) return@onSuccess
+                                    val scored = list
+                                        .map { it to VodClient.matchScore(it.vod_name, kw, it.vod_year, "") }
+                                        .sortedByDescending { it.second }
+                                    // 每搜到一个源就追加到列表末尾（实时可见，不等全部完成）
+                                    st.results.addAll(
+                                        scored.distinctBy { it.first.vod_id }
+                                            .map { WatchRes(src, it.first, it.second) }
+                                    )
+                                }
+                                .onFailure { e ->
+                                    if (e is CancellationException) return@onFailure
+                                    if (mySeq != st.searchSeq) return@onFailure
+                                    // 单个源失败不影响其它源；全部失败时在下面统一提示
+                                    if (st.error == null) st.error = e.message
+                                }
+                            if (mySeq == st.searchSeq) st.pending--
+                        }
                     }
                 }
+                if (mySeq == st.searchSeq) {
+                    // 全部完成后再稳定排序一次（搜索过程中保持实时追加，不打断阅读）
+                    val sorted = st.results.sortedWith(
+                        compareByDescending<WatchRes> { it.score }.thenBy { it.item.vod_name }
+                    )
+                    st.results.clear()
+                    st.results.addAll(sorted)
+                }
+            } finally {
+                if (mySeq == st.searchSeq) st.searching = false
             }
-            val sorted = st.results.sortedWith(
-                compareByDescending<WatchRes> { it.score }.thenBy { it.item.vod_name }
-            )
-            st.results.clear()
-            st.results.addAll(sorted)
-            st.searching = false
         }
+    }
+
+    /** 停止搜索：保留已搜到的结果，丢弃未完成源的后续返回 */
+    fun stopSearch() {
+        st.searchSeq++
+        st.searchJob?.cancel()
+        st.searchJob = null
+        st.searching = false
+        st.pending = 0
     }
 
     fun open(row: WatchRes) {
@@ -223,59 +252,73 @@ fun WatchHomeScreen(nav: NavHostController) {
                     TextButton(onClick = { nav.safeNavigate("vodSources") }) { Text("去配置片源") }
                 }
 
-                st.searching -> {
-                    Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        LinearProgressIndicator(Modifier.weight(1f))
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "${st.total - st.pending}/${st.total} 个源",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
-                    }
-                }
-
                 !st.searched -> EmptyView("输入片名搜索，找到就能在线观看\n点爱心可收藏，收藏独立于清单", Modifier.weight(1f))
 
-                st.results.isEmpty() -> Column(
-                    Modifier.weight(1f).fillMaxWidth().padding(horizontal = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("没有找到「${st.keyword}」", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        st.error?.let { "部分片源请求失败：$it" }
-                            ?: "换个关键词试试，或到片源管理里测试/更换线路",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                else -> LazyColumn(
-                    contentPadding = PaddingValues(bottom = 12.dp),
-                    modifier = Modifier.weight(1f).fillMaxWidth()
-                ) {
-                    item(key = "watch_count") {
+                else -> Column(Modifier.weight(1f).fillMaxWidth()) {
+                    // 「共 XX 条结果」行：搜索中实时更新，最右侧是停止搜索
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            "共 ${st.results.size} 条结果（${st.total} 个片源）",
+                            if (st.searching) {
+                                "共 ${st.results.size} 条结果 · 搜索中 ${st.total - st.pending}/${st.total} 个源"
+                            } else {
+                                "共 ${st.results.size} 条结果（${st.total} 个片源）"
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (st.searching) {
+                            TextButton(onClick = { stopSearch() }) { Text("停止搜索") }
+                        }
+                    }
+                    if (st.searching) {
+                        LinearProgressIndicator(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp)
                         )
                     }
-                    items(st.results, key = { it.src.id + "_" + it.item.vod_id }) { row ->
-                        WatchResultRow(
-                            row = row,
-                            opening = openingKey == row.src.id + "_" + row.item.vod_id,
-                            onClick = { open(row) }
-                        )
+
+                    when {
+                        st.results.isEmpty() && st.searching -> Box(
+                            Modifier.weight(1f).fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 3.dp)
+                        }
+
+                        st.results.isEmpty() -> Column(
+                            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 32.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text("没有找到「${st.keyword}」", style = MaterialTheme.typography.titleMedium)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                st.error?.let { "部分片源请求失败：$it" }
+                                    ?: "换个关键词试试，或到片源管理里测试/更换线路",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        else -> LazyColumn(
+                            contentPadding = PaddingValues(bottom = 12.dp),
+                            modifier = Modifier.weight(1f).fillMaxWidth()
+                        ) {
+                            items(st.results, key = { it.src.id + "_" + it.item.vod_id }) { row ->
+                                WatchResultRow(
+                                    row = row,
+                                    opening = openingKey == row.src.id + "_" + row.item.vod_id,
+                                    onClick = { open(row) }
+                                )
+                            }
+                        }
                     }
                 }
             }
