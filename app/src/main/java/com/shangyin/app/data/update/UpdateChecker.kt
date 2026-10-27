@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import com.shangyin.app.data.download.DownloadKeepAlive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -233,36 +234,42 @@ object UpdateChecker {
         info: UpdateInfo,
         onProgress: (downloaded: Long, total: Long) -> Unit,
     ): File {
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-        // 只保留本次的安装包，避免历史版本堆积
-        dir.listFiles()?.forEach { it.delete() }
-        val target = File(dir, "update-${info.versionName}.apk")
+        // 前台服务 + 唤醒锁：息屏/切后台时继续下载（v0.319）
+        DownloadKeepAlive.begin(context)
+        try {
+            val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+            // 只保留本次的安装包，避免历史版本堆积
+            dir.listFiles()?.forEach { it.delete() }
+            val target = File(dir, "update-${info.versionName}.apk")
 
-        val channels = buildList {
-            add(info.apkUrl)
-            // 只给 GitHub 原始地址套镜像前缀（清单里若已写镜像直链则不再二次拼接）
-            if (info.apkUrl.startsWith("https://github.com/")) {
-                MIRROR_PREFIXES.forEach { add(it + info.apkUrl) }
-            }
-        }
-        var lastError: Exception? = null
-        for (url in channels) {
-            try {
-                onProgress(0L, info.sizeBytes)
-                downloadOnce(url, target, info.sizeBytes, onProgress)
-                if (info.sha256 != null && !sha256(target).equals(info.sha256, ignoreCase = true)) {
-                    throw IOException("安装包校验失败")
+            val channels = buildList {
+                add(info.apkUrl)
+                // 只给 GitHub 原始地址套镜像前缀（清单里若已写镜像直链则不再二次拼接）
+                if (info.apkUrl.startsWith("https://github.com/")) {
+                    MIRROR_PREFIXES.forEach { add(it + info.apkUrl) }
                 }
-                return target
-            } catch (e: CancellationException) {
-                target.delete()
-                throw e
-            } catch (e: Exception) {
-                target.delete()
-                lastError = e
             }
+            var lastError: Exception? = null
+            for (url in channels) {
+                try {
+                    onProgress(0L, info.sizeBytes)
+                    downloadOnce(url, target, info.sizeBytes, onProgress)
+                    if (info.sha256 != null && !sha256(target).equals(info.sha256, ignoreCase = true)) {
+                        throw IOException("安装包校验失败")
+                    }
+                    return target
+                } catch (e: CancellationException) {
+                    target.delete()
+                    throw e
+                } catch (e: Exception) {
+                    target.delete()
+                    lastError = e
+                }
+            }
+            throw IOException("所有下载通道均失败（${lastError?.message ?: "网络错误"}），可打开发布页手动下载")
+        } finally {
+            DownloadKeepAlive.end()
         }
-        throw IOException("所有下载通道均失败（${lastError?.message ?: "网络错误"}），可打开发布页手动下载")
     }
 
     /** 单通道下载；失败抛出异常，由 [download] 决定是否换镜像 */

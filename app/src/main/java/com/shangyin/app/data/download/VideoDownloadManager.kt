@@ -142,6 +142,8 @@ object VideoDownloadManager {
         val appContext = context.applicationContext
         jobs[url] = scope.launch {
             val task = active.value[url] ?: return@launch
+            // 息屏/后台下载保活：任务结束（成功/失败/取消）时在 finally 释放
+            DownloadKeepAlive.begin(appContext)
             try {
                 notifyProgress(appContext, task.url.hashCode(), task.title, 0f)
                 val video = withContext(Dispatchers.IO) { run(appContext, task, headers) }
@@ -158,6 +160,7 @@ object VideoDownloadManager {
                 if (active.value[url]?.error == null) {
                     active.value = active.value - url
                 }
+                DownloadKeepAlive.end()
             }
         }
         return true

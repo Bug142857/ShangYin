@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import com.shangyin.app.data.download.DownloadKeepAlive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -43,6 +44,9 @@ object MusicDownloader {
         song: MusicSong,
         onProgress: (Int) -> Unit = {}
     ): String = withContext(Dispatchers.IO) {
+        // 息屏/后台保活（v0.319）
+        DownloadKeepAlive.begin(context)
+        try {
         val info = MusicRepo.resolvePlay(song)
         val ext = extensionOf(info.url)
         val fileName = "${sanitize(song.name)} - ${sanitize(song.artists.ifBlank { "未知歌手" })}.$ext"
@@ -75,6 +79,9 @@ object MusicDownloader {
             }
         } finally {
             runCatching { temp.delete() }
+        }
+        } finally {
+            DownloadKeepAlive.end()
         }
     }
 

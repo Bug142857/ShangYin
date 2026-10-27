@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.webkit.CookieManager
+import com.shangyin.app.data.download.DownloadKeepAlive
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -48,6 +49,9 @@ object BookDownload {
         target: ZlibWeb.DownloadTarget,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): Result = withContext(Dispatchers.IO) {
+        // 息屏/后台保活（v0.319）
+        DownloadKeepAlive.begin(context)
+        try {
         val ck = CookieManager.getInstance().getCookie(target.fileUrl)
         val req = Request.Builder().url(target.fileUrl).get()
             .header("User-Agent", ZlibClient.UA)
@@ -71,6 +75,9 @@ object BookDownload {
                 saveToAppDir(context, name, input, declared, onProgress)
             }
             Result(name = name, where = where)
+        }
+        } finally {
+            DownloadKeepAlive.end()
         }
     }
 

@@ -7,6 +7,8 @@
     <!-- 音乐后台播放：前台服务 + 常亮锁 + 通知栏（Android 13+ 通知需运行时授权，拒绝也能播只是没通知栏） -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 下载保活：前台服务类型 dataSync（Android 14+ 必须单独声明） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 应用内升级：下载 APK 后拉起系统安装器（仍需用户在系统弹窗确认） -->
@@ -63,6 +65,12 @@
                 <action android:name="androidx.media3.session.MediaSessionService" />
             </intent-filter>
         </service>
+
+        <!-- 下载保活（v0.319）：有下载任务时短暂运行的前台服务，负责唤醒锁 + 阻止 Doze -->
+        <service
+            android:name=".data.download.DownloadKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

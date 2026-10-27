@@ -205,7 +205,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
             SettingsCard(
                 icon = Icons.Rounded.SystemUpdate,
                 title = "版本更新",
-                hint = if (versionName.isNotBlank()) "v$versionName · 检查更新" else "检查更新",
+                hint = if (versionName.isNotBlank()) "当前 v$versionName · 点击检查更新" else "点击检查更新",
                 onClick = { showUpdate = true }
             )
             Spacer(Modifier.height(6.dp))
@@ -238,7 +238,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     }
 }
 
-/** 卡片条目（v0.318 紧凑单行）：图标 + 标题 + 小字说明 + 右箭头，尽量一屏展示全部入口 */
+/** 卡片条目（v0.319 折中版）：两行文字 + 适中留白，不滚动的同时尽量填满屏幕 */
 @Composable
 private fun SettingsCard(
     icon: ImageVector,
@@ -256,26 +256,26 @@ private fun SettingsCard(
         )
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(22.dp)
             )
-            Spacer(Modifier.width(12.dp))
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                hint,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    hint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = null,

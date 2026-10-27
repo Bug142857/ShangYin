@@ -646,25 +646,31 @@ object ComicDownloadManager {
                 it + (k to Task(comic.source, comic.id, comic.title, ch.key, ch.name))
             }
             jobs[k] = scope.launch {
-                runCatching {
-                    val urls = fetchImages(ch.key)
-                    ComicDownloadStore.downloadChapter(ctx, comic, ch, urls) { d, t ->
-                        _active.update { m -> m[k]?.let { cur -> m + (k to cur.copy(done = d, total = t)) } ?: m }
+                // 息屏/后台保活：整章下载结束（成功/失败/取消）时释放
+                DownloadKeepAlive.begin(ctx)
+                try {
+                    runCatching {
+                        val urls = fetchImages(ch.key)
+                        ComicDownloadStore.downloadChapter(ctx, comic, ch, urls) { d, t ->
+                            _active.update { m -> m[k]?.let { cur -> m + (k to cur.copy(done = d, total = t)) } ?: m }
+                        }
+                        ComicDownloadStore.upsertChapter(ctx, comic, DownloadedChapter(ch.key, ch.name, urls.size))
+                        refresh(ctx)
+                        _active.update { it - k }
+                    }.onFailure { e ->
+                        if (e is kotlinx.coroutines.CancellationException) {
+                            // 主动取消：清掉下载到一半的章节文件，不留半成品
+                            runCatching { ComicDownloadStore.deleteChapter(ctx, comic.source, comic.id, ch.key) }
+                            throw e
+                        }
+                        _active.update { m ->
+                            m[k]?.let { cur -> m + (k to cur.copy(error = e.message ?: "下载失败")) } ?: m
+                        }
                     }
-                    ComicDownloadStore.upsertChapter(ctx, comic, DownloadedChapter(ch.key, ch.name, urls.size))
-                    refresh(ctx)
-                    _active.update { it - k }
-                }.onFailure { e ->
-                    if (e is kotlinx.coroutines.CancellationException) {
-                        // 主动取消：清掉下载到一半的章节文件，不留半成品
-                        runCatching { ComicDownloadStore.deleteChapter(ctx, comic.source, comic.id, ch.key) }
-                        throw e
-                    }
-                    _active.update { m ->
-                        m[k]?.let { cur -> m + (k to cur.copy(error = e.message ?: "下载失败")) } ?: m
-                    }
+                } finally {
+                    jobs.remove(k)
+                    DownloadKeepAlive.end()
                 }
-                jobs.remove(k)
             }
         }
     }

@@ -1,7 +1,7 @@
 {
-  "versionName": "0.318",
-  "sizeBytes": 20782593,
-  "sha256": "70420551918d37a4068de680da756ff1009309a75fd6383c066eba342b38048e",
-  "changelog": "0.318：更新线路与配置页优化\n\n- 更新下载的连接/读取超时收紧到 10 秒：有效线路 10 秒内必有响应，超时立即换镜像\n- 配置管理改为紧凑单行卡片，十个入口一屏展示，无需上下滑动",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.318/LaoZhengFenXiang-0.318.apk"
+  "versionName": "0.319",
+  "sizeBytes": 20782681,
+  "sha256": "29785cba93c833ac064ba4116fd43596f0739fd15deb58bd97af99b90cc7cacf",
+  "changelog": "0.319：息屏下载保活 + 配置页间距调整\n\n- 下载期间启动前台服务并持有 CPU / Wi-Fi 唤醒锁，息屏或切后台继续下载（版本更新、视频、漫画、本子、音乐、图书）\n- 全部下载任务结束后前台服务自动停止，不长期占用电池\n- 配置管理卡片恢复两行文字与适中留白：不用上下滑动，同时尽量填满屏幕",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.319/LaoZhengFenXiang-0.319.apk"
 }
