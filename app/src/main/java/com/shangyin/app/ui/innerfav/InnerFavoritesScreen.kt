@@ -89,6 +89,7 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
         "comic" -> "漫画收藏"
         "tv" -> "电视收藏"
         "music" -> "音乐收藏"
+        "watch" -> "观影收藏"
         "book" -> "图书收藏"
         "game" -> "游戏收藏"
         else -> "收藏"
@@ -135,6 +136,25 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                     )
                 }
             }
+            "watch" -> {
+                // 观影收藏：id = "片源id|影片id"，按片源重建条目后走公共播放流程
+                val srcId = f.id.substringBefore("|")
+                val vodId = f.id.substringAfter("|").toLongOrNull() ?: 0L
+                val src = com.shangyin.app.ui.settings.SettingsStore.getVodSources()
+                    .find { it.id == srcId }
+                if (src == null) {
+                    Toast.makeText(context, "片源已被删除，无法播放", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                scope.launch {
+                    com.shangyin.app.ui.search.openVodAndPlay(
+                        nav, context, src,
+                        com.shangyin.app.data.vod.VodItem(
+                            vod_id = vodId, vod_name = f.title, vod_pic = f.cover.orEmpty()
+                        )
+                    )
+                }
+            }
             "h2" -> nav.safeNavigate("bikaComic/${Uri.encode(f.id)}")
             "comic" -> nav.safeNavigate("comicDetail/${Uri.encode(f.id)}")
             "book" -> {
@@ -160,14 +180,18 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                 }
             }
             "music" -> {
-                // payload = MusicSong JSON：还原后直接进播放队列（直链播放时现解析）
-                val song = f.payload?.let { restoreSong(it) }
-                if (song == null) {
+                // 整份音乐收藏当播放队列（v0.316）：播放页切歌/顺序/随机都能正常工作
+                val musicFavs = items.filter { it.module == "music" }
+                val pairs = musicFavs.mapNotNull { fav ->
+                    fav.payload?.let { restoreSong(it) }?.let { fav.id to it }
+                }
+                if (pairs.isEmpty()) {
                     Toast.makeText(context, "该收藏缺少歌曲信息，无法播放", Toast.LENGTH_SHORT).show()
                     return
                 }
+                val idx = pairs.indexOfFirst { it.first == f.id }.coerceAtLeast(0)
                 MusicPlayback.init(context)
-                MusicPlayback.play(context, listOf(song), 0)
+                MusicPlayback.play(context, pairs.map { it.second }, idx)
             }
             "xsite" -> {
                 val url = f.videoUrl
@@ -219,7 +243,7 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                     // 下载管理入口：直达对应分区列表（游戏 / 电视无下载功能，不显示）
                     if (module != "game" && module != "tv") {
                         val section = when (module) {
-                            "h1", "melon", "xsite", "psite" -> "video"
+                            "h1", "melon", "xsite", "psite", "watch" -> "video"
                             "h2" -> "bika"
                             "comic" -> "comic"
                             "book" -> "book"

@@ -90,6 +90,11 @@ fun AppNav(onThemeChanged: () -> Unit = {}) {
                 BackHandler(enabled = true) { /* ignore - 用户只能用系统退出/桌面键关App */ }
                 HomeScreen(nav)
             }
+            // 清单模块（v0.316：原表世界的搜索 + 分类 + 清单）
+            composable("listsHome") { com.shangyin.app.ui.lists.ListsHomeScreen(nav) }
+            // 观影模块（v0.316：原清单详情的「在线观看」独立入口）
+            composable("watchHome") { com.shangyin.app.ui.watch.WatchHomeScreen(nav) }
+            composable("favoritesManage") { com.shangyin.app.ui.favorites.FavoritesManageScreen(nav) }
             composable(
                 route = "search?cat={cat}&kw={kw}",
                 arguments = listOf(

@@ -55,8 +55,8 @@ object SettingsStore {
     /** 被关闭的里世界模块 key 集合（StateFlow：设置页改完主页立即生效） */
     val disabledInnerModules = kotlinx.coroutines.flow.MutableStateFlow<Set<String>>(emptySet())
 
-    /** 里世界首页上区（本地）模块默认顺序 */
-    val DEFAULT_INNER_ORDER_TOP = listOf("game", "music", "tv", "melon")
+    /** 里世界首页上区（本地）模块默认顺序（v0.316：清单/观影排在游戏前面） */
+    val DEFAULT_INNER_ORDER_TOP = listOf("lists", "watch", "game", "music", "tv", "melon")
 
     /** 里世界首页下区（需要外网）模块默认顺序（v0.304：本子移到漫画与番号之间） */
     val DEFAULT_INNER_ORDER_BOTTOM = listOf(
@@ -82,8 +82,19 @@ object SettingsStore {
     }
 
     private fun normalizeOrder(raw: List<String>, defaults: List<String>): List<String> {
-        val keep = raw.filter { it in defaults }.distinct()
-        return keep + defaults.filterNot { it in keep }
+        val keep = raw.filter { it in defaults }.distinct().toMutableList()
+        val missing = defaults.filterNot { it in keep }
+        // v0.316：新增的「清单 / 观影」要排在游戏前面（老用户已保存的顺序里没有这两个 key，
+        // 直接 append 会跑到最后；这里统一插到 game 之前）。
+        if (defaults.contains("game")) {
+            missing.forEach { key ->
+                val anchor = keep.indexOf("game")
+                if (anchor >= 0) keep.add(anchor, key) else keep.add(key)
+            }
+        } else {
+            keep.addAll(missing)
+        }
+        return keep
     }
 
     /** 主题强调色：dynamic（系统动态色）/ green / purple / blue / cyan / orange / pink */

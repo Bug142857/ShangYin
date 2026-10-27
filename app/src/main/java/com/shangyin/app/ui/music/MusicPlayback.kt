@@ -35,7 +35,19 @@ import kotlinx.coroutines.launch
  */
 object MusicPlayback {
 
-    enum class RepeatMode { LIST, ONE, OFF }
+    /**
+     * 播放模式（v0.316，一个按钮循环切换）：
+     * 单首播放 = 当前这首放完就停；单曲循环 = 单曲重复；顺序播放 = 按列表顺序循环；
+     * 随机播放 = 列表内随机。
+     */
+    enum class PlayMode(val label: String) {
+        SINGLE("单首播放"),
+        ONE("单曲循环"),
+        SEQUENTIAL("顺序播放"),
+        RANDOM("随机播放");
+
+        fun next(): PlayMode = values()[(ordinal + 1) % values().size]
+    }
 
     data class State(
         val song: MusicSong? = null,
@@ -45,8 +57,7 @@ object MusicPlayback {
         val durationMs: Long = 0L,
         val queue: List<MusicSong> = emptyList(),
         val index: Int = 0,
-        val repeatMode: RepeatMode = RepeatMode.LIST,
-        val shuffle: Boolean = false,
+        val playMode: PlayMode = PlayMode.SINGLE,
         /** 播放失败原因（直连解析失败等），展示一次后由 [consumeError] 清掉 */
         val error: String? = null
     ) {
@@ -85,10 +96,7 @@ object MusicPlayback {
             controller = c
             c.addListener(playerListener)
             _state.update {
-                it.copy(
-                    repeatMode = repeatModeOf(c.repeatMode),
-                    shuffle = c.shuffleModeEnabled
-                )
+                it.copy(playMode = playModeOf(c.repeatMode, c.shuffleModeEnabled))
             }
             syncFromController()
             startProgressLoop()
@@ -145,19 +153,17 @@ object MusicPlayback {
         _state.update { State() }
     }
 
-    fun setRepeatMode(mode: RepeatMode) {
+    /** 设置播放模式（一个按钮循环切换 单首 → 单曲 → 顺序 → 随机） */
+    fun setPlayMode(mode: PlayMode) {
         runWhenConnected {
             repeatMode = when (mode) {
-                RepeatMode.ONE -> Player.REPEAT_MODE_ONE
-                RepeatMode.LIST -> Player.REPEAT_MODE_ALL
-                RepeatMode.OFF -> Player.REPEAT_MODE_OFF
+                PlayMode.ONE -> Player.REPEAT_MODE_ONE
+                PlayMode.SEQUENTIAL, PlayMode.RANDOM -> Player.REPEAT_MODE_ALL
+                PlayMode.SINGLE -> Player.REPEAT_MODE_OFF
             }
+            shuffleModeEnabled = mode == PlayMode.RANDOM
         }
-        _state.update { it.copy(repeatMode = mode) }
-    }
-
-    fun toggleShuffle() {
-        runWhenConnected { shuffleModeEnabled = !shuffleModeEnabled }
+        _state.update { it.copy(playMode = mode) }
     }
 
     fun consumeError() {
@@ -169,6 +175,22 @@ object MusicPlayback {
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
             syncFromController()
+        }
+
+        /**
+         * 「单首播放」：一首放完不要自动跳下一首。
+         * ExoPlayer 没有"单首且保留队列"的模式（Player 接口只暴露 repeat/shuffle），
+         * 所以在自动切歌发生时把播放位置拉回刚放完的那首并暂停——手动上一首/下一首仍可用。
+         */
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_AUTO) return
+            if (_state.value.playMode != PlayMode.SINGLE) return
+            val c = controller ?: return
+            runCatching {
+                if (c.currentMediaItemIndex > 0) c.seekToPreviousMediaItem()
+                c.seekTo(0L)
+                c.pause()
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -195,16 +217,16 @@ object MusicPlayback {
                 durationMs = duration,
                 queue = queue.ifEmpty { it.queue },
                 index = c.currentMediaItemIndex.coerceAtLeast(0),
-                repeatMode = repeatModeOf(c.repeatMode),
-                shuffle = c.shuffleModeEnabled
+                playMode = playModeOf(c.repeatMode, c.shuffleModeEnabled)
             )
         }
     }
 
-    private fun repeatModeOf(media3Mode: Int): RepeatMode = when (media3Mode) {
-        Player.REPEAT_MODE_ONE -> RepeatMode.ONE
-        Player.REPEAT_MODE_OFF -> RepeatMode.OFF
-        else -> RepeatMode.LIST
+    private fun playModeOf(repeatMode: Int, shuffle: Boolean): PlayMode = when {
+        shuffle -> PlayMode.RANDOM
+        repeatMode == Player.REPEAT_MODE_ONE -> PlayMode.ONE
+        repeatMode == Player.REPEAT_MODE_ALL -> PlayMode.SEQUENTIAL
+        else -> PlayMode.SINGLE
     }
 
     /** 播放进度轮询（只在有歌且未暂停时跑，避免后台空转） */

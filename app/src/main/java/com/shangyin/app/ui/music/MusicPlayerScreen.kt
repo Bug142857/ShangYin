@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
@@ -88,6 +89,14 @@ fun MusicPlayerScreen(nav: NavHostController) {
     // 拖动进度条时先跟手，松手才 seek
     var dragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableFloatStateOf(0f) }
+    // 播放模式切换后的小字提示（显示 1 秒）
+    var modeHint by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(modeHint) {
+        if (modeHint != null) {
+            kotlinx.coroutines.delay(1000)
+            modeHint = null
+        }
+    }
 
     // 播放错误：用对话框展示完整原因（Toast 会截断，用户看不到到底是哪个环节失败）
     var errorText by remember { mutableStateOf<String?>(null) }
@@ -327,12 +336,27 @@ fun MusicPlayerScreen(nav: NavHostController) {
                 )
             }
 
-            // 上一首 / 播放暂停 / 下一首
+            // 进度条下方只有 5 个按钮：模式切换 / 上一曲 / 播放暂停 / 下一曲 / 收藏
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // 模式切换：单首播放 → 单曲循环 → 顺序播放 → 随机播放
+                val mode = state.playMode
+                IconButton(onClick = {
+                    val next = mode.next()
+                    MusicPlayback.setPlayMode(next)
+                    modeHint = next.label
+                }) {
+                    Icon(
+                        playModeIcon(mode),
+                        contentDescription = "播放模式",
+                        tint = if (mode == MusicPlayback.PlayMode.SINGLE)
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.primary
+                    )
+                }
                 IconButton(onClick = { MusicPlayback.previous() }) {
                     Icon(
                         Icons.Rounded.SkipPrevious,
@@ -365,31 +389,6 @@ fun MusicPlayerScreen(nav: NavHostController) {
                         modifier = Modifier.size(36.dp)
                     )
                 }
-            }
-
-            // 循环模式 / 随机 / 收藏
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { MusicPlayback.setRepeatMode(nextRepeatMode(state.repeatMode)) }) {
-                    Icon(
-                        repeatIcon(state.repeatMode),
-                        contentDescription = "循环模式",
-                        tint = if (state.repeatMode == MusicPlayback.RepeatMode.OFF)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.primary
-                    )
-                }
-                IconButton(onClick = { MusicPlayback.toggleShuffle() }) {
-                    Icon(
-                        Icons.Rounded.Shuffle,
-                        contentDescription = "随机播放",
-                        tint = if (state.shuffle) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
                 // 爱心快藏（与其它里世界模块同款；搜索行尾同入口）
                 song?.let { s ->
                     FavTopBarIcon(
@@ -406,6 +405,19 @@ fun MusicPlayerScreen(nav: NavHostController) {
                                 payload = songPayload(s)
                             )
                         }
+                    )
+                }
+            }
+            // 模式切换提示：小字显示 1 秒（不占位时高度固定，避免界面跳动）
+            Box(
+                Modifier.fillMaxWidth().height(18.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                modeHint?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -432,16 +444,12 @@ private fun MusicTopBar(
     )
 }
 
-/** 循环模式：列表 → 单曲 → 关闭 → 列表 */
-private fun nextRepeatMode(mode: MusicPlayback.RepeatMode): MusicPlayback.RepeatMode = when (mode) {
-    MusicPlayback.RepeatMode.LIST -> MusicPlayback.RepeatMode.ONE
-    MusicPlayback.RepeatMode.ONE -> MusicPlayback.RepeatMode.OFF
-    MusicPlayback.RepeatMode.OFF -> MusicPlayback.RepeatMode.LIST
-}
-
-private fun repeatIcon(mode: MusicPlayback.RepeatMode) = when (mode) {
-    MusicPlayback.RepeatMode.ONE -> Icons.Rounded.RepeatOne
-    else -> Icons.Rounded.Repeat
+/** 播放模式图标：单首=播放圆、单曲=重复一、顺序=重复、随机=乱序 */
+private fun playModeIcon(mode: MusicPlayback.PlayMode) = when (mode) {
+    MusicPlayback.PlayMode.SINGLE -> Icons.Rounded.PlayCircle
+    MusicPlayback.PlayMode.ONE -> Icons.Rounded.RepeatOne
+    MusicPlayback.PlayMode.SEQUENTIAL -> Icons.Rounded.Repeat
+    MusicPlayback.PlayMode.RANDOM -> Icons.Rounded.Shuffle
 }
 
 /** 一行歌词：时间（毫秒）+ 文本 */

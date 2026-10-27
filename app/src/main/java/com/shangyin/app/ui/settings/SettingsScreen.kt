@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.CloudSync
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.ListAlt
 import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.Palette
@@ -96,6 +97,10 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     // 清单总数（清单管理标题后直接展示）
     val lists by Repo.observeListsWithMeta().collectAsStateWithLifecycle(initialValue = emptyList())
 
+    // 里世界收藏总数（收藏管理小字）
+    val innerFavs by com.shangyin.app.data.InnerFavorites.favs
+        .collectAsStateWithLifecycle()
+
     // 下载管理小字：全部下载文件总数及大小（视频+漫画+本子+音乐+书籍，IO 放后台）
     val downloadMeta by produceState(0 to 0L) {
         val (count, bytes) = withContext(Dispatchers.IO) {
@@ -116,7 +121,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
         else "暂无下载文件"
     }
 
-    // 版本号（标题右侧小字，v0.303 恢复显示）
+    // 版本号（仅用于「版本更新」条目小字，标题不再显示）
     val versionName = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
@@ -126,19 +131,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("配置管理")
-                        if (versionName.isNotBlank()) {
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                "v$versionName",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
+                title = { Text("配置管理") },
                 navigationIcon = {
                     IconButton(onClick = { nav.safePopBackStack() }) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -190,6 +183,12 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 title = "模块管理",
                 hint = "里世界模块入口开关",
                 onClick = { nav.safeNavigate("moduleManage") }
+            )
+            SettingsCard(
+                icon = Icons.Rounded.FavoriteBorder,
+                title = "收藏管理",
+                hint = if (innerFavs.isNotEmpty()) "共 ${innerFavs.size} 条收藏 · 按模块整理" else "暂无收藏",
+                onClick = { nav.safeNavigate("favoritesManage") }
             )
             SettingsCard(
                 icon = Icons.Rounded.Download,
