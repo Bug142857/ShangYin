@@ -70,9 +70,9 @@
   ② 调试产物（`*.bin`、`*_test.py`、临时 html/json/txt、`.trae-html-share-packages/`、截图、录屏）只留本地，**用完即删**；
   ③ **每次 commit 前必做**：`git -c core.quotepath=false status -s` 逐条看清要提交什么，出现任何 `.apk/.bin/.zip/.mp4/.png` 就先停下来确认是否该入库；
   ④ **新增任何文件类型前，先把匹配规则写进 `.gitignore` 再 add**（旧 `.gitignore` 只挡了 `app-debug.apk` 与 `老郑分享-debug.apk` 两个具体名，所以中文正式包一路裸奔了 6 个版本 —— 教训：**ignore 规则要按通配符写，不要按具体文件名写**）；拿不准用 `git check-ignore -v <路径>` 验证；
-  ⑤ **发版收尾必查**：`git -c core.quotepath=false ls-tree --name-only origin/main`，根目录只应出现 `.gitignore / README.md / app / build.gradle.kts / docs / gradle / gradle.properties / gradlew.bat / settings.gradle.kts`，多了东西立刻清理；
+  ⑤ **发版收尾必查**：`git -c core.quotepath=false ls-tree --name-only origin/main`，根目录只应出现 `.gitignore / README.md / app / build.gradle.kts / docs / gradle / gradle.properties / gradlew.bat / settings.gradle.kts / version.json`，多了东西立刻清理；
   ⑥ 已入库的文件**写了 ignore 也不会自动消失**，必须 `git rm --cached <路径>`；本地副本要不要一起删另定（`Remove-Item`）。
-- 构建 shell 是 PowerShell（不支持 && 与 bash heredoc），用 `;` 分隔命令、提交信息用 git commit -F 文件；JAVA_HOME=D:\Java\jdk-21.0.12.1+1
+- 构建 shell 是 PowerShell（不支持 && 与 bash heredoc），用 `;` 分隔命令、提交信息用 git commit -F 文件；**JAVA_HOME 需指向 `C:\Users\62496\.local\share\rea-tools\jdk-21.0.12.1+1`**（`D:\Java\jdk-21.0.12.1+1` 已不存在，环境未预置 JAVA_HOME，直接跑 gradlew 会报 "JAVA_HOME is not set"）
 - 同一文件多处修改严禁并行 Edit（互相覆盖导致改动丢失，已踩坑多次）；material-icons-extended 已引入（Cloud/CloudUpload 等可用），core 集只有基础图标
 - 图片缓存：Coil diskCache 150MB LRU 自动清理（cache/image_cache）+ OkHttp HTTP 缓存 20MB（cache/http），手动清理由设置页"清理缓存"按钮触发（直接删目录兜底）
 - 长按下载图片：CoverImage 默认 `downloadable=false`（不挂手势）；仅独立卡片场景显式 `downloadable=true`，使用 detectTapGestures 避免手势冲突
