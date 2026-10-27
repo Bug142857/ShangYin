@@ -147,7 +147,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
         ) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             SettingsCard(
                 icon = Icons.Rounded.Palette,
                 title = "主题管理",
@@ -205,10 +205,10 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
             SettingsCard(
                 icon = Icons.Rounded.SystemUpdate,
                 title = "版本更新",
-                hint = if (versionName.isNotBlank()) "当前 v$versionName · 点击检查更新" else "点击检查更新",
+                hint = if (versionName.isNotBlank()) "v$versionName · 检查更新" else "检查更新",
                 onClick = { showUpdate = true }
             )
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(6.dp))
         }
     }
 
@@ -238,7 +238,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     }
 }
 
-/** 卡片条目（v0.300 风格）：图标 + 标题 + 小字说明 + 右箭头 */
+/** 卡片条目（v0.318 紧凑单行）：图标 + 标题 + 小字说明 + 右箭头，尽量一屏展示全部入口 */
 @Composable
 private fun SettingsCard(
     icon: ImageVector,
@@ -249,38 +249,38 @@ private fun SettingsCard(
     androidx.compose.material3.Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 12.dp)
+            .padding(top = 6.dp)
             .clickable { onClick() },
         colors = androidx.compose.material3.CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         )
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(20.dp)
             )
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    hint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            Spacer(Modifier.width(12.dp))
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                hint,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             Icon(
                 Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.outline,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(18.dp)
             )
         }
     }

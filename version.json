@@ -1,7 +1,7 @@
 {
-  "versionName": "0.317",
+  "versionName": "0.318",
   "sizeBytes": 20782593,
-  "sha256": "69fc9dfe75f6d4e089c50af3a013111ba5830de8ae34e958f59d48cd1dcd3601",
-  "changelog": "0.317：搜索与播放体验修正\n\n- 观影模块固定在清单后，音乐与游戏位置互换（模块管理 / 收藏管理同步）\n- 观影与清单「在线观看」搜索改为实时显示结果，每搜到一个源就追加，并支持随时停止搜索\n- 修复版本更新下载进度条不动的问题（进度回调切主线程并节流）\n- 音乐迷你播放条增加「上一曲」\n- 主页上下两区留白加大；模块管理说明改为「模块入口编辑」",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.317/LaoZhengFenXiang-0.317.apk"
+  "sha256": "70420551918d37a4068de680da756ff1009309a75fd6383c066eba342b38048e",
+  "changelog": "0.318：更新线路与配置页优化\n\n- 更新下载的连接/读取超时收紧到 10 秒：有效线路 10 秒内必有响应，超时立即换镜像\n- 配置管理改为紧凑单行卡片，十个入口一屏展示，无需上下滑动",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.318/LaoZhengFenXiang-0.318.apk"
 }

@@ -64,8 +64,10 @@ object UpdateChecker {
     private val json = Json { ignoreUnknownKeys = true }
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        // v0.318：有效线路 10 秒内必有响应；10 秒拿不到就判定该线路不可用，立即换镜像
+        // （连接与读取都收紧到 10 秒，避免被墙的 GitHub 直连把等待拖到十几秒）
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
     /** 检查更新专用短超时客户端：API 和清单都在 10 秒内出结果，避免界面长时间卡在"检查中" */
