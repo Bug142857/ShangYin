@@ -1,7 +1,7 @@
 {
-  "versionName": "0.314",
-  "sizeBytes": 20749753,
-  "sha256": "7f6e1885d90c24885c0295702de81cf5f83da30ce0e3f526401511bc5ecc8519",
-  "changelog": "0.314：App 图标的「郑」字放大 10%\n\n- 只放大中心图形（郑字 + 光晕）并向四周羽化过渡，外部描边/高光/圆角保持不变\n- 方形与圆形两版同步更新，输出 48/72/96/144/192 五档 PNG",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.314/LaoZhengFenXiang-0.314.apk"
+  "versionName": "0.315",
+  "sizeBytes": 20766205,
+  "sha256": "f2d1b4417d0acc27e5ea16159fab5013239c0b91949ac99bf9c413d160d14da3",
+  "changelog": "0.315：新增应用内版本更新\n\n- 配置管理 → 版本更新：检查到新版本可直接在 App 内下载并安装\n- GitHub API 不可用时自动读取静态清单，避免检查不到新版\n- 下载失败自动切换镜像（gh-proxy.com / ghproxy.net），逐通道校验安装包 SHA-256",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.315/LaoZhengFenXiang-0.315.apk"
 }
