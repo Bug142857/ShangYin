@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -62,12 +64,16 @@ fun FavoritesManageScreen(nav: NavHostController) {
             )
         }
     ) { pad ->
-        LazyColumn(
+        // 车机 / 平板横屏：卡片自动分多列；手机竖屏保持单列
+        val columns = com.shangyin.app.ui.common.adaptiveGridColumns(1)
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(pad).fillMaxSize()
         ) {
-            item(key = "fav-total") {
+            item(key = "fav-total", span = { GridItemSpan(maxLineSpan) }) {
                 Text(
                     "共 $total 条收藏 · 按模块整理",
                     style = MaterialTheme.typography.bodySmall,

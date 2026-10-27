@@ -151,66 +151,55 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(Modifier.height(4.dp))
-            SettingsCard(
-                icon = Icons.Rounded.Palette,
-                title = "主题管理",
-                hint = "${themeLabel(themeMode)} · ${com.shangyin.app.ui.theme.accentLabel(accentKey)}",
-                onClick = { nav.safeNavigate("themeManage") }
+            val entries = listOf(
+                SettingsEntry(
+                    Icons.Rounded.Palette, "主题管理",
+                    "${themeLabel(themeMode)} · ${com.shangyin.app.ui.theme.accentLabel(accentKey)}"
+                ) { nav.safeNavigate("themeManage") },
+                SettingsEntry(Icons.Rounded.Person, "账号管理", "豆瓣·无忧·Zlib") {
+                    nav.safeNavigate("account")
+                },
+                SettingsEntry(Icons.Rounded.CloudSync, "数据管理", "云端同步·导出/导入备份") {
+                    nav.safeNavigate("dataManage")
+                },
+                SettingsEntry(Icons.Rounded.LiveTv, "片源管理", "电视源&影视源（观影/番号）") {
+                    nav.safeNavigate("sourceHub")
+                },
+                SettingsEntry(Icons.Rounded.ListAlt, "清单管理", "共 ${lists.size} 个清单") {
+                    nav.safeNavigate("listManager")
+                },
+                SettingsEntry(Icons.Rounded.Tune, "模块管理", "模块入口编辑") {
+                    nav.safeNavigate("moduleManage")
+                },
+                SettingsEntry(
+                    Icons.Rounded.FavoriteBorder, "收藏管理",
+                    if (innerFavs.isNotEmpty()) "共 ${innerFavs.size} 条收藏 · 按模块整理" else "暂无收藏"
+                ) { nav.safeNavigate("favoritesManage") },
+                SettingsEntry(Icons.Rounded.Download, "下载管理", downloadHint) {
+                    nav.safeNavigate("downloads")
+                },
+                SettingsEntry(Icons.Rounded.CleaningServices, "清理缓存", "当前缓存：$cacheSize") {
+                    showClearCache = true
+                },
+                SettingsEntry(
+                    Icons.Rounded.SystemUpdate, "版本更新",
+                    if (versionName.isNotBlank()) "当前 v$versionName · 点击检查更新" else "点击检查更新"
+                ) { showUpdate = true }
             )
-            SettingsCard(
-                icon = Icons.Rounded.Person,
-                title = "账号管理",
-                hint = "豆瓣·无忧·Zlib",
-                onClick = { nav.safeNavigate("account") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.CloudSync,
-                title = "数据管理",
-                hint = "云端同步·导出/导入备份",
-                onClick = { nav.safeNavigate("dataManage") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.LiveTv,
-                title = "片源管理",
-                hint = "电视源&影视源（观影/番号）",
-                onClick = { nav.safeNavigate("sourceHub") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.ListAlt,
-                title = "清单管理",
-                hint = "共 ${lists.size} 个清单",
-                onClick = { nav.safeNavigate("listManager") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.Tune,
-                title = "模块管理",
-                hint = "模块入口编辑",
-                onClick = { nav.safeNavigate("moduleManage") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.FavoriteBorder,
-                title = "收藏管理",
-                hint = if (innerFavs.isNotEmpty()) "共 ${innerFavs.size} 条收藏 · 按模块整理" else "暂无收藏",
-                onClick = { nav.safeNavigate("favoritesManage") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.Download,
-                title = "下载管理",
-                hint = downloadHint,
-                onClick = { nav.safeNavigate("downloads") }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.CleaningServices,
-                title = "清理缓存",
-                hint = "当前缓存：$cacheSize",
-                onClick = { showClearCache = true }
-            )
-            SettingsCard(
-                icon = Icons.Rounded.SystemUpdate,
-                title = "版本更新",
-                hint = if (versionName.isNotBlank()) "当前 v$versionName · 点击检查更新" else "点击检查更新",
-                onClick = { showUpdate = true }
-            )
+            if (com.shangyin.app.ui.common.isWideScreen()) {
+                // 车机 / 平板横屏：双栏排布，避免 10 项在小高度下需要滚动
+                Row(Modifier.fillMaxWidth()) {
+                    Column(Modifier.weight(1f)) {
+                        entries.take(5).forEach { SettingsCard(it) }
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        entries.drop(5).forEach { SettingsCard(it) }
+                    }
+                }
+            } else {
+                entries.forEach { SettingsCard(it) }
+            }
             Spacer(Modifier.height(6.dp))
         }
     }
@@ -243,19 +232,22 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
     }
 }
 
+/** 配置项（便于宽屏双栏排布） */
+private data class SettingsEntry(
+    val icon: ImageVector,
+    val title: String,
+    val hint: String,
+    val onClick: () -> Unit
+)
+
 /** 卡片条目（v0.319 折中版）：两行文字 + 适中留白，不滚动的同时尽量填满屏幕 */
 @Composable
-private fun SettingsCard(
-    icon: ImageVector,
-    title: String,
-    hint: String,
-    onClick: () -> Unit
-) {
+private fun SettingsCard(entry: SettingsEntry) {
     androidx.compose.material3.Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 6.dp)
-            .clickable { onClick() },
+            .clickable { entry.onClick() },
         colors = androidx.compose.material3.CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
         )
@@ -265,16 +257,16 @@ private fun SettingsCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                icon,
+                entry.icon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(22.dp)
             )
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(entry.title, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    hint,
+                    entry.hint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

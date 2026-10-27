@@ -155,6 +155,8 @@ private object PsiteCache {
 fun PsiteHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    // 车机 / 平板横屏：双列卡片改为更多列
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(2)
 
     var sort by remember {
         mutableStateOf(PsiteCache.sort.takeIf { s -> PsiteClient.SORTS.any { it.second == s } }
@@ -455,7 +457,7 @@ fun PsiteHomeScreen(nav: NavHostController) {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Fixed(gridColumns),
                         state = gridState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),

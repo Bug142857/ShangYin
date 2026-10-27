@@ -78,6 +78,8 @@ fun HomeScreen(nav: NavHostController) {
         .filter { it.key !in disabledModules }
     val topEntries = entriesOf(topOrder)
     val bottomEntries = entriesOf(bottomOrder)
+    // 车机 / 平板横屏：一行放更多模块，避免 3 列时图标间空得太大
+    val gridColumns = com.shangyin.app.ui.common.adaptiveModuleColumns()
 
     Scaffold(
         topBar = {
@@ -98,7 +100,7 @@ fun HomeScreen(nav: NavHostController) {
                 .verticalScroll(rememberScrollState())
         ) {
             Spacer(Modifier.height(4.dp))
-            GridModuleRows(topEntries) { e -> nav.safeNavigate(e.route) }
+            GridModuleRows(topEntries, gridColumns) { e -> nav.safeNavigate(e.route) }
             if (bottomEntries.isNotEmpty()) {
                 // 中间分隔：细线 + 小字说明（v0.317：上下留白加大，两部分不再显得紧凑）
                 Row(
@@ -124,7 +126,7 @@ fun HomeScreen(nav: NavHostController) {
                         modifier = Modifier.weight(1f)
                     )
                 }
-                GridModuleRows(bottomEntries) { e -> nav.safeNavigate(e.route) }
+                GridModuleRows(bottomEntries, gridColumns) { e -> nav.safeNavigate(e.route) }
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -134,13 +136,14 @@ fun HomeScreen(nav: NavHostController) {
 @Composable
 private fun stringAppName() = androidx.compose.ui.res.stringResource(R.string.app_name)
 
-/** 3 列模块宫格（自动换行，空位补齐对齐） */
+/** 模块宫格（列数随屏幕宽度变化，自动换行，空位补齐对齐） */
 @Composable
 private fun GridModuleRows(
     entries: List<InnerModuleEntry>,
+    columns: Int,
     onClick: (InnerModuleEntry) -> Unit
 ) {
-    entries.chunked(3).forEachIndexed { rowIdx, rowEntries ->
+    entries.chunked(columns).forEachIndexed { rowIdx, rowEntries ->
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -158,7 +161,7 @@ private fun GridModuleRows(
                     onClick = { onClick(e) }
                 )
             }
-            repeat(3 - rowEntries.size) { Spacer(Modifier.weight(1f)) }
+            repeat(columns - rowEntries.size) { Spacer(Modifier.weight(1f)) }
         }
     }
 }

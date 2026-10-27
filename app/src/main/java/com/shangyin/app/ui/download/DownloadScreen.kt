@@ -25,6 +25,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -158,9 +160,13 @@ fun DownloadScreen(nav: NavHostController) {
             )
         }
     ) { pad ->
-        LazyColumn(
+        // 车机 / 平板横屏：文件夹卡两列展示，手机竖屏保持单列
+        val folderColumns = if (com.shangyin.app.ui.common.isWideScreen()) 2 else 1
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(folderColumns),
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(pad).fillMaxSize()
         ) {
             item(key = "folder-video") {
@@ -367,6 +373,9 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
         else -> emptyList()
     }
 
+    // 车机 / 平板横屏：已下载视频网格一行放更多
+    val videoColumns = com.shangyin.app.ui.common.adaptiveGridColumns(2)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -419,6 +428,7 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
             when (section) {
                 "video" -> videoSection(
                     context, videoTasks, videoLibrary,
+                    columns = videoColumns,
                     editing = editing,
                     selected = selected,
                     onToggle = { toggleSelect("video/$it") },
@@ -782,11 +792,12 @@ private fun EmptyHint(text: String) {
     )
 }
 
-/** 视频分区：下载中任务 + 已下载封面网格（v0.301 双列，点击播放，编辑模式勾选删除） */
+/** 视频分区：下载中任务 + 已下载封面网格（列数随屏幕宽度变化，点击播放，编辑模式勾选删除） */
 private fun LazyListScope.videoSection(
     context: Context,
     tasks: Map<String, VideoTask>,
     library: List<DownloadedVideo>,
+    columns: Int,
     editing: Boolean,
     selected: Set<String>,
     onToggle: (String) -> Unit,
@@ -807,9 +818,9 @@ private fun LazyListScope.videoSection(
         }
     } else {
         val sorted = library.sortedByDescending { it.createdAt }
-        // LazyColumn 里模拟双列网格：两两一组成行
+        // LazyColumn 里模拟多列网格：按屏幕宽度分组
         items(
-            sorted.chunked(2),
+            sorted.chunked(columns),
             key = { row -> "video-row-${row.joinToString("_") { it.id.toString() }}" }
         ) { row ->
             Row(
@@ -827,7 +838,7 @@ private fun LazyListScope.videoSection(
                         )
                     }
                 }
-                if (row.size == 1) Spacer(Modifier.weight(1f))
+                repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }

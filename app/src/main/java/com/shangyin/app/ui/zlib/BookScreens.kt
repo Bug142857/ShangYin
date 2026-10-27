@@ -98,6 +98,8 @@ fun BookHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val context = LocalContext.current
+    // 车机 / 平板横屏：书籍封面一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
 
     var cacheJson by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -241,7 +243,7 @@ fun BookHomeScreen(nav: NavHostController) {
                     Text("没有找到图书", color = MaterialTheme.colorScheme.outline)
                 }
                 else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     contentPadding = PaddingValues(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),

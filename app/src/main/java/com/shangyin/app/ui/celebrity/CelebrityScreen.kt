@@ -81,6 +81,8 @@ fun CelebrityScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    // 车机 / 平板横屏：照片、作品网格一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
     var detail by remember(celebrityId) { mutableStateOf<DoubanCelebrityDetail?>(null) }
     var allWorks by remember(celebrityId) { mutableStateOf<List<CelebrityWork>>(emptyList()) }
     var showAllWorks by remember { mutableStateOf(false) }
@@ -259,7 +261,7 @@ fun CelebrityScreen(
         // ---------- 全部照片页面 ----------
         showAllPhotos -> {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
+                columns = GridCells.Fixed(gridColumns),
                 modifier = Modifier
                     .padding(pad)
                     .fillMaxSize()
@@ -268,14 +270,14 @@ fun CelebrityScreen(
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                item(span = { GridItemSpan(3) }) {
+                item(span = { GridItemSpan(gridColumns) }) {
                     Text(
                         "全部照片(${allPhotoUrls.size})",
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
                 if (allPhotoUrls.isEmpty()) {
-                    item(span = { GridItemSpan(3) }) {
+                    item(span = { GridItemSpan(gridColumns) }) {
                         Text(
                             "暂无相关照片",
                             color = MaterialTheme.colorScheme.outline,

@@ -116,6 +116,8 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val idx = sourceIndex.coerceAtLeast(1)
+    // 车机 / 平板横屏：海报一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
     val initialKw = remember {
         runCatching { java.net.URLDecoder.decode(kwEncoded, "UTF-8") }.getOrDefault(kwEncoded)
     }
@@ -394,7 +396,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                 }
                 else -> {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
+                        columns = GridCells.Fixed(gridColumns),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -410,7 +412,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                             )
                         }
                         // 底部页码条（v0.305：样式与 X 站一致，跟着列表滚到最后才出现）
-                        item(key = "footer", span = { GridItemSpan(3) }) {
+                        item(key = "footer", span = { GridItemSpan(gridColumns) }) {
                             AppPageBar(
                                 currentPage = page,
                                 lastPage = lastPage,

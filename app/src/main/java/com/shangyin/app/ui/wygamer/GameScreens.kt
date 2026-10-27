@@ -122,6 +122,8 @@ fun GameHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     val context = androidx.compose.ui.platform.LocalContext.current
+    // 车机 / 平板横屏：双列卡片改为更多列
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(2)
 
     var cacheJson by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -323,7 +325,7 @@ fun GameHomeScreen(nav: NavHostController) {
                     Text("没有找到游戏", color = MaterialTheme.colorScheme.outline)
                 }
                 else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
+                    columns = GridCells.Fixed(gridColumns),
                     contentPadding = PaddingValues(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),

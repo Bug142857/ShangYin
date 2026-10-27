@@ -52,6 +52,9 @@ fun ModuleManageScreen(nav: NavHostController) {
     var topOrder by remember(savedTop) { mutableStateOf(savedTop) }
     var bottomOrder by remember(savedBottom) { mutableStateOf(savedBottom) }
 
+    // 车机 / 平板横屏：一行放更多模块
+    val gridColumns = com.shangyin.app.ui.common.adaptiveModuleColumns()
+
     fun entriesOf(keys: List<String>) = keys
         .mapNotNull { key -> INNER_MODULE_ENTRIES.firstOrNull { it.key == key } }
 
@@ -92,6 +95,7 @@ fun ModuleManageScreen(nav: NavHostController) {
             // 上区（本地模块）
             DraggableModuleGrid(
                 entries = entriesOf(topOrder),
+                columns = gridColumns,
                 disabled = disabled,
                 onReorder = { from, to ->
                     val list = topOrder.toMutableList()
@@ -129,6 +133,7 @@ fun ModuleManageScreen(nav: NavHostController) {
             // 下区（外网模块）
             DraggableModuleGrid(
                 entries = entriesOf(bottomOrder),
+                columns = gridColumns,
                 disabled = disabled,
                 onReorder = { from, to ->
                     val list = bottomOrder.toMutableList()
@@ -142,10 +147,11 @@ fun ModuleManageScreen(nav: NavHostController) {
     }
 }
 
-/** 3 列模块宫格：点 = 开关，长按拖动 = 排序 */
+/** 模块宫格：点 = 开关，长按拖动 = 排序；列数随屏幕宽度变化 */
 @Composable
 private fun DraggableModuleGrid(
     entries: List<InnerModuleEntry>,
+    columns: Int,
     disabled: Set<String>,
     onReorder: (from: Int, to: Int) -> Unit
 ) {
@@ -153,7 +159,7 @@ private fun DraggableModuleGrid(
     val ids = remember(entries) { entries.map { it.key.hashCode().toLong() } }
     val idsState = rememberUpdatedState(ids)
 
-    entries.chunked(3).forEachIndexed { rowIdx, rowEntries ->
+    entries.chunked(columns).forEachIndexed { rowIdx, rowEntries ->
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -170,7 +176,7 @@ private fun DraggableModuleGrid(
                             dragReorderModifier(
                                 itemId = m.key.hashCode().toLong(),
                                 isListMode = false,
-                                gridColumns = 3,
+                                gridColumns = columns,
                                 currentIdsState = idsState,
                                 onDragStateChange = { },
                                 onReorder = { from, to -> onReorder(from, to) },
@@ -197,7 +203,7 @@ private fun DraggableModuleGrid(
                     )
                 }
             }
-            repeat(3 - rowEntries.size) { Spacer(Modifier.weight(1f)) }
+            repeat(columns - rowEntries.size) { Spacer(Modifier.weight(1f)) }
         }
     }
 }

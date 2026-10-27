@@ -226,6 +226,8 @@ private fun CategoryGridPage(
     onSearch: (String) -> Unit
 ) {
     val keyboard = LocalSoftwareKeyboardController.current
+    // 车机 / 平板横屏：分类封面一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
     // 优先用缓存：进过一次后秒开
     var categories by remember { mutableStateOf(BikaUiCache.categories ?: emptyList()) }
     var loading by remember { mutableStateOf(BikaUiCache.categories == null) }
@@ -295,7 +297,7 @@ private fun CategoryGridPage(
                     }
                 }
                 else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),

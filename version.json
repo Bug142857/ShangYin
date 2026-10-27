@@ -1,7 +1,7 @@
 {
-  "versionName": "0.321",
+  "versionName": "0.322",
   "sizeBytes": 20782681,
-  "sha256": "cfe158c5e9549b4648c9e4a0a65a295925a611676e68918677ee90329471e97b",
-  "changelog": "0.321：缓存与备份完整性修复\n\n- 数据导出 / 云同步纳入漫画、本子阅读进度（上次看到）\n- 导入空片源 / 空收藏现在会正确清空；兼容老备份里 config 中的片源；误选普通 JSON 会被拒绝\n- 导入后清理详情 / 章节 / 漫画状态缓存，避免旧数据串台\n- 清理缓存补上漫画 / 本子详情缓存、已下载的更新安装包、分享临时文件，并计入缓存大小\n- 云端恢复的自动备份最多保留最近 10 份；缓存统计与清理改到后台线程",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.321/LaoZhengFenXiang-0.321.apk"
+  "sha256": "b56babaa831c707bf5f29bc97d78f9f6c0bff6a7752f63ee19af18e014f91443",
+  "changelog": "0.322：横屏 / 车机适配\n\n- 首页模块宫格、模块管理按屏幕宽度自动增加列数\n- 设置页在宽屏（车机 / 平板）改为双栏，10 个入口一屏展示\n- 收藏管理、下载文件夹、已下载视频支持宽屏多列\n- 豆瓣 / 番号 / 本子 / 漫画 / 图书 / 游戏 / X站 / P站 / 演职员 / 剧照等网格按宽度自动增加列数\n- 音乐播放器控制按钮在宽屏居中排列，避免过度分散",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.322/LaoZhengFenXiang-0.322.apk"
 }

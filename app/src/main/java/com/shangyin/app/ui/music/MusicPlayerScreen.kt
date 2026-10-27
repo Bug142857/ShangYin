@@ -339,7 +339,7 @@ fun MusicPlayerScreen(nav: NavHostController) {
             // 进度条下方只有 5 个按钮：模式切换 / 上一曲 / 播放暂停 / 下一曲 / 收藏
             Row(
                 Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
+                horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.CenterHorizontally),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // 模式切换：单首播放 → 单曲循环 → 顺序播放 → 随机播放

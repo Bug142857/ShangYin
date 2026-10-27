@@ -112,6 +112,8 @@ private val detailFetchAt = java.util.concurrent.ConcurrentHashMap<String, Long>
 @Composable
 fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
     val item by Repo.observeItem(itemId).collectAsStateWithLifecycle(initialValue = null)
+    // 车机 / 平板横屏：演职员、剧照网格一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
 
     // "查看全部"覆盖页 + 全屏图片浏览器状态（提到 Scaffold 外，顶栏返回键也要访问）
     var showAllPhotos by remember(itemId) { mutableStateOf(false) }
@@ -433,7 +435,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             // ---------- 全部演职员（网格，自身滚动） ----------
             showAllCelebrities -> {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     modifier = Modifier
                         .padding(pad)
                         .fillMaxSize()
@@ -442,7 +444,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    item(span = { GridItemSpan(3) }) {
+                    item(span = { GridItemSpan(gridColumns) }) {
                         Text("$celebTitle(${celebrities.size})", style = MaterialTheme.typography.titleMedium)
                     }
                     // key 带上下标：影视演职员里同一个人可能同时是导演和演员（id 相同），
@@ -455,7 +457,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
             // ---------- 全部剧照 / 游戏截图（网格，自身滚动） ----------
             showAllPhotos -> {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     modifier = Modifier
                         .padding(pad)
                         .fillMaxSize()
@@ -464,7 +466,7 @@ fun ItemDetailScreen(nav: NavHostController, itemId: Long) {
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    item(span = { GridItemSpan(3) }) {
+                    item(span = { GridItemSpan(gridColumns) }) {
                         Text(
                             "全部$photoTitle(${photoUrls.size})",
                             style = MaterialTheme.typography.titleMedium

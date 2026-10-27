@@ -103,6 +103,8 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val src = remember { SettingsStore.getVodSources().firstOrNull { it.id == srcId } }
+    // 车机 / 平板横屏：海报一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
 
     // 同一次浏览会话（srcId 相同）→ 用缓存恢复；换了源则重新开始
     val restored = remember(srcId) { BrowseCache.srcId == srcId }
@@ -351,7 +353,7 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
             } else {
                 LazyVerticalGrid(
                     state = gridState,
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -376,7 +378,7 @@ fun SourceBrowseScreen(nav: NavHostController, srcId: String) {
                     }
                     // 底部加载更多（占满整行）
                     if (items.isNotEmpty() && (total <= 0 || items.size < total)) {
-                        item(span = { GridItemSpan(3) }, key = "more") {
+                        item(span = { GridItemSpan(gridColumns) }, key = "more") {
                             Box(
                                 Modifier
                                     .fillMaxWidth()

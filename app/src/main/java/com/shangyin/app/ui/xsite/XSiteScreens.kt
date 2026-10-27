@@ -158,6 +158,8 @@ private object XSiteCache {
 fun XSiteHomeScreen(nav: NavHostController) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    // 车机 / 平板横屏：双列卡片改为更多列
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(2)
 
     // 0.273 的缓存可能存着非法 range("daily")，进来先归位到站点真实值，否则没有 chip 会亮
     var range by remember {
@@ -460,7 +462,7 @@ fun XSiteHomeScreen(nav: NavHostController) {
                     modifier = Modifier.fillMaxSize()
                 ) {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
+                        columns = GridCells.Fixed(gridColumns),
                         state = gridState,
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),

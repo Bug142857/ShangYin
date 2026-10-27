@@ -125,6 +125,8 @@ private enum class MusicSortMode { ADDED, ARTIST }
 @Composable
 fun ListDetailScreen(nav: NavHostController, listId: Long) {
     val scope = rememberCoroutineScope()
+    // 车机 / 平板横屏：清单网格一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
 
     val list by Repo.observeList(listId).collectAsStateWithLifecycle(initialValue = null)
     val items by Repo.observeItemsIn(listId).collectAsStateWithLifecycle(initialValue = emptyList())
@@ -456,7 +458,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
         } else {
             when (layoutMode) {
                 ListLayoutMode.GRID -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     contentPadding = PaddingValues(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -478,7 +480,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             modifier = (if (isEditMode && !isMusicList) dragReorderModifier(
                                 itemId = meta.list.id,
                                 isListMode = false,
-                                gridColumns = 3,
+                                gridColumns = gridColumns,
                                 currentIdsState = currentSubIds,
                                 onDragStateChange = { draggingSubListId = it },
                                 onReorder = { from, to -> Repo.reorderSubList(listId, from, to) },
@@ -503,7 +505,7 @@ fun ListDetailScreen(nav: NavHostController, listId: Long) {
                             modifier = (if (isEditMode && !isMusicList && sortMode == MusicSortMode.ADDED) dragReorderModifier(
                                 itemId = item.id,
                                 isListMode = false,
-                                gridColumns = 3,
+                                gridColumns = gridColumns,
                                 currentIdsState = currentItemIds,
                                 onDragStateChange = { draggingItemId = it },
                                 onReorder = { from, to -> Repo.reorderItem(listId, from, to) },

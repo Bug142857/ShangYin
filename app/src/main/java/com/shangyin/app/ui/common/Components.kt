@@ -676,6 +676,8 @@ fun PhotoGridDialog(
     onDismiss: () -> Unit
 ) {
     var openIndex by remember { mutableStateOf(-1) }
+    // 车机 / 平板横屏：缩略图一行放更多
+    val gridColumns = adaptiveGridColumns(3)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, dismissOnBackPress = true)
@@ -692,7 +694,7 @@ fun PhotoGridDialog(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
+                    columns = GridCells.Fixed(gridColumns),
                     contentPadding = PaddingValues(4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),

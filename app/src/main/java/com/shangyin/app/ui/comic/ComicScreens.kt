@@ -150,6 +150,8 @@ fun ComicHomeScreen(nav: NavHostController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
+    // 车机 / 平板横屏：漫画封面一行放更多
+    val gridColumns = com.shangyin.app.ui.common.adaptiveGridColumns(3)
 
     var cacheJson by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -405,7 +407,7 @@ fun ComicHomeScreen(nav: NavHostController) {
                 }
                 else -> {
                     LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
+                        columns = GridCells.Fixed(gridColumns),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
