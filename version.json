@@ -1,7 +1,7 @@
 {
-  "versionName": "0.324",
+  "versionName": "0.325",
   "sizeBytes": 20782681,
-  "sha256": "bd705bbbec736793e53be624bdb0b032e9b7e9638d0a605a6033d4fe08d80b62",
-  "changelog": "0.324：模块收藏 / 分区下载支持搜索\n\n- 收藏管理 → 任一模块收藏页新增搜索栏，按标题 / 作者实时过滤（排序 chips 保留）\n- 下载管理 → 视频 / 漫画 / 本子 / 音乐 / 书籍分区新增搜索栏：视频标题与来源、音乐歌名与歌手、书籍文件名\n- 无匹配时显示「没有找到与「关键词」匹配的…」空态，清空输入即恢复全部列表",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.324/LaoZhengFenXiang-0.324.apk"
+  "sha256": "5d3614fe8237372f7efeda37a6c6b81905bce0729d3e85e3d8b44fce72c0ee93",
+  "changelog": "0.325：漫画登录 + 账号内置\n\n- 漫画（Komiic）：站点章节图改为需要登录（匿名返回 402），内置漫画账号，打开漫画自动静默登录并自动续期；阅读器与离线下载的章节图请求自动带登录态\n- 无忧游戏库：账号同样内置并从「账号管理」移除；下载链接需要登录时自动拉起登录页并填好账号密码（滑块验证仍需手动拖一次）\n- 「账号管理」说明改为「豆瓣·Zlib」",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.325/LaoZhengFenXiang-0.325.apk"
 }

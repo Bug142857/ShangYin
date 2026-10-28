@@ -1,11 +1,14 @@
 package com.shangyin.app.ui.wygamer
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -91,6 +94,8 @@ import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.innerfav.FavHeartButton
 import com.shangyin.app.ui.safeNavigate
 import com.shangyin.app.ui.safePopBackStack
+import com.shangyin.app.ui.settings.SettingsStore
+import com.shangyin.app.ui.settings.WygamerLoginActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -444,6 +449,13 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
     var resolved by remember { mutableStateOf<String?>(null) }    // 解析结果（网盘分享链接）
     var viewerIndex by remember { mutableStateOf<Int?>(null) }    // 截图放大查看
 
+    // 无忧账号已内置、账号管理里不再有入口：下载链接被登录挡住时从这里拉起登录页（账号已自动填好）
+    val wygamerLoginLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) retryKey++
+    }
+
     LaunchedEffect(gameId, retryKey) {
         if (detail == null) loading = true
         error = null
@@ -568,7 +580,18 @@ fun GameDetailScreen(nav: NavHostController, gameId: String) {
                             Button(
                                 onClick = {
                                     if (d.downloads.isEmpty()) {
-                                        Toast.makeText(context, "该资源暂未提供下载链接，登录后可能可见", Toast.LENGTH_LONG).show()
+                                        if (!SettingsStore.isWygamerLoggedIn) {
+                                            Toast.makeText(
+                                                context, "登录后才能看到下载链接，账号已自动填好", Toast.LENGTH_SHORT
+                                            ).show()
+                                            wygamerLoginLauncher.launch(
+                                                Intent(context, WygamerLoginActivity::class.java)
+                                            )
+                                        } else {
+                                            Toast.makeText(
+                                                context, "该资源暂未提供下载链接", Toast.LENGTH_LONG
+                                            ).show()
+                                        }
                                     } else {
                                         showDownloads = true
                                     }

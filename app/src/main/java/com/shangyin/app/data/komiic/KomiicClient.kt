@@ -1,6 +1,8 @@
 package com.shangyin.app.data.komiic
 
+import com.shangyin.app.ui.settings.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -66,10 +68,20 @@ data class KomiicChapter(
  */
 object KomiicClient {
 
+    /** 账号/密码无效或登录被拒（与网络失败区分，避免误清 token） */
+    class KomiicAuthException(msg: String) : Exception(msg)
+
     /** 双主机：com/komiic.com 为主，cc=komiic.cc 为同服务镜像（2026-09-17 实测 API/章节图完全等价），
      *  传输失败或返回空数据时自动切换 */
     private val HOSTS = listOf("https://komiic.com", "https://komiic.cc")
     private const val PAGE_SIZE = 20
+
+    /** 静默登录互斥：章节图并发加载时只登录一次 */
+    private val loginLock = Any()
+
+    /** 上次登录失败时间：失败后 60 秒内不再重试，避免断网时每张图都阻塞等超时 */
+    @Volatile private var lastLoginFailAt = 0L
+    private const val LOGIN_RETRY_GAP_MS = 60_000L
 
     /** Chrome 移动端 UA（章节图加载 App.kt 也复用） */
     const val CHROME_UA =
@@ -138,20 +150,131 @@ object KomiicClient {
         })
     }
 
-    /** 发送 GraphQL 请求：按 活跃主机→备用主机 顺序尝试，传输失败自动切换；成功后记忆活跃主机 */
-    private suspend fun post(operation: String, query: String, variables: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+    // ---------------- 账号（站点自 2026-10 起章节图需登录，匿名返回 402） ----------------
+
+    /**
+     * 用内置/已保存账密登录，返回新 token（服务端有效期 24 小时）。
+     * 接口：POST /api/login {"email","password"} → {"code":200,"token":"..."}
+     */
+    suspend fun signIn(account: String, password: String): String = withContext(Dispatchers.IO) {
         var lastErr: Exception? = null
         for (i in HOSTS.indices) {
-            val idx = (activeHostIdx + i) % HOSTS.size
+            val base = HOSTS[i]
             try {
-                val data = postOnce(HOSTS[idx], operation, query, variables)
-                activeHostIdx = idx
-                return data
+                val body = buildJsonObject {
+                    put("email", account)
+                    put("password", password)
+                }.toString()
+                val req = Request.Builder().url("$base/api/login")
+                    .header("Origin", base)
+                    .header("Referer", "$base/")
+                    .header("Accept", "application/json")
+                    .post(body.toRequestBody("application/json".toMediaType()))
+                    .build()
+                client.newCall(req).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) throw Exception("登录失败 HTTP ${resp.code}（$base）")
+                    val obj = json.parseToJsonElement(text).jsonObject
+                    val token = obj["token"]?.jsonPrimitive?.contentOrNull
+                    if (!token.isNullOrBlank()) {
+                        activeHostIdx = i
+                        return@withContext token
+                    }
+                    throw KomiicAuthException(
+                        obj["message"]?.jsonPrimitive?.contentOrNull ?: "登录失败：未返回 token（$base）"
+                    )
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 lastErr = e
             }
+        }
+        throw lastErr ?: KomiicAuthException("漫画账号登录失败")
+    }
+
+    /** 用本地账密强制重新登录并保存 token */
+    suspend fun refreshToken(): String {
+        val account = SettingsStore.komiicAccount
+        val password = SettingsStore.komiicPassword
+        if (account.isBlank() || password.isBlank()) throw KomiicAuthException("未配置漫画账号")
+        return try {
+            val token = signIn(account, password)
+            SettingsStore.komiicToken = token
+            lastLoginFailAt = 0L
+            token
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            lastLoginFailAt = System.currentTimeMillis()
+            throw e
+        }
+    }
+
+    /** 有 token 直接用；没有则静默登录（失败抛 [KomiicAuthException]） */
+    suspend fun ensureToken(): String {
+        SettingsStore.komiicToken.takeIf { it.isNotBlank() }?.let { return it }
+        return refreshToken()
+    }
+
+    /**
+     * 图片请求用（OkHttp/Coil 线程内不能挂起）：取当前 token，没有或 [forceRefresh] 时阻塞登录。
+     * 并发加载多张章节图时只会真正登录一次；失败返回空串（请求照发，由 402 暴露问题）。
+     */
+    fun imageToken(forceRefresh: Boolean = false, staleToken: String = ""): String {
+        val cached = SettingsStore.komiicToken
+        if (!forceRefresh && cached.isNotBlank()) return cached
+        // 刚失败过（多半是断网）：60 秒内不再尝试，直接让请求带旧 token/空 token 发出去
+        if (System.currentTimeMillis() - lastLoginFailAt < LOGIN_RETRY_GAP_MS) return cached
+        return synchronized(loginLock) {
+            if (System.currentTimeMillis() - lastLoginFailAt < LOGIN_RETRY_GAP_MS) {
+                return SettingsStore.komiicToken
+            }
+            val now = SettingsStore.komiicToken
+            if (!forceRefresh && now.isNotBlank()) return now
+            // 并发多张图同时 402：前面线程已换过 token，直接复用，不重复登录
+            if (forceRefresh && now.isNotBlank() && now != staleToken) return now
+            runCatching { runBlocking { refreshToken() } }.getOrDefault("")
+        }
+    }
+
+    /** GraphQL 错误信息是否属于「登录态失效」（需要重登） */
+    private fun isAuthError(msg: String): Boolean {
+        val m = msg.lowercase()
+        return (m.contains("token") &&
+            (m.contains("expired") || m.contains("invalid") || m.contains("no token") || m.contains("not found"))) ||
+            m.contains("unauthorized") || msg.contains("请登录") || msg.contains("未登录")
+    }
+
+    /** 发送 GraphQL 请求：按 活跃主机→备用主机 顺序尝试，传输失败自动切换；成功后记忆活跃主机 */
+    private suspend fun post(operation: String, query: String, variables: kotlinx.serialization.json.JsonObject): kotlinx.serialization.json.JsonObject {
+        // 登录失败不阻断浏览（列表/详情仍可匿名访问），章节图会在加载时再触发一次登录
+        runCatching { ensureToken() }
+        var lastErr: Exception? = null
+        var attempt = 0
+        while (attempt < 2) {
+            attempt++
+            for (i in HOSTS.indices) {
+                val idx = (activeHostIdx + i) % HOSTS.size
+                try {
+                    val data = postOnce(HOSTS[idx], operation, query, variables)
+                    activeHostIdx = idx
+                    return data
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastErr = e
+                }
+            }
+            // token 失效：清掉旧 token，重登成功后把整轮主机再试一次
+            if (lastErr is KomiicAuthException) {
+                SettingsStore.clearKomiicToken()
+                if (!runCatching { refreshToken() }.getOrNull().isNullOrBlank()) {
+                    lastErr = null
+                    continue
+                }
+            }
+            break
         }
         throw lastErr ?: Exception("接口错误：所有主机均失败")
     }
@@ -164,31 +287,38 @@ object KomiicClient {
                 put("query", query)
                 put("variables", variables)
             }.toString()
-            val req = Request.Builder().url("$base/api/query")
+            val builder = Request.Builder().url("$base/api/query")
                 .header("Origin", base)
                 .header("Referer", "$base/")
                 .header("Accept", "*/*")
                 .header("Sec-Fetch-Dest", "empty")
                 .header("Sec-Fetch-Mode", "cors")
                 .header("Sec-Fetch-Site", "same-origin")
-                .post(body.toRequestBody("application/json".toMediaType()))
-                .build()
+            SettingsStore.komiicToken.takeIf { it.isNotBlank() }?.let {
+                builder.header("Authorization", "Bearer $it")
+            }
+            val req = builder.post(body.toRequestBody("application/json".toMediaType())).build()
             try {
                 client.newCall(req).execute().use { resp ->
                     lastEdge = resp.header("cf-ray")
                     val text = resp.body?.string().orEmpty()
                     lastRaw = text.take(300)
-                    if (!resp.isSuccessful) throw Exception("接口错误 HTTP ${resp.code}（$base）")
+                    if (!resp.isSuccessful) {
+                        // 401 = token 失效（服务端开始校验登录态时会出现）→ 交给 post() 重登重试
+                        if (resp.code == 401) throw KomiicAuthException("登录已失效 HTTP 401（$base）")
+                        throw Exception("接口错误 HTTP ${resp.code}（$base）")
+                    }
                     val root = json.parseToJsonElement(text).jsonObject
                     root["errors"]?.jsonArray?.firstOrNull()?.let { e ->
-                        throw Exception(
-                            e.jsonObject["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误（$base）"
-                        )
+                        val msg = e.jsonObject["message"]?.jsonPrimitive?.contentOrNull ?: "接口错误（$base）"
+                        if (isAuthError(msg)) throw KomiicAuthException(msg)
+                        throw Exception(msg)
                     }
                     root["data"]?.jsonObject ?: throw Exception("响应数据为空（$base）｜原始：$lastRaw")
                 }
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
+                if (e is KomiicAuthException) throw e
                 if (e.message?.contains("HTTP") == true || e.message?.contains("接口") == true ||
                     e.message?.contains("响应数据为空") == true
                 ) throw e

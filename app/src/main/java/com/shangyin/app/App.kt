@@ -42,6 +42,9 @@ class App : Application(), ImageLoaderFactory {
         SettingsStore.init(this)
         // v0.310：内置哔咔账号（账号管理里已隐藏哔咔登录项，新装用户开箱即用）
         runCatching { SettingsStore.ensureDefaultBikaAccountSeeded() }
+        // 漫画（Komiic）与无忧游戏：同样内置账号（账号管理里不展示，漫画侧自动静默登录）
+        runCatching { SettingsStore.ensureDefaultKomiicAccountSeeded() }
+        runCatching { SettingsStore.ensureDefaultWygamerAccountSeeded() }
         com.shangyin.app.data.InnerFavorites.init(this)
         // 阅读进度（上次看到）单独存 SharedPreferences：启动时加载，导出/云同步才能拿到完整数据
         com.shangyin.app.data.ReadProgressStore.ensure(this)
@@ -189,8 +192,14 @@ class App : Application(), ImageLoaderFactory {
             .dns(com.shangyin.app.data.melon.GeneralDohDns)
             .addInterceptor { chain ->
                 val req = chain.request()
+                // Komiic 章节图现在需要登录（匿名 402）：请求前带上内置账号 token
+                val komiicImage = (req.url.host == "komiic.com" || req.url.host == "komiic.cc") &&
+                    req.url.encodedPath.startsWith("/api/image/")
                 // 图片请求改写逻辑已抽出为纯函数 rewriteImageRequest（见文件末尾），便于单元测试
-                val out = rewriteImageRequest(req)
+                val out = rewriteImageRequest(
+                    req,
+                    komiicToken = if (komiicImage) com.shangyin.app.data.komiic.KomiicClient.imageToken() else ""
+                )
                 // 吃瓜图床：域名频繁轮换 + 设备直连当前图床可能不可达（v0.220/0.221 时代
                 // 「图全挂」的根因，实测 Referer/UA 均无防盗链）。新旧图床回源同一存储、
                 // 路径通用 → 失败自动换域名重试（候选来自页面解析自动收集，见 MelonClient）。
@@ -265,6 +274,22 @@ class App : Application(), ImageLoaderFactory {
                         com.shangyin.app.data.melon.MelonClient.demotePicHost(h)
                     }
                     throw lastErr ?: java.io.IOException("吃瓜图床加载失败")
+                }
+                if (komiicImage) {
+                    // token 24 小时过期（匿名 402）：登录态异常时强制重登一次再重试（并发多图只会登一次）
+                    var resp = chain.proceed(out)
+                    if (resp.code == 401 || resp.code == 402 || resp.code == 403) {
+                        resp.close()
+                        val stale = out.header("Authorization")?.removePrefix("Bearer ").orEmpty()
+                        val fresh = com.shangyin.app.data.komiic.KomiicClient
+                            .imageToken(forceRefresh = true, staleToken = stale)
+                        if (fresh.isNotBlank()) {
+                            resp = chain.proceed(
+                                out.newBuilder().header("Authorization", "Bearer $fresh").build()
+                            )
+                        }
+                    }
+                    return@addInterceptor resp
                 }
                 chain.proceed(out)
             }
@@ -376,7 +401,11 @@ class App : Application(), ImageLoaderFactory {
  *   （内存中最近一次成功镜像）。v0.221 教训：曾误用持久化的 melonBase（可能早已失效）做
  *   Referer——回归测试通过显式传参锁定「Referer 来自调用方给的最近成功镜像」这一语义。
  */
-internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonClient.lastBase): Request {
+internal fun rewriteImageRequest(
+    req: Request,
+    melonRefererBase: String = MelonClient.lastBase,
+    komiicToken: String = ""
+): Request {
     val host = req.url.host
     // v0.287/0.288：豆瓣已死图床域重写。2026-10-21 实测两类死域：
     //   qnmob{2,3}.doubanio.com — DNS 全网 ENOTFOUND（整体下线）
@@ -402,15 +431,17 @@ internal fun rewriteImageRequest(req: Request, melonRefererBase: String = MelonC
     } else if ((nHost == "komiic.com" || nHost == "komiic.cc") && normalized.url.encodedPath.startsWith("/api/image/")) {
         // Komiic 章节图防盗链（主/镜像域）：fragment "#c/{comicId}/{chapterId}" → 完整路径 Referer
         // （fragment 不会发送到服务器，仅本地编码归属信息）；UA 与 KomiicClient 同款 Chrome/119
+        // 现在还需要登录态（匿名 402）：把调用方给的 token 带上
+        val b = normalized.newBuilder()
+        if (komiicToken.isNotBlank()) b.header("Authorization", "Bearer $komiicToken")
         normalized.url.fragment?.takeIf { it.startsWith("c/") }?.let { f ->
             val p = f.removePrefix("c/").split('/')
             if (p.size == 2) {
-                normalized.newBuilder()
-                    .header("Referer", "https://${normalized.url.host}/comic/${p[0]}/chapter/${p[1]}")
+                b.header("Referer", "https://${normalized.url.host}/comic/${p[0]}/chapter/${p[1]}")
                     .header("User-Agent", com.shangyin.app.data.komiic.KomiicClient.CHROME_UA)
-                    .build()
-            } else normalized
-        } ?: normalized
+            }
+        }
+        b.build()
     } else if (normalized.url.host.matches(com.shangyin.app.data.melon.MELON_PIC_HOST)) {
         // 吃瓜（51爆料）图床：Referer 用当前镜像 + 浏览器 UA（默认 okhttp UA 易被风控拦截）。
         // 图床域名会轮换（pic.ndhixj.cn → pic.jtzatly.cn，均为 pic.{词}.cn 模式），按模式匹配而非硬编码；

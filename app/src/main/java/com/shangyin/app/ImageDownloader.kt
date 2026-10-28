@@ -80,7 +80,14 @@ object ImageDownloader {
     suspend fun fetchBytes(url: String): Pair<ByteArray, String?> = withContext(Dispatchers.IO) {
         require(url.isNotBlank()) { "图片地址为空" }
         val req = Request.Builder().url(url).header("User-Agent", DEFAULT_UA)
-        val resp = client.newCall(withAntiLeech(req, url)).execute()
+        val stale = com.shangyin.app.ui.settings.SettingsStore.komiicToken
+        var resp = client.newCall(withAntiLeech(req, url)).execute()
+        // Komiic 章节图需要登录（匿名 402）：token 过期时强制重登后重试一次
+        if (resp.code in 401..403 && isKomiicImage(url)) {
+            resp.close()
+            com.shangyin.app.data.komiic.KomiicClient.imageToken(forceRefresh = true, staleToken = stale)
+            resp = client.newCall(withAntiLeech(req, url)).execute()
+        }
         resp.use {
             if (!it.isSuccessful) throw Exception("下载失败 HTTP ${it.code}")
             val bytes = it.body?.bytes() ?: throw Exception("响应体为空")
@@ -97,6 +104,12 @@ object ImageDownloader {
         else -> (contentType ?: "image/jpeg").substringAfterLast('/').substringBefore(';').ifBlank { "jpg" }
     }
 
+    /** 是否 Komiic 章节图（需要登录 + Referer） */
+    private fun isKomiicImage(url: String): Boolean {
+        val host = url.substringAfter("://").substringBefore('/').substringBefore('?')
+        return (host == "komiic.com" || host == "komiic.cc") && url.contains("/api/image/")
+    }
+
     /** 防盗链请求头：豆瓣 / Komiic 章节图需要 Referer */
     private fun withAntiLeech(req: Request.Builder, url: String): Request {
         val host = url.substringAfter("://").substringBefore('/').substringBefore('?')
@@ -104,7 +117,10 @@ object ImageDownloader {
             host.endsWith("doubanio.com") || host.endsWith("douban.com") ->
                 req.header("Referer", "https://m.douban.com/").build()
             (host == "komiic.com" || host == "komiic.cc") && url.contains("/api/image/") -> {
-                // Komiic 章节图防盗链需完整路径 Referer，从 fragment "#c/{comicId}/{chapterId}" 还原
+                // Komiic 章节图防盗链需完整路径 Referer，从 fragment "#c/{comicId}/{chapterId}" 还原；
+                // 且现在需要登录态（匿名 402）
+                val token = com.shangyin.app.data.komiic.KomiicClient.imageToken()
+                if (token.isNotBlank()) req.header("Authorization", "Bearer $token")
                 val p = url.substringAfter('#', "").removePrefix("c/").split('/')
                 if (p.size == 2) {
                     req.header("Referer", "https://$host/comic/${p[0]}/chapter/${p[1]}")

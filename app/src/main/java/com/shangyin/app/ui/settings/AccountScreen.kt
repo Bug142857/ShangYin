@@ -24,7 +24,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,8 +65,9 @@ private suspend fun checkSession(block: suspend () -> Boolean?): Boolean? =
     runCatching { withTimeoutOrNull(25_000L) { block() } }.getOrNull()
 
 /**
- * 账号管理：豆瓣登录、无忧游戏库登录、Z-Library 登录
- *（v0.310 起**哔咔登录项已隐藏**：App 内置默认哔咔账号，本子页打开时自动静默登录）。
+ * 账号管理：豆瓣登录、Z-Library 登录
+ *（哔咔 / 漫画 Komiic / 无忧游戏库均为**内置账号**，条目已隐藏：
+ *  哔咔、漫画在数据层自动静默登录；无忧在打开登录页时自动填入账号密码）。
  * 每个账号卡片下方带「去注册」入口，点开走系统浏览器。
  * 云端同步入口已挪到 设置 → 数据管理。
  */
@@ -104,18 +104,7 @@ fun AccountScreen(nav: NavHostController) {
 
     // 哔咔：v0.310 起不再在账号管理里展示（内置默认账号 + 本子页静默登录）
 
-    // 无忧游戏库登录状态
-    var wygamerLoginKey by remember { mutableStateOf(0) }
-    val isWygamerLoggedIn = remember(wygamerLoginKey) { SettingsStore.isWygamerLoggedIn }
-    var showWygamerLogout by remember { mutableStateOf(false) }
-    val wygamerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        wygamerLoginKey++
-        if (result.resultCode == android.app.Activity.RESULT_OK) {
-            Toast.makeText(context, "无忧游戏库登录成功", Toast.LENGTH_SHORT).show()
-        }
-    }
+    // 无忧游戏库：内置账号，账号管理里不再展示（登录页打开时自动填入）
 
     // Z-Library 登录状态
     var zlibLoginKey by remember { mutableStateOf(0) }
@@ -123,17 +112,8 @@ fun AccountScreen(nav: NavHostController) {
     var showZlibLogout by remember { mutableStateOf(false) }
 
     // 其余账号同样做「服务端登录态校验」：null = 未确认，false = 已失效（本地却显示已登录）
-    var wygamerSessionOk by remember(wygamerLoginKey) { mutableStateOf<Boolean?>(null) }
     var zlibSessionOk by remember(zlibLoginKey) { mutableStateOf<Boolean?>(null) }
-    var wygamerChecked by remember(wygamerLoginKey) { mutableStateOf(false) }
     var zlibChecked by remember(zlibLoginKey) { mutableStateOf(false) }
-    LaunchedEffect(wygamerLoginKey) {
-        wygamerChecked = false
-        if (SettingsStore.isWygamerLoggedIn) {
-            wygamerSessionOk = checkSession { com.shangyin.app.data.wygamer.WygamerClient.sessionOk() }
-        }
-        wygamerChecked = true
-    }
     LaunchedEffect(zlibLoginKey) {
         zlibChecked = false
         if (com.shangyin.app.data.zlib.ZlibClient.isLoggedIn) {
@@ -196,29 +176,7 @@ fun AccountScreen(nav: NavHostController) {
 
             // v0.310：哔咔登录项已隐藏 —— 内置默认账号 + 本子页静默登录，用户无需手动操作
 
-            // 无忧游戏库登录
-            SettingCard(
-                icon = {
-                    Icon(
-                        Icons.Rounded.SportsEsports, contentDescription = null,
-                        tint = if (isWygamerLoggedIn && wygamerSessionOk != false) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline
-                    )
-                },
-                title = "无忧游戏库登录",
-                subtitle = when {
-                    !isWygamerLoggedIn -> "未登录，登录后可查看部分资源下载链接"
-                    !wygamerChecked -> "已登录，正在检测登录状态…"
-                    wygamerSessionOk == false -> "登录已失效！部分资源看不到下载链接，点这里重新登录"
-                    wygamerSessionOk == null -> "已登录（暂时无法确认状态，点这里可重新登录）"
-                    else -> "已登录，可查看资源下载链接"
-                },
-                onClick = {
-                    if (isWygamerLoggedIn && wygamerSessionOk == true) showWygamerLogout = true
-                    else wygamerLauncher.launch(Intent(context, WygamerLoginActivity::class.java))
-                }
-            )
-            RegisterHint("https://www.wygamer.com/user-sign-2?tab=signup")
+            // 无忧游戏库：内置账号，不在账号管理里展示（游戏详情点「下载」时自动带出登录页并填好账号）
 
             // Z-Library 登录
             SettingCard(
@@ -269,25 +227,7 @@ fun AccountScreen(nav: NavHostController) {
 
     // v0.310：哔咔登录/登出对话框不再挂载（登录项已隐藏）
 
-    // 无忧游戏库登出确认
-    if (showWygamerLogout) {
-        AlertDialog(
-            onDismissRequest = { showWygamerLogout = false },
-            title = { Text("退出无忧游戏库登录") },
-            text = { Text("退出后部分资源可能看不到下载链接，确认退出？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        SettingsStore.clearWygamerLogin()
-                        wygamerLoginKey++
-                        showWygamerLogout = false
-                        Toast.makeText(context, "已退出无忧游戏库登录", Toast.LENGTH_SHORT).show()
-                    }
-                ) { Text("退出", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { showWygamerLogout = false }) { Text("取消") } }
-        )
-    }
+    // 无忧游戏库：账号管理里不再展示，故无登出入口
 
     // Z-Library 登出确认
     if (showZlibLogout) {

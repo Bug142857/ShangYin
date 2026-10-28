@@ -156,7 +156,7 @@ fun SettingsScreen(nav: NavHostController, onThemeChanged: () -> Unit = {}) {
                     Icons.Rounded.Palette, "主题管理",
                     "${themeLabel(themeMode)} · ${com.shangyin.app.ui.theme.accentLabel(accentKey)}"
                 ) { nav.safeNavigate("themeManage") },
-                SettingsEntry(Icons.Rounded.Person, "账号管理", "豆瓣·无忧·Zlib") {
+                SettingsEntry(Icons.Rounded.Person, "账号管理", "豆瓣·Zlib") {
                     nav.safeNavigate("account")
                 },
                 SettingsEntry(Icons.Rounded.CloudSync, "数据管理", "云端同步·导出/导入备份") {

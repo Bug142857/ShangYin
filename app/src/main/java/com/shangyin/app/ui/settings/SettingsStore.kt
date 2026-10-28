@@ -446,19 +446,79 @@ object SettingsStore {
         }
     }
 
+    // ---------- Komiic 漫画（komiic.com） ----------
+
+    private const val KEY_KOMIIC_TOKEN = "komiic_token"
+    private const val KEY_KOMIIC_ACCOUNT = "komiic_account"
+    private const val KEY_KOMIIC_PASSWORD = "komiic_password"
+
+    /** Komiic 登录 token（JWT，24 小时有效；为空 = 未登录） */
+    var komiicToken: String
+        get() = sp.getString(KEY_KOMIIC_TOKEN, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_KOMIIC_TOKEN, v).apply()
+
+    /** Komiic 账号（用于 token 过期后静默重登） */
+    var komiicAccount: String
+        get() = sp.getString(KEY_KOMIIC_ACCOUNT, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_KOMIIC_ACCOUNT, v).apply()
+
+    /** Komiic 密码（明文存本机，仅供 token 过期后自动重登） */
+    var komiicPassword: String
+        get() = sp.getString(KEY_KOMIIC_PASSWORD, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_KOMIIC_PASSWORD, v).apply()
+
+    fun clearKomiicToken() {
+        sp.edit().remove(KEY_KOMIIC_TOKEN).apply()
+    }
+
+    /** 内置漫画账号（与无忧游戏共用一套；账号管理里不展示，打开漫画时自动静默登录） */
+    private const val DEFAULT_KOMIIC_ACCOUNT = "624964323@qq.com"
+    private const val DEFAULT_KOMIIC_PASSWORD = "123qweasd"
+
+    /**
+     * 补种内置漫画账密（启动时调用）。
+     * 只在本地没有账密时写入，不覆盖用户自己填过的；token 仍由 KomiicClient 静默登录取。
+     */
+    fun ensureDefaultKomiicAccountSeeded() {
+        if (komiicAccount.isBlank() || komiicPassword.isBlank()) {
+            komiicAccount = DEFAULT_KOMIIC_ACCOUNT
+            komiicPassword = DEFAULT_KOMIIC_PASSWORD
+        }
+    }
+
     // ---------- 无忧游戏库（www.wygamer.com） ----------
 
     private const val KEY_WYGAMER_COOKIE = "wygamer_cookie"
+    private const val KEY_WYGAMER_ACCOUNT = "wygamer_account"
+    private const val KEY_WYGAMER_PASSWORD = "wygamer_password"
 
     /** 无忧游戏库 Cookie（WebView 登录后抓取，用于带登录态抓取页面） */
     var wygamerCookie: String
         get() = sp.getString(KEY_WYGAMER_COOKIE, "").orEmpty()
         set(v) = sp.edit().putString(KEY_WYGAMER_COOKIE, v).apply()
 
+    /** 无忧账号（打开登录页时自动填入，账号与漫画同一套） */
+    var wygamerAccount: String
+        get() = sp.getString(KEY_WYGAMER_ACCOUNT, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_WYGAMER_ACCOUNT, v).apply()
+
+    /** 无忧密码（打开登录页时自动填入） */
+    var wygamerPassword: String
+        get() = sp.getString(KEY_WYGAMER_PASSWORD, "").orEmpty()
+        set(v) = sp.edit().putString(KEY_WYGAMER_PASSWORD, v).apply()
+
     /** 是否已登录无忧游戏库（Zibll 登录票据） */
     val isWygamerLoggedIn: Boolean
         get() = wygamerCookie.contains("zibll", ignoreCase = true) ||
             wygamerCookie.contains("wordpress_logged_in", ignoreCase = true)
+
+    /** 补种内置无忧账密（启动时调用，不覆盖用户自填） */
+    fun ensureDefaultWygamerAccountSeeded() {
+        if (wygamerAccount.isBlank() || wygamerPassword.isBlank()) {
+            wygamerAccount = DEFAULT_KOMIIC_ACCOUNT
+            wygamerPassword = DEFAULT_KOMIIC_PASSWORD
+        }
+    }
 
     fun clearWygamerLogin() {
         sp.edit().remove(KEY_WYGAMER_COOKIE).apply()

@@ -333,6 +333,43 @@ private const val SLIDER_FORCE_CSS_JS = """
 """
 
 /**
+ * 自动填入内置无忧账号（账号与漫画 Komiic 同一套）。
+ *
+ * Zibll 登录页默认可能停在「免密登录」标签，这里切到「账号密码登录」并填好输入框；
+ * 滑块验证码必须由用户拖一次（主题 JS 弹拼图，无法程序化通过），所以**只填不提交**。
+ * 页面结构/公告弹窗可能晚就绪，做几次延时重试。
+ */
+private fun wygamerAutoFillJs(account: String, password: String): String {
+    fun esc(s: String) = s.replace("\\", "\\\\").replace("'", "\\'")
+    return """
+;(function(){
+  if (window.__syAutoFilled) return;
+  var U = '${esc(account)}';
+  var P = '${esc(password)}';
+  function fill(){
+    try {
+      var u = document.querySelector('#tab-signin-pas input[name="username"]');
+      var p = document.querySelector('#tab-signin-pas input[name="password"]');
+      if (!u || !p) return false;
+      u.value = U;
+      p.value = P;
+      u.dispatchEvent(new Event('input', {bubbles:true}));
+      p.dispatchEvent(new Event('input', {bubbles:true}));
+      window.__syAutoFilled = 1;
+      try {
+        var tab = document.querySelector('a[href="#tab-signin-pas"]');
+        if (tab) { if (window.jQuery) jQuery(tab).tab('show'); else tab.click(); }
+      } catch(e) {}
+      return true;
+    } catch(e) { return false; }
+  }
+  if (fill()) return;
+  [600, 1400, 2600, 4000].forEach(function(ms){ setTimeout(fill, ms); });
+})()
+"""
+}
+
+/**
  * 实时探针：打开诊断面板时当场取一次（点击、请求都发生在页面加载之后，静态快照看不到）。
  * 返回「每行一条」的纯文本，由界面按行展示。
  */
@@ -414,7 +451,7 @@ class WygamerLoginActivity : ComponentActivity() {
                             "${WygamerClient.BASE}/"
                         ),
                         cookieUrls = listOf("${WygamerClient.BASE}/"),
-                        hint = "登录后可查看部分需要登录才能显示的资源下载链接。\n登录信息仅保存在本机。",
+                        hint = "登录后可查看部分需要登录才能显示的资源下载链接。\n账号密码已自动填好（内置账号），点「登录」并按提示拖动滑块即可。",
                         loginDetect = { c -> c.contains("wordpress_logged_in", true) },
                         isLoggedIn = { SettingsStore.isWygamerLoggedIn },
                         // 服务端说了算：Cookie 里有 wordpress_logged_in ≠ 会话有效（过期 Cookie 会让
@@ -426,7 +463,8 @@ class WygamerLoginActivity : ComponentActivity() {
                         preCookies = listOf("showed_system_notice" to "showed"),
                         // ⚠️ 两段 JS 拼接时必须确保前一段以分号结束：IIFE 之间少了分号会被解析成
                         // `})()(function(){...})()`（报 "is not a function"），后一段整段不执行。
-                        afterLoadJs = CLEAR_OVERLAY_JS + SLIDER_FORCE_CSS_JS,
+                        afterLoadJs = CLEAR_OVERLAY_JS + SLIDER_FORCE_CSS_JS +
+                            wygamerAutoFillJs(SettingsStore.wygamerAccount, SettingsStore.wygamerPassword),
                         failHint = "站点偶发抽风时可稍后重试。若页面能显示但点「登录」没反应，" +
                             "点右上角 ⓘ 看诊断信息并反馈（多为系统 WebView 版本过旧，" +
                             "可到应用商店更新「Android System WebView」或「Chrome」）。"
