@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,6 +54,7 @@ import androidx.navigation.NavHostController
 import com.shangyin.app.data.InnerFav
 import com.shangyin.app.data.InnerFavorites
 import com.shangyin.app.data.xsite.XSiteClient
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.common.CoverImage
 import com.shangyin.app.ui.common.EmptyView
 import com.shangyin.app.ui.music.MusicMiniPlayer
@@ -79,6 +81,8 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
     var pendingDelete by remember { mutableStateOf<InnerFav?>(null) }
     var resolving by remember { mutableStateOf(false) } // P站重放时的直链解析遮罩
     var sortMode by remember { mutableStateOf(FavSortMode.ADDED) }
+    // v0.324：模块收藏内搜索（标题 / 副标题，边输边过滤）
+    var query by rememberSaveable { mutableStateOf("") }
 
     val title = when (module) {
         "melon" -> "吃瓜收藏"
@@ -97,9 +101,14 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
     // 第二个排序 chip 的文案：音乐叫「歌手」，其余模块副标题是作者/UP主/片名，叫「作者」
     val artistLabel = if (module == "music") "歌手" else "作者"
 
+    // 本模块全部收藏（用于判断搜索前是否为空、以及无匹配时的空态文案）
+    val moduleFavs = remember(allFavs, module) { allFavs.filter { it.module == module } }
     // 排序：更新 = 收藏时间倒序；歌手/作者 = 副标题排序（英文在前按字母、中文在后按拼音，同音乐清单算法）
-    val items = remember(allFavs, sortMode) {
-        val mine = allFavs.filter { it.module == module }
+    val items = remember(moduleFavs, sortMode, query) {
+        val q = query.trim()
+        val mine = if (q.isEmpty()) moduleFavs else moduleFavs.filter {
+            it.title.contains(q, ignoreCase = true) || it.subtitle.contains(q, ignoreCase = true)
+        }
         when (sortMode) {
             FavSortMode.ADDED -> mine.sortedByDescending { it.savedAt }
             FavSortMode.ARTIST -> {
@@ -268,15 +277,33 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
             }
         }
     ) { pad ->
-        if (items.isEmpty()) {
-            Box(
-                Modifier.padding(pad).fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                EmptyView("还没有收藏\n在模块列表卡片的爱心处点一下即可收藏")
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            // v0.324：本模块收藏搜索（有收藏时才显示，边输边过滤标题/作者）
+            if (moduleFavs.isNotEmpty()) {
+                AppSearchField(
+                    value = query,
+                    onValueChange = { query = it },
+                    onSearch = {},
+                    placeholder = "搜索${title.removeSuffix("收藏")}",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                )
             }
-        } else {
-            LazyColumn(Modifier.padding(pad).fillMaxSize()) {
+            when {
+                moduleFavs.isEmpty() -> Box(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    EmptyView("还没有收藏\n在模块列表卡片的爱心处点一下即可收藏")
+                }
+                items.isEmpty() -> Box(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    EmptyView("没有找到与「${query.trim()}」匹配的收藏")
+                }
+                else -> LazyColumn(Modifier.weight(1f).fillMaxWidth()) {
                 // 排序行：与音乐清单同款（「排序」标签 + 右侧 chips，常驻内容区顶部）
                 item(key = "sort_row") {
                     Row(
@@ -338,6 +365,7 @@ fun InnerFavoritesScreen(nav: NavHostController, module: String) {
                             )
                         }
                     }
+                }
                 }
             }
         }

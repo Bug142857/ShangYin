@@ -86,6 +86,7 @@ import com.shangyin.app.data.download.VideoDownloadManager
 import com.shangyin.app.data.download.VideoTask
 import com.shangyin.app.data.vod.VodEpisode
 import com.shangyin.app.data.vod.VodPlayGroup
+import com.shangyin.app.ui.common.AppSearchField
 import com.shangyin.app.ui.common.PhotoViewerDialog
 import com.shangyin.app.ui.player.PlayerSession
 import com.shangyin.app.ui.music.MusicPlayback
@@ -300,6 +301,8 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
     var confirmDelete by remember { mutableStateOf(false) }
     // 音乐/书籍文件增删后刷新枚举
     var mediaRefresh by remember { mutableStateOf(0) }
+    // v0.324：分区下载内搜索（标题/歌手/文件名，边输边过滤）
+    var query by rememberSaveable { mutableStateOf("") }
 
     fun toggleSelect(key: String) {
         selected = if (key in selected) selected - key else selected + key
@@ -341,6 +344,36 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
 
     val comics = remember(library) { library.filterNot { it.source == ComicDownloadStore.BIKA } }
     val bikas = remember(library) { library.filter { it.source == ComicDownloadStore.BIKA } }
+
+    // v0.324：按搜索词过滤当前分区内容（未输入时原样返回）
+    val q = query.trim()
+    val shownVideos = remember(videoLibrary, q) {
+        if (q.isEmpty()) videoLibrary
+        else videoLibrary.filter { it.title.contains(q, true) || it.sourceName.contains(q, true) }
+    }
+    val shownComics = remember(comics, q) {
+        if (q.isEmpty()) comics else comics.filter { it.title.contains(q, true) }
+    }
+    val shownBikas = remember(bikas, q) {
+        if (q.isEmpty()) bikas else bikas.filter { it.title.contains(q, true) }
+    }
+    val shownMusic = remember(music, musicMetas.value, q) {
+        if (q.isEmpty()) music.entries
+        else music.entries.filter { e ->
+            e.name.contains(q, true) || (musicMetas.value[e.name]?.artist?.contains(q, true) == true)
+        }
+    }
+    val shownBooks = remember(books, q) {
+        if (q.isEmpty()) books.entries else books.entries.filter { it.name.contains(q, true) }
+    }
+    val shownCount = when (section) {
+        "video" -> shownVideos.size
+        "comic" -> shownComics.size
+        "bika" -> shownBikas.size
+        "music" -> shownMusic.size
+        "book" -> shownBooks.size
+        else -> 0
+    }
 
     // 本节已下载条目数（决定「编辑」按钮是否出现）
     val downloadedCount = when (section) {
@@ -420,57 +453,73 @@ fun DownloadListScreen(nav: NavHostController, section: String) {
             }
         }
     ) { pad ->
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.padding(pad).fillMaxSize()
-        ) {
-            when (section) {
-                "video" -> videoSection(
-                    context, videoTasks, videoLibrary,
-                    columns = videoColumns,
-                    editing = editing,
-                    selected = selected,
-                    onToggle = { toggleSelect("video/$it") },
-                    onPlay = { playLocalVideo(nav, it) }
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            // v0.324：分区下载搜索（有已下载内容时显示，边输边过滤标题/歌手/文件名）
+            if (downloadedCount > 0) {
+                AppSearchField(
+                    value = query,
+                    onValueChange = { query = it },
+                    onSearch = {},
+                    placeholder = "搜索${title.removeSuffix("下载")}",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
                 )
-                "comic" -> comicSectionContent(
-                    keyPrefix = "comic", comics = comics,
-                    tasks = comicTasks, emptyHint = "还没有下载漫画，去漫画详情页点「下载全部」或章节右侧的下载按钮",
-                    expanded = expanded, editing = editing, selected = selected,
-                    onToggleExpand = { c -> expanded = toggleKey(expanded, c) },
-                    onToggleSelect = { c -> toggleSelect("comic/${c.source}/${c.id}") },
-                    onReadChapter = { c, chapterKey ->
-                        openChapter(context, c, chapterKey) { pages -> viewer = Triple(c, chapterKey, pages) }
-                    }
-                )
-                "bika" -> comicSectionContent(
-                    keyPrefix = "bika", comics = bikas,
-                    tasks = bikaTasks, emptyHint = "还没有下载本子，去哔咔详情页点「下载全部」或章节右侧的下载按钮",
-                    expanded = expanded, editing = editing, selected = selected,
-                    onToggleExpand = { c -> expanded = toggleKey(expanded, c) },
-                    onToggleSelect = { c -> toggleSelect("comic/${c.source}/${c.id}") },
-                    onReadChapter = { c, chapterKey ->
-                        openChapter(context, c, chapterKey) { pages -> viewer = Triple(c, chapterKey, pages) }
-                    }
-                )
-                "music" -> musicSectionContent(
-                    context, music,
-                    metas = musicMetas.value,
-                    sortMode = musicSort,
-                    onSortChange = { musicSort = it },
-                    editing = editing,
-                    selected = selected,
-                    onToggleSelect = { toggleSelect("music/$it") },
-                    onPlay = { songs, idx -> MusicPlayback.play(context, songs, idx) }
-                )
-                "book" -> bookSectionContent(
-                    context, books,
-                    editing = editing,
-                    selected = selected,
-                    onToggleSelect = { toggleSelect("book/$it") },
-                    onOpen = { openBook(context, it) }
-                )
+            }
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.weight(1f).fillMaxWidth()
+            ) {
+                if (downloadedCount > 0 && q.isNotEmpty() && shownCount == 0) {
+                    item(key = "search-empty") { EmptyHint("没有找到与「$q」匹配的下载内容") }
+                } else when (section) {
+                    "video" -> videoSection(
+                        context, videoTasks, shownVideos,
+                        columns = videoColumns,
+                        editing = editing,
+                        selected = selected,
+                        onToggle = { toggleSelect("video/$it") },
+                        onPlay = { playLocalVideo(nav, it) }
+                    )
+                    "comic" -> comicSectionContent(
+                        keyPrefix = "comic", comics = shownComics,
+                        tasks = comicTasks, emptyHint = "还没有下载漫画，去漫画详情页点「下载全部」或章节右侧的下载按钮",
+                        expanded = expanded, editing = editing, selected = selected,
+                        onToggleExpand = { c -> expanded = toggleKey(expanded, c) },
+                        onToggleSelect = { c -> toggleSelect("comic/${c.source}/${c.id}") },
+                        onReadChapter = { c, chapterKey ->
+                            openChapter(context, c, chapterKey) { pages -> viewer = Triple(c, chapterKey, pages) }
+                        }
+                    )
+                    "bika" -> comicSectionContent(
+                        keyPrefix = "bika", comics = shownBikas,
+                        tasks = bikaTasks, emptyHint = "还没有下载本子，去哔咔详情页点「下载全部」或章节右侧的下载按钮",
+                        expanded = expanded, editing = editing, selected = selected,
+                        onToggleExpand = { c -> expanded = toggleKey(expanded, c) },
+                        onToggleSelect = { c -> toggleSelect("comic/${c.source}/${c.id}") },
+                        onReadChapter = { c, chapterKey ->
+                            openChapter(context, c, chapterKey) { pages -> viewer = Triple(c, chapterKey, pages) }
+                        }
+                    )
+                    "music" -> musicSectionContent(
+                        context, shownMusic,
+                        metas = musicMetas.value,
+                        sortMode = musicSort,
+                        onSortChange = { musicSort = it },
+                        editing = editing,
+                        selected = selected,
+                        onToggleSelect = { toggleSelect("music/$it") },
+                        onPlay = { songs, idx -> MusicPlayback.play(context, songs, idx) }
+                    )
+                    "book" -> bookSectionContent(
+                        context, shownBooks,
+                        editing = editing,
+                        selected = selected,
+                        onToggleSelect = { toggleSelect("book/$it") },
+                        onOpen = { openBook(context, it) }
+                    )
+                }
             }
         }
     }
@@ -851,7 +900,7 @@ private fun LazyListScope.videoSection(
  */
 private fun LazyListScope.musicSectionContent(
     context: Context,
-    summary: MediaFileStore.Summary,
+    summaryEntries: List<MediaFileStore.Entry>,
     metas: Map<String, MediaFileStore.MusicMeta>,
     sortMode: String,
     onSortChange: (String) -> Unit,
@@ -860,18 +909,18 @@ private fun LazyListScope.musicSectionContent(
     onToggleSelect: (String) -> Unit,
     onPlay: (List<com.shangyin.app.data.music.MusicSong>, Int) -> Unit
 ) {
-    if (summary.entries.isEmpty()) {
+    if (summaryEntries.isEmpty()) {
         item(key = "music-empty") { EmptyHint("还没有下载音乐，去音乐页点下载按钮吧") }
         return
     }
     // 歌手排序：按内嵌歌手标签（读不到的排后面）；更新排序：保持枚举的修改时间倒序
     val entries = if (sortMode == "artist") {
         val collator = java.text.Collator.getInstance(java.util.Locale.CHINA)
-        summary.entries.sortedWith(
+        summaryEntries.sortedWith(
             compareBy(collator) { metas[it.name]?.artist?.ifBlank { "￣" } ?: "￣" }
         )
     } else {
-        summary.entries
+        summaryEntries
     }
     val songs = entries.map { e ->
         com.shangyin.app.data.music.MusicSong(
@@ -925,16 +974,16 @@ private fun LazyListScope.musicSectionContent(
 /** 书籍分区（v0.302）：封面行（PDF/EPUB 提取封面，点击直接打开阅读），编辑模式勾选删除 */
 private fun LazyListScope.bookSectionContent(
     context: Context,
-    summary: MediaFileStore.Summary,
+    entries: List<MediaFileStore.Entry>,
     editing: Boolean,
     selected: Set<String>,
     onToggleSelect: (String) -> Unit,
     onOpen: (MediaFileStore.Entry) -> Unit
 ) {
-    if (summary.entries.isEmpty()) {
+    if (entries.isEmpty()) {
         item(key = "book-empty") { EmptyHint("还没有下载书籍，去图书详情页点「下载」吧") }
     } else {
-        items(summary.entries, key = { "book-${it.name}" }) { e ->
+        items(entries, key = { "book-${it.name}" }) { e ->
             BookFileRow(
                 context = context,
                 entry = e,
