@@ -5,6 +5,9 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
+import android.os.Handler
+import android.os.Looper
+import android.view.MotionEvent
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -235,6 +238,7 @@ fun PlayerScreen(nav: NavHostController) {
     var panelOpen by remember { mutableStateOf(false) }      // 选集面板（控制条右下角按钮触发）
     var speedMenuOpen by remember { mutableStateOf(false) }  // 倍速菜单
     var speed by remember { mutableFloatStateOf(1f) }        // 当前倍速
+    var speedBoost by remember { mutableStateOf(false) }     // v0.326：长按画面临时 2 倍速
     // 用户手动切过全屏方向后，自动转向（随 videoAspect 变化重跑）必须退位：
     // 0.275 review 实锤不退位会把用户刚选的方向又抢回去（换源/首帧 aspect 0→0.56 时 effect 重跑）
     var userToggledOrientation by remember { mutableStateOf(false) }
@@ -364,6 +368,21 @@ fun PlayerScreen(nav: NavHostController) {
             setShowNextButton(false)
             setShowRewindButton(false)
             setShowFastForwardButton(false)
+            // v0.326：长按画面临时 2 倍速——返回 false 不抢 PlayerView 自己的点击/控制器逻辑
+            val boostHandler = Handler(Looper.getMainLooper())
+            val boostStart = Runnable {
+                if (!isLive) speedBoost = true
+            }
+            setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> boostHandler.postDelayed(boostStart, 450)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        boostHandler.removeCallbacks(boostStart)
+                        speedBoost = false
+                    }
+                }
+                false
+            }
             // 导航栏 inset 变化（转屏/系统栏显隐）→ 更新控制器底部垫高。insets 会正常
             // dispatch 进 AndroidView；返回原 insets 不消费，不影响 Compose 兄弟节点
             ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
@@ -402,6 +421,8 @@ fun PlayerScreen(nav: NavHostController) {
                             // 看门狗/自愈梯子兜底
                             override fun onScrubStart(timeBar: TimeBar, position: Long) {
                                 scrubbingMs = position
+                                // v0.326：开始拖进度条就收起选集面板，别挡着看画面
+                                panelOpen = false
                             }
 
                             override fun onScrubMove(timeBar: TimeBar, position: Long) {
@@ -801,9 +822,9 @@ fun PlayerScreen(nav: NavHostController) {
         }
     }
 
-    // 倍速应用
-    LaunchedEffect(speed) {
-        player.setPlaybackSpeed(speed)
+    // 倍速应用（长按临时 2x 优先于菜单倍速，松手回到菜单倍速）
+    LaunchedEffect(speed, speedBoost) {
+        player.setPlaybackSpeed(if (speedBoost) 2f else speed)
     }
 
     // 选集面板打开时暂停控制器自动隐藏（防止面板被一起收走），关闭后恢复
@@ -1059,6 +1080,23 @@ fun PlayerScreen(nav: NavHostController) {
                         )
                     }
 
+                    // v0.326：长按快进提示（按住画面 = 2 倍速，松手恢复）
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = speedBoost,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.Center)
+                    ) {
+                        Text(
+                            "2x 快进中",
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier
+                                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(20.dp))
+                                .padding(horizontal = 14.dp, vertical = 7.dp)
+                        )
+                    }
+
                     // 右下角悬浮按钮：选集（横屏）+ 倍速（设置齿轮已隐藏，倍速自建）
                     androidx.compose.animation.AnimatedVisibility(
                         visible = controlsVisible,
@@ -1073,6 +1111,17 @@ fun PlayerScreen(nav: NavHostController) {
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // v0.326：有下一集时右下角给「下一集」按钮（最后一集不显示）
+                            val epsNow = groups.getOrNull(groupIndex)?.episodes.orEmpty()
+                            if (!isLive && epsNow.size > 1 && currentEp < epsNow.size - 1) {
+                                TextButton(onClick = {
+                                    player.seekTo(currentEp + 1, 0L)
+                                    player.playWhenReady = true
+                                    currentEp = (currentEp + 1).coerceAtMost(epsNow.size - 1)
+                                }) {
+                                    Text("下一集", color = Color.White, style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                             // 选集：横屏常显；竖屏铺满时下方信息面板被挤没，多集内容在此保留换集入口（0.275）
                             if (groups.isNotEmpty() && !isLive &&
                                 (isLandscape ||

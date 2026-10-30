@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -145,6 +146,8 @@ fun GameHomeScreen(nav: NavHostController) {
     var catExpanded by rememberSaveable { mutableStateOf(false) }   // 分类下拉展开/收起
     var loadedKey by remember { mutableStateOf<String?>(null) }
     var loadJob by remember { mutableStateOf<Job?>(null) }
+    // v0.326：翻页后回到顶部（页码条在列表末尾，不回去就得手动滑上去）
+    val gridState = rememberLazyGridState()
 
     fun loadPage(target: Int) {
         loadJob?.cancel()
@@ -164,6 +167,7 @@ fun GameHomeScreen(nav: NavHostController) {
                 } else {
                     curPage = target
                     items = p.items.distinctBy { it.id }
+                    gridState.scrollToItem(0)
                     lastPage = p.lastPage
                     cacheJson = gameJson.encodeToString(GameHomeCache(catUrl, keyword, target, items))
                 }
@@ -331,6 +335,7 @@ fun GameHomeScreen(nav: NavHostController) {
                 }
                 else -> LazyVerticalGrid(
                     columns = GridCells.Fixed(gridColumns),
+                    state = gridState,
                     contentPadding = PaddingValues(12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -141,6 +142,8 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
     var catCounts by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
     var catExpanded by remember { mutableStateOf(false) }
     var reqSeq by remember { mutableIntStateOf(0) } // 竞态防护：只认最后一次请求
+    // v0.326：翻页后回到顶部（页码条在列表末尾，不回去就得手动滑上去）
+    val gridState = rememberLazyGridState()
 
     fun load(target: Int) {
         val s = src ?: return
@@ -157,6 +160,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                 lastPage = resp.pagecount
                 page = target
                 failed = false
+                gridState.scrollToItem(0)
                 if (resp.categories.isNotEmpty()) categories = resp.categories
                 cache.keyword = kw
                 cache.typeId = type
@@ -397,6 +401,7 @@ fun H1SearchScreen(nav: NavHostController, kwEncoded: String, sourceIndex: Int =
                 else -> {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(gridColumns),
+                        state = gridState,
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(14.dp),
