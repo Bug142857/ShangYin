@@ -1,7 +1,7 @@
 {
-  "versionName": "0.326",
+  "versionName": "0.327",
   "sizeBytes": 20799065,
-  "sha256": "f51527c88ba191b43991e864ca85f8ae267d80a66c087025b1e21f25af44aa85",
-  "changelog": "0.326：播放器手势与分页回顶\n\n- 番号 / 游戏：页码条翻页后自动回到列表顶部，不用再手动往上滑\n- 播放器：拖动进度条时自动收起选集面板\n- 播放器：长按画面 2 倍速快进，松手恢复当前倍速（画面中央有提示）\n- 播放器：多集内容右下角新增「下一集」按钮，最后一集自动隐藏",
-  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.326/LaoZhengFenXiang-0.326.apk"
+  "sha256": "05a00ba8adbff06ca564728211da7e698500b4787f3245d6235d7f2ef071ccd4",
+  "changelog": "0.327：修复「下一集」隔一集\n\n- 播放器「下一集」改为按播放器实际集索引前进（seekToNextMediaItem），不再手动把集号 +1——v0.326 里 seekTo 会同步回调把集号更新到下一集，再自增就多跳一集，导致隔一集",
+  "apkUrl": "https://github.com/Bug142857/ShangYin/releases/download/v0.327/LaoZhengFenXiang-0.327.apk"
 }

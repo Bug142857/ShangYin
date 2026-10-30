@@ -1115,9 +1115,13 @@ fun PlayerScreen(nav: NavHostController) {
                             val epsNow = groups.getOrNull(groupIndex)?.episodes.orEmpty()
                             if (!isLive && epsNow.size > 1 && currentEp < epsNow.size - 1) {
                                 TextButton(onClick = {
-                                    player.seekTo(currentEp + 1, 0L)
-                                    player.playWhenReady = true
-                                    currentEp = (currentEp + 1).coerceAtMost(epsNow.size - 1)
+                                    // v0.327：以播放器实际集索引为准，且**不要**再手动 currentEp+1——
+                                    // seekTo 会同步回调 onMediaItemTransition 把 currentEp 更新到下一集，
+                                    // 再自增就多跳一集（v0.326「下一集隔了一集」的根因）
+                                    if (player.hasNextMediaItem()) {
+                                        player.seekToNextMediaItem()
+                                        player.playWhenReady = true
+                                    }
                                 }) {
                                     Text("下一集", color = Color.White, style = MaterialTheme.typography.labelMedium)
                                 }
